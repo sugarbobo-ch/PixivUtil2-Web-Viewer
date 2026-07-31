@@ -34,6 +34,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const activeArtistObj = artists.find(a => a.member_id === selectedArtist);
   const isAnyFilterActive = selectedMonths.length > 0 || selectedArtist !== null;
 
+  const [monthSortAsc, setMonthSortAsc] = useState(false);
+
   // Group Months by Year
   const yearGroupMap: Record<string, { totalCount: number; months: MonthItem[] }> = {};
   months.forEach(m => {
@@ -45,7 +47,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
     yearGroupMap[year].months.push(m);
   });
 
-  const sortedYears = Object.keys(yearGroupMap).sort((a, b) => b.localeCompare(a));
+  const sortedYears = Object.keys(yearGroupMap).sort((a, b) =>
+    monthSortAsc ? a.localeCompare(b) : b.localeCompare(a)
+  );
 
   const toggleYearExpanded = (year: string) => {
     setExpandedYears(prev => ({ ...prev, [year]: !prev[year] }));
@@ -178,16 +182,29 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
         {/* 2. MULTI-SELECTABLE YEAR -> MONTH ACCORDION SECTION */}
         <div className="border-t border-zinc-800 pt-3 shrink-0">
-          <div
-            onClick={() => setIsMonthSectionOpen(!isMonthSectionOpen)}
-            className="flex items-center justify-between mb-2 text-xs font-semibold text-zinc-400 uppercase tracking-wider cursor-pointer hover:text-zinc-200"
-          >
-            <div className="flex items-center gap-2">
+          <div className="flex items-center justify-between mb-2 text-xs font-semibold text-zinc-400 uppercase tracking-wider">
+            <div
+              onClick={() => setIsMonthSectionOpen(!isMonthSectionOpen)}
+              className="flex items-center gap-2 cursor-pointer hover:text-zinc-200"
+            >
               <Calendar className="w-4 h-4 text-indigo-400" />
               <span>時間複選 ({selectedMonths.length > 0 ? `已選 ${selectedMonths.length} 項` : '全部'})</span>
             </div>
-            <div className="flex items-center gap-1">
-              {isMonthSectionOpen ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={() => setMonthSortAsc(!monthSortAsc)}
+                className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300 transition-colors"
+                title={monthSortAsc ? "目前為舊到新 (點擊切換為新到舊)" : "目前為新到舊 (點擊切換為舊到新)"}
+              >
+                {monthSortAsc ? '舊到新 ↑' : '新到舊 ↓'}
+              </button>
+              <button
+                onClick={() => setIsMonthSectionOpen(!isMonthSectionOpen)}
+                className="text-zinc-400 hover:text-zinc-200"
+              >
+                {isMonthSectionOpen ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+              </button>
             </div>
           </div>
 
@@ -210,6 +227,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 const isExpanded = expandedYears[year] ?? (selectedMonths.some(m => m.startsWith(year)) || sortedYears[0] === year);
                 const isYearSelected = selectedMonths.includes(year);
                 const group = yearGroupMap[year];
+                const sortedGroupMonths = [...group.months].sort((a, b) =>
+                  monthSortAsc ? a.month.localeCompare(b.month) : b.month.localeCompare(a.month)
+                );
 
                 return (
                   <div key={year} className="border border-zinc-800/80 rounded-lg overflow-hidden bg-zinc-900/40">
@@ -240,7 +260,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     {/* Expanded Month Grid */}
                     {isExpanded && (
                       <div className="grid grid-cols-2 gap-1 p-1.5 bg-zinc-950/60 border-t border-zinc-800/60">
-                        {group.months.map((m) => {
+                        {sortedGroupMonths.map((m) => {
                           const isMonthSelected = selectedMonths.includes(m.month);
                           const monthNum = m.month.split('-')[1] || m.month;
 
