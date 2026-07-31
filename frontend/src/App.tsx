@@ -54,15 +54,16 @@ export const App: React.FC = () => {
       .catch(err => console.error('Failed to fetch months:', err));
   }, []);
 
-  // Pagination States
+  // Pagination & Sort States
   const [currentPage, setCurrentPage] = useState(1);
   const [totalImages, setTotalImages] = useState(0);
   const [itemsPerPage, setItemsPerPage] = useState(200);
+  const [sortMode, setSortMode] = useState<'newest' | 'oldest' | 'natural_name'>('newest');
 
   // Reset page to 1 on filter change
   useEffect(() => {
     setCurrentPage(1);
-  }, [selectedMonths, selectedArtist, searchQuery]);
+  }, [selectedMonths, selectedArtist, searchQuery, sortMode]);
 
   // Fetch Images based on Filters & Pagination
   const fetchImages = useCallback(() => {
@@ -70,6 +71,7 @@ export const App: React.FC = () => {
     if (selectedMonths.length > 0) params.append('month', selectedMonths.join(','));
     if (selectedArtist) params.append('artist_id', selectedArtist.toString());
     if (searchQuery) params.append('search', searchQuery);
+    params.append('sort_mode', sortMode);
 
     const offset = (currentPage - 1) * itemsPerPage;
     params.append('limit', itemsPerPage.toString());
@@ -201,6 +203,8 @@ export const App: React.FC = () => {
               itemsPerPage={itemsPerPage}
               onPageChange={(p) => setCurrentPage(p)}
               onItemsPerPageChange={(num) => setItemsPerPage(num)}
+              sortMode={sortMode}
+              onSortModeChange={(mode) => setSortMode(mode)}
               isEditMode={isEditMode}
               selectedIds={selectedIds}
               onToggleSelect={toggleSelectImage}

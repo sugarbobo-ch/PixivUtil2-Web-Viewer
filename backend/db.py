@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 import os
 import sqlite3
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 
 DB_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "db.sqlite"))
 
@@ -255,14 +255,24 @@ def get_all_months() -> List[Dict[str, Any]]:
         return [dict(r) for r in rows if r["month"]]
 
 
+import re
+
+def natural_sort_key(s: str):
+    if not s:
+        return []
+    filename = os.path.basename(s)
+    return [int(text) if text.isdigit() else text.lower() for text in re.split(r'(\d+)', filename)]
+
+
 def get_images(
     month: Optional[str] = None,
     artist_id: Optional[int] = None,
     search: Optional[str] = None,
     limit: int = 200,
     offset: int = 0,
-    only_show_db_files: bool = False
-) -> List[Dict[str, Any]]:
+    only_show_db_files: bool = False,
+    sort_mode: str = "newest"
+) -> Tuple[List[Dict[str, Any]], int]:
     db_items = []
     if os.path.exists(DB_PATH):
         with get_db_connection() as conn:
@@ -304,70 +314,67 @@ def get_images(
                 FROM pixiv_master_image i
                 LEFT JOIN pixiv_master_member m ON i.member_id = m.member_id
                 {where_clause}
-                ORDER BY i.created_date DESC
             """
             rows = cursor.execute(query, params).fetchall()
             db_items = [dict(r) for r in rows]
 
     if only_show_db_files:
-        return db_items[offset:offset+limit], len(db_items)
+        all_items = list(db_items)
+    else:
+        import configparser, time
+        config_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "config.ini"))
+        root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+        if os.path.exists(config_path):
+            try:
+                config = configparser.ConfigParser(interpolation=None)
+                config.read(config_path, encoding="utf-8")
+                cfg_dir = config.get("Settings", "rootDirectory", fallback=".")
+                if cfg_dir and cfg_dir != ".":
+                    root_dir = os.path.abspath(cfg_dir)
+            except Exception:
+                pass
 
-    # If only_show_db_files is False (default):
-    # Recursively scan disk files for the selected folder to merge non-DB files dynamically
-    import configparser, time
-    config_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "config.ini"))
-    root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-    if os.path.exists(config_path):
-        try:
-            config = configparser.ConfigParser(interpolation=None)
-            config.read(config_path, encoding="utf-8")
-            cfg_dir = config.get("Settings", "rootDirectory", fallback=".")
-            if cfg_dir and cfg_dir != ".":
-                root_dir = os.path.abspath(cfg_dir)
-        except Exception:
-            pass
+        target_scan_dir = None
+        if artist_id is not None and artist_id != -1:
+            if os.path.exists(DB_PATH):
+                with get_db_connection() as conn:
+                    m_row = conn.execute("SELECT name FROM pixiv_master_member WHERE member_id = ?", (artist_id,)).fetchone()
+                    if m_row and m_row["name"]:
+                        cand = os.path.join(root_dir, m_row["name"])
+                        if os.path.isdir(cand):
+                            target_scan_dir = cand
+            if not target_scan_dir and os.path.exists(root_dir):
+                for f in os.listdir(root_dir):
+                    if os.path.isdir(os.path.join(root_dir, f)) and (abs(hash(f)) % 100000000) == artist_id:
+                        target_scan_dir = os.path.join(root_dir, f)
+                        break
 
-    target_scan_dir = None
-    if artist_id is not None and artist_id != -1:
-        if os.path.exists(DB_PATH):
-            with get_db_connection() as conn:
-                m_row = conn.execute("SELECT name FROM pixiv_master_member WHERE member_id = ?", (artist_id,)).fetchone()
-                if m_row and m_row["name"]:
-                    cand = os.path.join(root_dir, m_row["name"])
-                    if os.path.isdir(cand):
-                        target_scan_dir = cand
-        if not target_scan_dir and os.path.exists(root_dir):
-            for f in os.listdir(root_dir):
-                if os.path.isdir(os.path.join(root_dir, f)) and (abs(hash(f)) % 100000000) == artist_id:
-                    target_scan_dir = os.path.join(root_dir, f)
-                    break
+        existing_paths = {}
+        for item in db_items:
+            if item.get("save_name"):
+                existing_paths[os.path.abspath(item["save_name"])] = item
 
-    existing_paths = {}
-    for item in db_items:
-        if item.get("save_name"):
-            existing_paths[os.path.abspath(item["save_name"])] = item
+        all_items = list(db_items)
 
-    all_items = list(db_items)
-
-    if target_scan_dir and os.path.exists(target_scan_dir):
-        fast_files = get_folder_files_fast(target_scan_dir)
-        for full_path in fast_files:
-            if full_path not in existing_paths:
-                file = os.path.basename(full_path)
-                mtime = os.path.getmtime(full_path)
-                created_date = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(mtime))
-                item_id = abs(hash(full_path)) % 1000000000
-                new_item = {
-                    "image_id": item_id,
-                    "member_id": artist_id,
-                    "title": os.path.splitext(file)[0],
-                    "save_name": full_path,
-                    "created_date": created_date,
-                    "last_update_date": created_date,
-                    "artist_name": os.path.basename(target_scan_dir)
-                }
-                all_items.append(new_item)
-                existing_paths[full_path] = new_item
+        if target_scan_dir and os.path.exists(target_scan_dir):
+            fast_files = get_folder_files_fast(target_scan_dir)
+            for full_path in fast_files:
+                if full_path not in existing_paths:
+                    file = os.path.basename(full_path)
+                    mtime = os.path.getmtime(full_path)
+                    created_date = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(mtime))
+                    item_id = abs(hash(full_path)) % 1000000000
+                    new_item = {
+                        "image_id": item_id,
+                        "member_id": artist_id,
+                        "title": os.path.splitext(file)[0],
+                        "save_name": full_path,
+                        "created_date": created_date,
+                        "last_update_date": created_date,
+                        "artist_name": os.path.basename(target_scan_dir)
+                    }
+                    all_items.append(new_item)
+                    existing_paths[full_path] = new_item
 
     if search:
         s_lower = search.lower()
@@ -376,7 +383,31 @@ def get_images(
             if s_lower in (it.get("title") or "").lower() or s_lower in (it.get("artist_name") or "").lower()
         ]
 
-    all_items.sort(key=lambda x: x.get("created_date") or "", reverse=True)
+    # Sort Items based on sort_mode
+    if sort_mode == "oldest":
+        all_items.sort(key=lambda x: (x.get("created_date") or "", natural_sort_key(x.get("save_name") or "")))
+    elif sort_mode == "natural_name":
+        all_items.sort(key=lambda x: natural_sort_key(x.get("save_name") or ""))
+    else: # newest
+        # Primary: created_date (YYYY-MM-DD) descending, Secondary: natural page order ascending (1-1 -> 1-10)
+        all_items.sort(key=lambda x: (
+            (x.get("created_date") or "")[:10],
+            natural_sort_key(x.get("save_name") or "")
+        ), reverse=False)
+        # Reverse post dates so newest post date comes first, while pages stay ascending
+        # Group by post date
+        date_groups = {}
+        for item in all_items:
+            dt = (item.get("created_date") or "")[:10]
+            date_groups.setdefault(dt, []).append(item)
+        sorted_dates = sorted(date_groups.keys(), reverse=True)
+        final_items = []
+        for dt in sorted_dates:
+            group = date_groups[dt]
+            group.sort(key=lambda x: natural_sort_key(x.get("save_name") or ""))
+            final_items.extend(group)
+        all_items = final_items
+
     return all_items[offset:offset+limit], len(all_items)
 
 

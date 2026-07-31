@@ -226,6 +226,7 @@ def read_images(
     artist_id: Optional[int] = None,
     search: Optional[str] = None,
     only_db: Optional[bool] = None,
+    sort_mode: str = "newest",
     limit: int = 200,
     offset: int = 0
 ):
@@ -239,7 +240,8 @@ def read_images(
         search=search,
         limit=limit,
         offset=offset,
-        only_show_db_files=only_db
+        only_show_db_files=only_db,
+        sort_mode=sort_mode
     )
     return {
         "images": images,
