@@ -44,20 +44,29 @@ export const GalleryGrid: React.FC<GalleryGridProps> = ({
     );
   }
 
+  const normalizeMonthKey = (dateStr: string | undefined): { key: string; label: string } => {
+    if (!dateStr) return { key: '未指定月份', label: '未指定月份' };
+    const str = dateStr.trim();
+    const matchHyphen = str.match(/^(\d{4})[\-/](\d{1,2})/);
+    if (matchHyphen) {
+      const y = matchHyphen[1];
+      const m = matchHyphen[2].padStart(2, '0');
+      return { key: `${y}-${m}`, label: `${y} 年 ${m} 月` };
+    }
+    const matchDigits = str.match(/^(\d{4})(\d{2})/);
+    if (matchDigits) {
+      const y = matchDigits[1];
+      const m = matchDigits[2];
+      return { key: `${y}-${m}`, label: `${y} 年 ${m} 月` };
+    }
+    return { key: '未指定月份', label: '未指定月份' };
+  };
+
   // Group images by Month
   const groupedByMonth: Record<string, { label: string; items: { item: ImageItem; globalIndex: number }[] }> = {};
 
   images.forEach((item, globalIndex) => {
-    let monthKey = '未指定月份';
-    let monthLabel = '未指定月份';
-    if (item.created_date) {
-      const ym = item.created_date.substring(0, 7);
-      if (ym.length === 7) {
-        monthKey = ym;
-        const [y, m] = ym.split('-');
-        monthLabel = `${y} 年 ${m} 月`;
-      }
-    }
+    const { key: monthKey, label: monthLabel } = normalizeMonthKey(item.created_date);
     if (!groupedByMonth[monthKey]) {
       groupedByMonth[monthKey] = { label: monthLabel, items: [] };
     }
@@ -65,6 +74,13 @@ export const GalleryGrid: React.FC<GalleryGridProps> = ({
   });
 
   const monthKeys = Object.keys(groupedByMonth);
+  if (sortMode === 'oldest') {
+    monthKeys.sort((a, b) => a.localeCompare(b));
+  } else if (sortMode === 'natural_name') {
+    monthKeys.sort((a, b) => a.localeCompare(b));
+  } else {
+    monthKeys.sort((a, b) => b.localeCompare(a));
+  }
 
   // Generate page numbers for pagination
   const getPageNumbers = () => {

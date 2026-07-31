@@ -257,6 +257,36 @@ def get_all_months() -> List[Dict[str, Any]]:
 
 import re
 
+def normalize_date_str(date_val: str) -> str:
+    if not date_val:
+        return ""
+    date_str = str(date_val).strip()
+    if not date_str:
+        return ""
+
+    match_hyphen = re.match(r'^(\d{4})[\-/](\d{1,2})[\-/](\d{1,2})(?:\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?', date_str)
+    if match_hyphen:
+        y, m, d = match_hyphen.group(1), match_hyphen.group(2).zfill(2), match_hyphen.group(3).zfill(2)
+        hh = match_hyphen.group(4).zfill(2) if match_hyphen.group(4) else "00"
+        mm = match_hyphen.group(5).zfill(2) if match_hyphen.group(5) else "00"
+        ss = match_hyphen.group(6).zfill(2) if match_hyphen.group(6) else "00"
+        return f"{y}-{m}-{d} {hh}:{mm}:{ss}"
+
+    match_ym = re.match(r'^(\d{4})[\-/](\d{1,2})$', date_str)
+    if match_ym:
+        return f"{match_ym.group(1)}-{match_ym.group(2).zfill(2)}-01 00:00:00"
+
+    match_8 = re.match(r'^(\d{4})(\d{2})(\d{2})$', date_str)
+    if match_8:
+        return f"{match_8.group(1)}-{match_8.group(2)}-{match_8.group(3)} 00:00:00"
+
+    match_6 = re.match(r'^(\d{4})(\d{2})$', date_str)
+    if match_6:
+        return f"{match_6.group(1)}-{match_6.group(2)}-01 00:00:00"
+
+    return date_str
+
+
 def natural_sort_key(s: str):
     if not s:
         return []
@@ -382,6 +412,11 @@ def get_images(
             it for it in all_items
             if s_lower in (it.get("title") or "").lower() or s_lower in (it.get("artist_name") or "").lower()
         ]
+
+    # Normalize created_date format for all items
+    for item in all_items:
+        if item.get("created_date"):
+            item["created_date"] = normalize_date_str(item["created_date"])
 
     # Sort Items based on sort_mode
     if sort_mode == "oldest":

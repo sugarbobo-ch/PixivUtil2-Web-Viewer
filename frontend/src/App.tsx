@@ -89,7 +89,7 @@ export const App: React.FC = () => {
         }
       })
       .catch(err => console.error('Failed to fetch images:', err));
-  }, [selectedMonths, selectedArtist, searchQuery, currentPage, itemsPerPage]);
+  }, [selectedMonths, selectedArtist, searchQuery, currentPage, itemsPerPage, sortMode]);
 
   useEffect(() => {
     fetchImages();
