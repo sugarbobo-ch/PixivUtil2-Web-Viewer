@@ -7,8 +7,8 @@ interface SidebarProps {
   onClose: () => void;
   months: MonthItem[];
   artists: Artist[];
-  selectedMonth: string | null;
-  setSelectedMonth: (month: string | null) => void;
+  selectedMonths: string[];
+  setSelectedMonths: (months: string[]) => void;
   selectedArtist: number | null;
   setSelectedArtist: (artistId: number | null) => void;
 }
@@ -18,8 +18,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onClose,
   months,
   artists,
-  selectedMonth,
-  setSelectedMonth,
+  selectedMonths,
+  setSelectedMonths,
   selectedArtist,
   setSelectedArtist
 }) => {
@@ -32,7 +32,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   );
 
   const activeArtistObj = artists.find(a => a.member_id === selectedArtist);
-  const isAnyFilterActive = selectedMonth !== null || selectedArtist !== null;
+  const isAnyFilterActive = selectedMonths.length > 0 || selectedArtist !== null;
 
   // Group Months by Year
   const yearGroupMap: Record<string, { totalCount: number; months: MonthItem[] }> = {};
@@ -51,8 +51,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
     setExpandedYears(prev => ({ ...prev, [year]: !prev[year] }));
   };
 
+  const toggleMonthSelection = (target: string) => {
+    if (selectedMonths.includes(target)) {
+      setSelectedMonths(selectedMonths.filter(m => m !== target));
+    } else {
+      setSelectedMonths([...selectedMonths, target]);
+    }
+  };
+
   const handleResetFilters = () => {
-    setSelectedMonth(null);
+    setSelectedMonths([]);
     setSelectedArtist(null);
   };
 
@@ -64,7 +72,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       <div className="flex items-center justify-between p-3 border-b border-zinc-800 bg-zinc-900/90">
         <div className="flex items-center gap-2">
           <Filter className="w-4 h-4 text-indigo-400" />
-          <h2 className="text-sm font-semibold text-zinc-200">圖庫分類與篩選</h2>
+          <h2 className="text-sm font-semibold text-zinc-200">圖庫分類與複選篩選</h2>
         </div>
         <button
           onClick={onClose}
@@ -78,7 +86,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       {isAnyFilterActive && (
         <div className="p-3 bg-indigo-950/30 border-b border-indigo-500/20 space-y-2">
           <div className="flex items-center justify-between">
-            <span className="text-[11px] font-semibold text-indigo-300">目前組合篩選中</span>
+            <span className="text-[11px] font-semibold text-indigo-300">目前組合複選中</span>
             <button
               onClick={handleResetFilters}
               className="text-[11px] text-zinc-400 hover:text-white flex items-center gap-1 hover:underline"
@@ -98,15 +106,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
               </span>
             )}
 
-            {selectedMonth !== null && (
-              <span className="px-2 py-0.5 rounded-md bg-indigo-600/30 border border-indigo-500/40 text-indigo-200 flex items-center gap-1">
-                時間: {selectedMonth}
+            {selectedMonths.map(mStr => (
+              <span key={mStr} className="px-2 py-0.5 rounded-md bg-indigo-600/30 border border-indigo-500/40 text-indigo-200 flex items-center gap-1">
+                時間: {mStr}
                 <X
                   className="w-3 h-3 cursor-pointer hover:text-white"
-                  onClick={() => setSelectedMonth(null)}
+                  onClick={() => toggleMonthSelection(mStr)}
                 />
               </span>
-            )}
+            ))}
           </div>
         </div>
       )}
@@ -168,7 +176,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </div>
         </div>
 
-        {/* 2. YEAR -> MONTH HIERARCHICAL ACCORDION SECTION */}
+        {/* 2. MULTI-SELECTABLE YEAR -> MONTH ACCORDION SECTION */}
         <div className="border-t border-zinc-800 pt-3 shrink-0">
           <div
             onClick={() => setIsMonthSectionOpen(!isMonthSectionOpen)}
@@ -176,10 +184,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
           >
             <div className="flex items-center gap-2">
               <Calendar className="w-4 h-4 text-indigo-400" />
-              <span>發布時間 (年份 / 月份)</span>
+              <span>時間複選 ({selectedMonths.length > 0 ? `已選 ${selectedMonths.length} 項` : '全部'})</span>
             </div>
             <div className="flex items-center gap-1">
-              {selectedMonth && <span className="text-[11px] text-indigo-400 lowercase">{selectedMonth}</span>}
               {isMonthSectionOpen ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
             </div>
           </div>
@@ -187,21 +194,21 @@ export const Sidebar: React.FC<SidebarProps> = ({
           {isMonthSectionOpen && (
             <div className="space-y-1.5 max-h-56 overflow-y-auto pr-1 border border-zinc-800/60 rounded-xl p-1.5 bg-zinc-950/40 text-xs">
               <button
-                onClick={() => setSelectedMonth(null)}
+                onClick={() => setSelectedMonths([])}
                 className={`w-full flex items-center justify-between px-3 py-1.5 rounded-lg font-medium transition-colors ${
-                  selectedMonth === null
+                  selectedMonths.length === 0
                     ? 'bg-indigo-600 text-white shadow-sm'
                     : 'text-zinc-300 hover:bg-zinc-800'
                 }`}
               >
                 <span>不限時間 (全部)</span>
-                {selectedMonth === null && <Check className="w-3.5 h-3.5" />}
+                {selectedMonths.length === 0 && <Check className="w-3.5 h-3.5" />}
               </button>
 
               {/* Year Accordions */}
               {sortedYears.map((year) => {
-                const isExpanded = expandedYears[year] ?? (selectedMonth?.startsWith(year) || sortedYears[0] === year);
-                const isYearSelected = selectedMonth === year;
+                const isExpanded = expandedYears[year] ?? (selectedMonths.some(m => m.startsWith(year)) || sortedYears[0] === year);
+                const isYearSelected = selectedMonths.includes(year);
                 const group = yearGroupMap[year];
 
                 return (
@@ -220,13 +227,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       </div>
 
                       <button
-                        onClick={() => setSelectedMonth(isYearSelected ? null : year)}
+                        onClick={() => toggleMonthSelection(year)}
                         className={`text-[11px] px-2 py-0.5 rounded transition-colors ${
                           isYearSelected ? 'bg-indigo-600 text-white font-bold' : 'bg-zinc-800 text-zinc-400 hover:text-white'
                         }`}
-                        title={`篩選 ${year} 全年作品`}
+                        title={`複選/取消複選 ${year} 全年作品`}
                       >
-                        {isYearSelected ? '已選全年' : '選全年'}
+                        {isYearSelected ? '已選全年' : '複選全年'}
                       </button>
                     </div>
 
@@ -234,13 +241,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     {isExpanded && (
                       <div className="grid grid-cols-2 gap-1 p-1.5 bg-zinc-950/60 border-t border-zinc-800/60">
                         {group.months.map((m) => {
-                          const isMonthSelected = selectedMonth === m.month;
+                          const isMonthSelected = selectedMonths.includes(m.month);
                           const monthNum = m.month.split('-')[1] || m.month;
 
                           return (
                             <button
                               key={m.month}
-                              onClick={() => setSelectedMonth(isMonthSelected ? null : m.month)}
+                              onClick={() => toggleMonthSelection(m.month)}
                               className={`flex items-center justify-between px-2 py-1 rounded text-[11px] font-medium transition-colors ${
                                 isMonthSelected
                                   ? 'bg-indigo-600 text-white shadow-sm'

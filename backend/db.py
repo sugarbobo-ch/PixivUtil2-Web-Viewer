@@ -271,11 +271,16 @@ def get_images(
             params = []
 
             if month:
-                if len(month) == 4:
-                    conditions.append("strftime('%Y', i.created_date) = ?")
-                else:
-                    conditions.append("strftime('%Y-%m', i.created_date) = ?")
-                params.append(month)
+                month_list = [m.strip() for m in month.split(',') if m.strip()]
+                if month_list:
+                    month_conds = []
+                    for m in month_list:
+                        if len(m) == 4:
+                            month_conds.append("strftime('%Y', i.created_date) = ?")
+                        else:
+                            month_conds.append("strftime('%Y-%m', i.created_date) = ?")
+                        params.append(m)
+                    conditions.append("(" + " OR ".join(month_conds) + ")")
             if artist_id is not None:
                 if artist_id == -1:
                     conditions.append("i.member_id IS NULL")

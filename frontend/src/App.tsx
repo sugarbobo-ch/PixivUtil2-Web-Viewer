@@ -22,7 +22,7 @@ export const App: React.FC = () => {
   const [images, setImages] = useState<ImageItem[]>([]);
 
   // Filter States
-  const [selectedMonth, setSelectedMonth] = useState<string | null>(null);
+  const [selectedMonths, setSelectedMonths] = useState<string[]>([]);
   const [selectedArtist, setSelectedArtist] = useState<number | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -57,7 +57,7 @@ export const App: React.FC = () => {
   // Fetch Images based on Filters
   const fetchImages = useCallback(() => {
     const params = new URLSearchParams();
-    if (selectedMonth) params.append('month', selectedMonth);
+    if (selectedMonths.length > 0) params.append('month', selectedMonths.join(','));
     if (selectedArtist) params.append('artist_id', selectedArtist.toString());
     if (searchQuery) params.append('search', searchQuery);
 
@@ -65,7 +65,7 @@ export const App: React.FC = () => {
       .then(res => res.json())
       .then(data => setImages(data))
       .catch(err => console.error('Failed to fetch images:', err));
-  }, [selectedMonth, selectedArtist, searchQuery]);
+  }, [selectedMonths, selectedArtist, searchQuery]);
 
   useEffect(() => {
     fetchImages();
@@ -164,8 +164,8 @@ export const App: React.FC = () => {
           onClose={() => setIsSidebarOpen(false)}
           months={months}
           artists={artists}
-          selectedMonth={selectedMonth}
-          setSelectedMonth={setSelectedMonth}
+          selectedMonths={selectedMonths}
+          setSelectedMonths={setSelectedMonths}
           selectedArtist={selectedArtist}
           setSelectedArtist={setSelectedArtist}
         />
