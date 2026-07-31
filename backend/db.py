@@ -142,6 +142,39 @@ def clean_orphaned_records() -> Dict[str, int]:
     return {"deleted_members": deleted_members}
 
 
+import time
+
+_SCAN_CACHE: Dict[str, Dict[str, Any]] = {}
+CACHE_TTL = 20.0
+
+
+def get_folder_files_fast(folder_path: str) -> List[str]:
+    now = time.time()
+    abs_folder = os.path.abspath(folder_path)
+    if abs_folder in _SCAN_CACHE:
+        cached = _SCAN_CACHE[abs_folder]
+        if now - cached["timestamp"] < CACHE_TTL:
+            return cached["files"]
+
+    valid_exts = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".mp4"}
+    file_list = []
+    if os.path.exists(abs_folder):
+        try:
+            for root, _, files in os.walk(abs_folder):
+                for f in files:
+                    ext = os.path.splitext(f)[1].lower()
+                    if ext in valid_exts:
+                        file_list.append(os.path.abspath(os.path.join(root, f)))
+        except Exception as ex:
+            print(f"Error scanning folder {abs_folder}: {ex}")
+
+    _SCAN_CACHE[abs_folder] = {
+        "timestamp": now,
+        "files": file_list
+    }
+    return file_list
+
+
 def get_all_artists() -> List[Dict[str, Any]]:
     import configparser
     config_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "config.ini"))
@@ -183,21 +216,8 @@ def get_all_artists() -> List[Dict[str, Any]]:
 
             member_id = member_row["member_id"] if member_row else (abs(hash(folder_name)) % 100000000)
 
-            count_row = cursor.execute("""
-                SELECT COUNT(*) as count FROM pixiv_master_image
-                WHERE save_name LIKE ? OR member_id = ?
-            """, (f"%{folder_name}%", member_id)).fetchone()
-
-            artwork_count = count_row["count"] if count_row else 0
-
-            if artwork_count == 0:
-                valid_exts = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".mp4"}
-                file_count = 0
-                for r, _, files in os.walk(folder_path):
-                    for file in files:
-                        if os.path.splitext(file)[1].lower() in valid_exts:
-                            file_count += 1
-                artwork_count = file_count
+            # Accurately count all media files inside folder_path
+            artwork_count = len(get_folder_files_fast(folder_path))
 
             result.append({
                 "member_id": member_id,
@@ -322,28 +342,24 @@ def get_images(
     all_items = list(db_items)
 
     if target_scan_dir and os.path.exists(target_scan_dir):
-        valid_exts = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".mp4"}
-        for root, _, files in os.walk(target_scan_dir):
-            for file in files:
-                ext = os.path.splitext(file)[1].lower()
-                if ext not in valid_exts:
-                    continue
-                full_path = os.path.abspath(os.path.join(root, file))
-                if full_path not in existing_paths:
-                    mtime = os.path.getmtime(full_path)
-                    created_date = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(mtime))
-                    item_id = abs(hash(full_path)) % 1000000000
-                    new_item = {
-                        "image_id": item_id,
-                        "member_id": artist_id,
-                        "title": os.path.splitext(file)[0],
-                        "save_name": full_path,
-                        "created_date": created_date,
-                        "last_update_date": created_date,
-                        "artist_name": os.path.basename(target_scan_dir)
-                    }
-                    all_items.append(new_item)
-                    existing_paths[full_path] = new_item
+        fast_files = get_folder_files_fast(target_scan_dir)
+        for full_path in fast_files:
+            if full_path not in existing_paths:
+                file = os.path.basename(full_path)
+                mtime = os.path.getmtime(full_path)
+                created_date = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(mtime))
+                item_id = abs(hash(full_path)) % 1000000000
+                new_item = {
+                    "image_id": item_id,
+                    "member_id": artist_id,
+                    "title": os.path.splitext(file)[0],
+                    "save_name": full_path,
+                    "created_date": created_date,
+                    "last_update_date": created_date,
+                    "artist_name": os.path.basename(target_scan_dir)
+                }
+                all_items.append(new_item)
+                existing_paths[full_path] = new_item
 
     if search:
         s_lower = search.lower()
