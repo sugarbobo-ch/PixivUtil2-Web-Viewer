@@ -58,7 +58,7 @@ export const App: React.FC = () => {
   const [currentPage, setCurrentPage] = useState(1);
   const [totalImages, setTotalImages] = useState(0);
   const [itemsPerPage, setItemsPerPage] = useState(200);
-  const [sortMode, setSortMode] = useState<'newest' | 'oldest' | 'natural_name'>('newest');
+  const [sortMode, setSortMode] = useState<'newest_month' | 'oldest_month' | 'oldest' | 'natural_name'>('newest_month');
 
   // Reset page to 1 on filter change
   useEffect(() => {

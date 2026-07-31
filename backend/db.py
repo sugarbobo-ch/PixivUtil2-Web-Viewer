@@ -423,24 +423,43 @@ def get_images(
         all_items.sort(key=lambda x: (x.get("created_date") or "", natural_sort_key(x.get("save_name") or "")))
     elif sort_mode == "natural_name":
         all_items.sort(key=lambda x: natural_sort_key(x.get("save_name") or ""))
-    else: # newest
-        # Primary: created_date (YYYY-MM-DD) descending, Secondary: natural page order ascending (1-1 -> 1-10)
-        all_items.sort(key=lambda x: (
-            (x.get("created_date") or "")[:10],
-            natural_sort_key(x.get("save_name") or "")
-        ), reverse=False)
-        # Reverse post dates so newest post date comes first, while pages stay ascending
-        # Group by post date
-        date_groups = {}
+    elif sort_mode == "oldest_month":
+        # Month sections ascending (oldest month first), within month posts newest first, pages 1->N
+        month_groups = {}
         for item in all_items:
-            dt = (item.get("created_date") or "")[:10]
-            date_groups.setdefault(dt, []).append(item)
-        sorted_dates = sorted(date_groups.keys(), reverse=True)
+            ym = (item.get("created_date") or "")[:7] or "未指定"
+            month_groups.setdefault(ym, []).append(item)
+        sorted_months = sorted(month_groups.keys(), reverse=False)
         final_items = []
-        for dt in sorted_dates:
-            group = date_groups[dt]
-            group.sort(key=lambda x: natural_sort_key(x.get("save_name") or ""))
-            final_items.extend(group)
+        for ym in sorted_months:
+            group = month_groups[ym]
+            d_groups = {}
+            for it in group:
+                dt = (it.get("created_date") or "")[:10]
+                d_groups.setdefault(dt, []).append(it)
+            for dt in sorted(d_groups.keys(), reverse=True):
+                sub_group = d_groups[dt]
+                sub_group.sort(key=lambda x: natural_sort_key(x.get("save_name") or ""))
+                final_items.extend(sub_group)
+        all_items = final_items
+    else: # newest or newest_month
+        # Month sections descending (newest month first), within month posts newest first, pages 1->N
+        month_groups = {}
+        for item in all_items:
+            ym = (item.get("created_date") or "")[:7] or "未指定"
+            month_groups.setdefault(ym, []).append(item)
+        sorted_months = sorted(month_groups.keys(), reverse=True)
+        final_items = []
+        for ym in sorted_months:
+            group = month_groups[ym]
+            d_groups = {}
+            for it in group:
+                dt = (it.get("created_date") or "")[:10]
+                d_groups.setdefault(dt, []).append(it)
+            for dt in sorted(d_groups.keys(), reverse=True):
+                sub_group = d_groups[dt]
+                sub_group.sort(key=lambda x: natural_sort_key(x.get("save_name") or ""))
+                final_items.extend(sub_group)
         all_items = final_items
 
     return all_items[offset:offset+limit], len(all_items)

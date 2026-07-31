@@ -9,8 +9,8 @@ interface GalleryGridProps {
   itemsPerPage: number;
   onPageChange: (page: number) => void;
   onItemsPerPageChange: (num: number) => void;
-  sortMode: 'newest' | 'oldest' | 'natural_name';
-  onSortModeChange: (mode: 'newest' | 'oldest' | 'natural_name') => void;
+  sortMode: 'newest_month' | 'oldest_month' | 'oldest' | 'natural_name';
+  onSortModeChange: (mode: 'newest_month' | 'oldest_month' | 'oldest' | 'natural_name') => void;
   isEditMode: boolean;
   selectedIds: Set<number>;
   onToggleSelect: (imageId: number) => void;
@@ -73,20 +73,14 @@ export const GalleryGrid: React.FC<GalleryGridProps> = ({
     groupedByMonth[monthKey].items.push({ item, globalIndex });
   });
 
-  const [indexSortAsc, setIndexSortAsc] = useState(false);
-
   const monthKeys = Object.keys(groupedByMonth);
-  if (sortMode === 'oldest') {
+  if (sortMode === 'oldest' || sortMode === 'oldest_month') {
     monthKeys.sort((a, b) => a.localeCompare(b));
   } else if (sortMode === 'natural_name') {
     monthKeys.sort((a, b) => a.localeCompare(b));
   } else {
     monthKeys.sort((a, b) => b.localeCompare(a));
   }
-
-  const displayedIndexMonthKeys = [...monthKeys].sort((a, b) =>
-    indexSortAsc ? a.localeCompare(b) : b.localeCompare(a)
-  );
 
   // Generate page numbers for pagination
   const getPageNumbers = () => {
@@ -115,14 +109,7 @@ export const GalleryGrid: React.FC<GalleryGridProps> = ({
           <span className="text-xs font-semibold text-zinc-400 whitespace-nowrap flex items-center gap-1 mr-1">
             <Calendar className="w-3.5 h-3.5 text-indigo-400" /> 月份索引:
           </span>
-          <button
-            onClick={() => setIndexSortAsc(!indexSortAsc)}
-            className="px-2 py-1 text-[11px] font-semibold rounded-lg bg-zinc-900 border border-zinc-700/80 hover:bg-zinc-800 text-indigo-300 transition-colors flex items-center gap-1 shrink-0 mr-1"
-            title={indexSortAsc ? "目前索引為舊到新 (點擊切換為新到舊)" : "目前索引為新到舊 (點擊切換為舊到新)"}
-          >
-            {indexSortAsc ? '舊到新 ↑' : '新到舊 ↓'}
-          </button>
-          {displayedIndexMonthKeys.map(mKey => (
+          {monthKeys.map(mKey => (
             <button
               key={mKey}
               onClick={() => {
@@ -145,8 +132,9 @@ export const GalleryGrid: React.FC<GalleryGridProps> = ({
             onChange={(e) => onSortModeChange(e.target.value as any)}
             className="px-2.5 py-1 text-xs bg-zinc-900 border border-zinc-700 rounded-lg text-zinc-100 focus:outline-none focus:border-indigo-500 cursor-pointer"
           >
-            <option value="newest">最新作品 (多頁正序 1-1 -&gt; 1-10)</option>
-            <option value="oldest">舊作品在前 (發布時間正序)</option>
+            <option value="newest_month">最新月份 (月份新到舊，作品正序 1-1 -&gt; 1-10)</option>
+            <option value="oldest_month">舊月份在前 (月份舊到新，作品正序 1-1 -&gt; 1-10)</option>
+            <option value="oldest">舊作品在前 (時間與作品舊到新)</option>
             <option value="natural_name">檔名自然排序 (1-1, 1-2 ... 1-10)</option>
           </select>
         </div>
