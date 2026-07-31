@@ -59,7 +59,9 @@ def scan_and_index_directory(target_dir: str) -> Dict[str, Any]:
         max_id_row = cursor.execute("SELECT MAX(image_id) as max_id FROM pixiv_master_image").fetchone()
         next_custom_id = (max_id_row["max_id"] or 1000000) + 1
 
-        for root, _, files in os.walk(abs_dir):
+        for root, dirs, files in os.walk(abs_dir):
+            dirs.sort(key=natural_sort_key)
+            files.sort(key=natural_sort_key)
             for file in files:
                 ext = os.path.splitext(file)[1].lower()
                 if ext not in valid_exts:
@@ -160,7 +162,9 @@ def get_folder_files_fast(folder_path: str) -> List[str]:
     file_list = []
     if os.path.exists(abs_folder):
         try:
-            for root, _, files in os.walk(abs_folder):
+            for root, dirs, files in os.walk(abs_folder):
+                dirs.sort(key=natural_sort_key)
+                files.sort(key=natural_sort_key)
                 for f in files:
                     ext = os.path.splitext(f)[1].lower()
                     if ext in valid_exts:
@@ -290,8 +294,8 @@ def normalize_date_str(date_val: str) -> str:
 def natural_sort_key(s: str):
     if not s:
         return []
-    filename = os.path.basename(s)
-    return [int(text) if text.isdigit() else text.lower() for text in re.split(r'(\d+)', filename)]
+    path_str = os.path.normpath(s).lower()
+    return [int(text) if text.isdigit() else text for text in re.split(r'(\d+)', path_str)]
 
 
 def get_images(
@@ -423,6 +427,19 @@ def get_images(
         all_items.sort(key=lambda x: (x.get("created_date") or "", natural_sort_key(x.get("save_name") or "")))
     elif sort_mode == "natural_name":
         all_items.sort(key=lambda x: natural_sort_key(x.get("save_name") or ""))
+    elif sort_mode == "newest_month_oldest_works":
+        # Newest month section first, but within month works are ordered oldest to newest
+        month_groups = {}
+        for item in all_items:
+            ym = (item.get("created_date") or "")[:7] or "未指定"
+            month_groups.setdefault(ym, []).append(item)
+        sorted_months = sorted(month_groups.keys(), reverse=True)
+        final_items = []
+        for ym in sorted_months:
+            group = month_groups[ym]
+            group.sort(key=lambda x: (x.get("created_date") or "", natural_sort_key(x.get("save_name") or "")))
+            final_items.extend(group)
+        all_items = final_items
     elif sort_mode == "oldest_month":
         # Month sections ascending (oldest month first), within month posts newest first, pages 1->N
         month_groups = {}

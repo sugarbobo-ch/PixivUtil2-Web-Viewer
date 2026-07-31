@@ -231,8 +231,7 @@ def read_images(
     offset: int = 0
 ):
     if only_db is None:
-        web_cfg = get_web_config()
-        only_db = bool(web_cfg.get("onlyShowDbFiles", False))
+        only_db = False
 
     images, total_count = db.get_images(
         month=month,

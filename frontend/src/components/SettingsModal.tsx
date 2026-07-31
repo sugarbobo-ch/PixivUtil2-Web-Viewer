@@ -22,7 +22,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     thumbnailHeight: 320,
     itemsPerPage: 200,
     autoOpenBrowser: true,
-    onlyShowDbFiles: false,
   });
 
   // PixivUtil2 Config State (config.ini)
@@ -306,19 +305,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-zinc-100 focus:outline-none focus:border-indigo-500"
                     />
                   </div>
-                </div>
-
-                <div className="pt-2 border-t border-zinc-700/50">
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={!!webConfig.onlyShowDbFiles}
-                      onChange={(e) => setWebConfig({ ...webConfig, onlyShowDbFiles: e.target.checked })}
-                      className="w-4 h-4 rounded bg-zinc-800 border-zinc-700 text-indigo-600 focus:ring-indigo-500"
-                    />
-                    <span className="font-medium text-zinc-300">僅顯示已記錄在資料庫中的作品 (onlyShowDbFiles)</span>
-                  </label>
-                  <p className="text-[11px] text-zinc-400 mt-1 pl-6">預設關閉。關閉時會自動遞迴掃描實體資料夾並併入尚未建檔的本機圖片/影片。</p>
                 </div>
 
                 <div className="pt-2">

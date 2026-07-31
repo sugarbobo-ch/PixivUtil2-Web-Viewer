@@ -9,4 +9,4 @@ Start-Process -FilePath "uv" -ArgumentList "run uvicorn main:app --port 8000 --r
 Set-Location -Path "$PSScriptRoot\frontend"
 Start-Sleep -Seconds 2
 Start-Process "http://localhost:3000"
-cmd /c npm run dev
+cmd /c pnpm dev
