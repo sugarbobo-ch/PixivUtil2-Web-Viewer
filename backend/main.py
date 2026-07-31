@@ -233,7 +233,7 @@ def read_images(
         web_cfg = get_web_config()
         only_db = bool(web_cfg.get("onlyShowDbFiles", False))
 
-    return db.get_images(
+    images, total_count = db.get_images(
         month=month,
         artist_id=artist_id,
         search=search,
@@ -241,6 +241,12 @@ def read_images(
         offset=offset,
         only_show_db_files=only_db
     )
+    return {
+        "images": images,
+        "total": total_count,
+        "limit": limit,
+        "offset": offset
+    }
 
 
 @app.get("/api/file")

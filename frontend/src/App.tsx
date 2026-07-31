@@ -54,18 +54,40 @@ export const App: React.FC = () => {
       .catch(err => console.error('Failed to fetch months:', err));
   }, []);
 
-  // Fetch Images based on Filters
+  // Pagination States
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalImages, setTotalImages] = useState(0);
+  const [itemsPerPage, setItemsPerPage] = useState(200);
+
+  // Reset page to 1 on filter change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [selectedMonths, selectedArtist, searchQuery]);
+
+  // Fetch Images based on Filters & Pagination
   const fetchImages = useCallback(() => {
     const params = new URLSearchParams();
     if (selectedMonths.length > 0) params.append('month', selectedMonths.join(','));
     if (selectedArtist) params.append('artist_id', selectedArtist.toString());
     if (searchQuery) params.append('search', searchQuery);
 
+    const offset = (currentPage - 1) * itemsPerPage;
+    params.append('limit', itemsPerPage.toString());
+    params.append('offset', offset.toString());
+
     fetch(`/api/images?${params.toString()}`)
       .then(res => res.json())
-      .then(data => setImages(data))
+      .then(data => {
+        if (Array.isArray(data)) {
+          setImages(data);
+          setTotalImages(data.length);
+        } else {
+          setImages(data.images || []);
+          setTotalImages(data.total || 0);
+        }
+      })
       .catch(err => console.error('Failed to fetch images:', err));
-  }, [selectedMonths, selectedArtist, searchQuery]);
+  }, [selectedMonths, selectedArtist, searchQuery, currentPage, itemsPerPage]);
 
   useEffect(() => {
     fetchImages();
@@ -154,7 +176,7 @@ export const App: React.FC = () => {
         searchQuery={searchQuery}
         setSearchQuery={setSearchQuery}
         toggleSidebar={() => setIsSidebarOpen(!isSidebarOpen)}
-        totalCount={images.length}
+        totalCount={totalImages}
         onOpenSettings={() => setIsSettingsOpen(true)}
       />
 
@@ -174,6 +196,11 @@ export const App: React.FC = () => {
           {viewMode === 'grid' && (
             <GalleryGrid
               images={images}
+              totalImages={totalImages}
+              currentPage={currentPage}
+              itemsPerPage={itemsPerPage}
+              onPageChange={(p) => setCurrentPage(p)}
+              onItemsPerPageChange={(num) => setItemsPerPage(num)}
               isEditMode={isEditMode}
               selectedIds={selectedIds}
               onToggleSelect={toggleSelectImage}

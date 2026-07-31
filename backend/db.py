@@ -310,7 +310,7 @@ def get_images(
             db_items = [dict(r) for r in rows]
 
     if only_show_db_files:
-        return db_items[offset:offset+limit]
+        return db_items[offset:offset+limit], len(db_items)
 
     # If only_show_db_files is False (default):
     # Recursively scan disk files for the selected folder to merge non-DB files dynamically
@@ -377,7 +377,7 @@ def get_images(
         ]
 
     all_items.sort(key=lambda x: x.get("created_date") or "", reverse=True)
-    return all_items[offset:offset+limit]
+    return all_items[offset:offset+limit], len(all_items)
 
 
 def delete_image_records(image_ids: List[int]) -> List[str]:
