@@ -204,6 +204,12 @@ def rescan_directory(req: RescanRequest):
     return result
 
 
+@app.post("/api/db/clean-orphans")
+def clean_db_orphans():
+    result = db.clean_orphaned_records()
+    return {"status": "success", "deleted_members": result.get("deleted_members", 0)}
+
+
 @app.get("/api/artists")
 def read_artists():
     return db.get_all_artists()

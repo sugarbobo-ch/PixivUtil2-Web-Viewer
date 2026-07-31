@@ -166,6 +166,28 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
   };
 
+  const handleCleanOrphans = async () => {
+    setLoading(true);
+    setMessage(null);
+    try {
+      const res = await fetch('/api/db/clean-orphans', { method: 'POST' });
+      const data = await res.json();
+      if (res.ok) {
+        setMessage({
+          type: 'success',
+          text: `資料庫清理完成！共清除 ${data.deleted_members} 筆孤兒與無效繪師紀錄。`,
+        });
+        onSettingsSaved();
+      } else {
+        setMessage({ type: 'error', text: '清理資料庫失敗。' });
+      }
+    } catch (err) {
+      setMessage({ type: 'error', text: `清理出錯: ${err}` });
+    } finally {
+      setLoading(false);
+    }
+  };
+
   if (!isOpen) return null;
 
   const sectionKeys = Object.keys(pixivSections);
@@ -381,7 +403,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               <div className="p-4 bg-zinc-800/60 border border-zinc-700 rounded-xl space-y-3">
                 <div className="flex items-center justify-between">
                   <div>
-                    <h4 className="font-semibold text-zinc-200">自动備份狀態 (config.ini.bak)</h4>
+                    <h4 className="font-semibold text-zinc-200">自動備份狀態 (config.ini.bak)</h4>
                     <p className="text-[11px] text-zinc-400">每次儲存 PixivUtil2 設定前均會自動備份。</p>
                   </div>
                   <span className={`px-2.5 py-1 rounded-full font-semibold ${
@@ -400,6 +422,24 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     <RotateCcw className="w-4 h-4" /> 還原至上一次備份檔 (config.ini.bak)
                   </button>
                 )}
+              </div>
+
+              {/* DB Clean Maintenance Box */}
+              <div className="p-4 bg-rose-950/20 border border-rose-500/20 rounded-xl space-y-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h4 className="font-semibold text-rose-300">資料庫清理與維護 (DB Cleanup)</h4>
+                    <p className="text-[11px] text-zinc-400">自動清除 `db.sqlite` 中作品數為 0 或檔名誤判建立的孤兒繪師紀錄。</p>
+                  </div>
+                  <button
+                    onClick={handleCleanOrphans}
+                    disabled={loading}
+                    className="px-3.5 py-2 bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white rounded-lg font-semibold flex items-center gap-1.5 transition-colors shrink-0 shadow-md"
+                  >
+                    <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+                    <span>一鍵清理無效繪師紀錄</span>
+                  </button>
+                </div>
               </div>
             </div>
           )}

@@ -78,12 +78,16 @@ def scan_and_index_directory(target_dir: str) -> Dict[str, Any]:
                     image_id = next_custom_id
                     next_custom_id += 1
 
-                # Try to parse member_id or folder name
+                # Only parse member_id if root is a subfolder, NOT the rootDirectory itself
                 member_id = None
-                folder_name = os.path.basename(root)
-                member_match = re.search(r"(\d{4,10})", folder_name)
-                if member_match:
-                    member_id = int(member_match.group(1))
+                if root != abs_dir:
+                    folder_name = os.path.basename(root)
+                    member_match = re.search(r"(\d{4,10})", folder_name)
+                    if member_match:
+                        member_id = int(member_match.group(1))
+                    else:
+                        # Stable ID hash for non-numeric folder names
+                        member_id = abs(hash(folder_name)) % 100000000
 
                 mtime = os.path.getmtime(full_path)
                 created_date = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(mtime))
@@ -96,9 +100,9 @@ def scan_and_index_directory(target_dir: str) -> Dict[str, Any]:
                         VALUES (?, ?, ?, ?, ?, ?)
                     """, (image_id, member_id, title, full_path, created_date, created_date))
 
-                    if member_id:
+                    if member_id and root != abs_dir:
                         cursor.execute("""
-                            INSERT OR IGNORE INTO pixiv_master_member
+                            INSERT OR REPLACE INTO pixiv_master_member
                             (member_id, name, created_date)
                             VALUES (?, ?, ?)
                         """, (member_id, folder_name, created_date))
@@ -112,6 +116,32 @@ def scan_and_index_directory(target_dir: str) -> Dict[str, Any]:
     return {"scanned": scanned_count, "indexed": indexed_count, "directory": abs_dir}
 
 
+def clean_orphaned_records() -> Dict[str, int]:
+    """Deletes orphaned DB entries with 0 images or fake filename artist entries."""
+    if not os.path.exists(DB_PATH):
+        return {"deleted_members": 0}
+
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        
+        # Delete members with no associated images in DB
+        cursor.execute("""
+            DELETE FROM pixiv_master_member 
+            WHERE member_id NOT IN (SELECT DISTINCT member_id FROM pixiv_master_image WHERE member_id IS NOT NULL)
+        """)
+        deleted_members = cursor.rowcount
+
+        # Delete fake member names created from filenames (e.g. containing _p0 or raw image filenames)
+        cursor.execute("""
+            DELETE FROM pixiv_master_member
+            WHERE name LIKE '%_p%' OR name LIKE '%.jpg' OR name LIKE '%.png' OR name LIKE '%.jpeg'
+        """)
+        deleted_members += cursor.rowcount
+
+        conn.commit()
+    return {"deleted_members": deleted_members}
+
+
 def get_all_artists() -> List[Dict[str, Any]]:
     if not os.path.exists(DB_PATH):
         return []
@@ -120,8 +150,10 @@ def get_all_artists() -> List[Dict[str, Any]]:
         query = """
             SELECT m.member_id, m.name, COUNT(i.image_id) as artwork_count
             FROM pixiv_master_member m
-            LEFT JOIN pixiv_master_image i ON m.member_id = i.member_id
-            GROUP BY m.member_id
+            INNER JOIN pixiv_master_image i ON m.member_id = i.member_id
+            WHERE m.name NOT LIKE '%_p%' AND m.name NOT LIKE '%.jpg' AND m.name NOT LIKE '%.png'
+            GROUP BY m.member_id, m.name
+            HAVING COUNT(i.image_id) > 0
             ORDER BY m.name ASC
         """
         rows = cursor.execute(query).fetchall()
