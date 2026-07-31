@@ -157,7 +157,19 @@ def get_all_artists() -> List[Dict[str, Any]]:
             ORDER BY m.name ASC
         """
         rows = cursor.execute(query).fetchall()
-        return [dict(r) for r in rows]
+        result = [dict(r) for r in rows]
+
+        # Check for unassigned images in root folder (member_id IS NULL)
+        null_count_row = cursor.execute("SELECT COUNT(*) as count FROM pixiv_master_image WHERE member_id IS NULL").fetchone()
+        null_count = null_count_row["count"] if null_count_row else 0
+        if null_count > 0:
+            result.insert(0, {
+                "member_id": -1,
+                "name": "未分類/單張根目錄圖片",
+                "artwork_count": null_count
+            })
+
+        return result
 
 
 def get_all_months() -> List[Dict[str, Any]]:
@@ -193,9 +205,12 @@ def get_images(
         if month:
             conditions.append("strftime('%Y-%m', i.created_date) = ?")
             params.append(month)
-        if artist_id:
-            conditions.append("i.member_id = ?")
-            params.append(artist_id)
+        if artist_id is not None:
+            if artist_id == -1:
+                conditions.append("i.member_id IS NULL")
+            else:
+                conditions.append("i.member_id = ?")
+                params.append(artist_id)
         if search:
             conditions.append("(i.title LIKE ? OR m.name LIKE ?)")
             params.extend([f"%{search}%", f"%{search}%"])
