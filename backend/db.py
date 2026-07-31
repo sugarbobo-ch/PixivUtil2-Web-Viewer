@@ -240,47 +240,120 @@ def get_images(
     artist_id: Optional[int] = None,
     search: Optional[str] = None,
     limit: int = 200,
-    offset: int = 0
+    offset: int = 0,
+    only_show_db_files: bool = False
 ) -> List[Dict[str, Any]]:
-    if not os.path.exists(DB_PATH):
-        return []
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        conditions = []
-        params = []
+    db_items = []
+    if os.path.exists(DB_PATH):
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            conditions = []
+            params = []
 
-        if month:
-            conditions.append("strftime('%Y-%m', i.created_date) = ?")
-            params.append(month)
-        if artist_id is not None:
-            if artist_id == -1:
-                conditions.append("i.member_id IS NULL")
-            else:
-                conditions.append("i.member_id = ?")
-                params.append(artist_id)
-        if search:
-            conditions.append("(i.title LIKE ? OR m.name LIKE ?)")
-            params.extend([f"%{search}%", f"%{search}%"])
+            if month:
+                conditions.append("strftime('%Y-%m', i.created_date) = ?")
+                params.append(month)
+            if artist_id is not None:
+                if artist_id == -1:
+                    conditions.append("i.member_id IS NULL")
+                else:
+                    conditions.append("i.member_id = ?")
+                    params.append(artist_id)
+            if search:
+                conditions.append("(i.title LIKE ? OR m.name LIKE ?)")
+                params.extend([f"%{search}%", f"%{search}%"])
 
-        where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
-        query = f"""
-            SELECT 
-                i.image_id, 
-                i.member_id, 
-                i.title, 
-                i.save_name, 
-                i.created_date, 
-                i.last_update_date,
-                m.name as artist_name
-            FROM pixiv_master_image i
-            LEFT JOIN pixiv_master_member m ON i.member_id = m.member_id
-            {where_clause}
-            ORDER BY i.created_date DESC
-            LIMIT ? OFFSET ?
-        """
-        params.extend([limit, offset])
-        rows = cursor.execute(query, params).fetchall()
-        return [dict(r) for r in rows]
+            where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
+            query = f"""
+                SELECT 
+                    i.image_id, 
+                    i.member_id, 
+                    i.title, 
+                    i.save_name, 
+                    i.created_date, 
+                    i.last_update_date,
+                    m.name as artist_name
+                FROM pixiv_master_image i
+                LEFT JOIN pixiv_master_member m ON i.member_id = m.member_id
+                {where_clause}
+                ORDER BY i.created_date DESC
+            """
+            rows = cursor.execute(query, params).fetchall()
+            db_items = [dict(r) for r in rows]
+
+    if only_show_db_files:
+        return db_items[offset:offset+limit]
+
+    # If only_show_db_files is False (default):
+    # Recursively scan disk files for the selected folder to merge non-DB files dynamically
+    import configparser, time
+    config_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "config.ini"))
+    root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    if os.path.exists(config_path):
+        try:
+            config = configparser.ConfigParser(interpolation=None)
+            config.read(config_path, encoding="utf-8")
+            cfg_dir = config.get("Settings", "rootDirectory", fallback=".")
+            if cfg_dir and cfg_dir != ".":
+                root_dir = os.path.abspath(cfg_dir)
+        except Exception:
+            pass
+
+    target_scan_dir = None
+    if artist_id is not None and artist_id != -1:
+        if os.path.exists(DB_PATH):
+            with get_db_connection() as conn:
+                m_row = conn.execute("SELECT name FROM pixiv_master_member WHERE member_id = ?", (artist_id,)).fetchone()
+                if m_row and m_row["name"]:
+                    cand = os.path.join(root_dir, m_row["name"])
+                    if os.path.isdir(cand):
+                        target_scan_dir = cand
+        if not target_scan_dir and os.path.exists(root_dir):
+            for f in os.listdir(root_dir):
+                if os.path.isdir(os.path.join(root_dir, f)) and (abs(hash(f)) % 100000000) == artist_id:
+                    target_scan_dir = os.path.join(root_dir, f)
+                    break
+
+    existing_paths = {}
+    for item in db_items:
+        if item.get("save_name"):
+            existing_paths[os.path.abspath(item["save_name"])] = item
+
+    all_items = list(db_items)
+
+    if target_scan_dir and os.path.exists(target_scan_dir):
+        valid_exts = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".mp4"}
+        for root, _, files in os.walk(target_scan_dir):
+            for file in files:
+                ext = os.path.splitext(file)[1].lower()
+                if ext not in valid_exts:
+                    continue
+                full_path = os.path.abspath(os.path.join(root, file))
+                if full_path not in existing_paths:
+                    mtime = os.path.getmtime(full_path)
+                    created_date = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(mtime))
+                    item_id = abs(hash(full_path)) % 1000000000
+                    new_item = {
+                        "image_id": item_id,
+                        "member_id": artist_id,
+                        "title": os.path.splitext(file)[0],
+                        "save_name": full_path,
+                        "created_date": created_date,
+                        "last_update_date": created_date,
+                        "artist_name": os.path.basename(target_scan_dir)
+                    }
+                    all_items.append(new_item)
+                    existing_paths[full_path] = new_item
+
+    if search:
+        s_lower = search.lower()
+        all_items = [
+            it for it in all_items
+            if s_lower in (it.get("title") or "").lower() or s_lower in (it.get("artist_name") or "").lower()
+        ]
+
+    all_items.sort(key=lambda x: x.get("created_date") or "", reverse=True)
+    return all_items[offset:offset+limit]
 
 
 def delete_image_records(image_ids: List[int]) -> List[str]:

@@ -4,5 +4,6 @@
   "thumbnailWidth": 320,
   "thumbnailHeight": 320,
   "itemsPerPage": 200,
-  "autoOpenBrowser": true
+  "autoOpenBrowser": true,
+  "onlyShowDbFiles": false
 }

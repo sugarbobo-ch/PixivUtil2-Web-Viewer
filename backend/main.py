@@ -225,10 +225,22 @@ def read_images(
     month: Optional[str] = None,
     artist_id: Optional[int] = None,
     search: Optional[str] = None,
+    only_db: Optional[bool] = None,
     limit: int = 200,
     offset: int = 0
 ):
-    return db.get_images(month=month, artist_id=artist_id, search=search, limit=limit, offset=offset)
+    if only_db is None:
+        web_cfg = get_web_config()
+        only_db = bool(web_cfg.get("onlyShowDbFiles", False))
+
+    return db.get_images(
+        month=month,
+        artist_id=artist_id,
+        search=search,
+        limit=limit,
+        offset=offset,
+        only_show_db_files=only_db
+    )
 
 
 @app.get("/api/file")
