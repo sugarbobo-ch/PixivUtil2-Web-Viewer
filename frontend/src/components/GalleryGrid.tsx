@@ -50,7 +50,7 @@ export const GalleryGrid: React.FC<GalleryGridProps> = ({
           >
             {/* Thumbnail Image */}
             <img
-              src={`/api/thumbnail?path=${encodeURIComponent(item.save_name)}`}
+              src={`/api/thumbnail?path=${encodeURIComponent(item.save_name || '')}&image_id=${item.image_id}`}
               alt={item.title}
               loading="lazy"
               className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"

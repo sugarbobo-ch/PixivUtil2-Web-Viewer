@@ -99,7 +99,7 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
   if (!currentItem) return null;
 
   const isVideo = currentItem.save_name.toLowerCase().endsWith('.mp4');
-  const mediaUrl = `/api/file?path=${encodeURIComponent(currentItem.save_name)}`;
+  const mediaUrl = `/api/file?path=${encodeURIComponent(currentItem.save_name || '')}&image_id=${currentItem.image_id}`;
 
   return (
     <div className="fixed inset-0 z-50 bg-black/95 flex flex-col justify-between select-none animate-fadeIn">
