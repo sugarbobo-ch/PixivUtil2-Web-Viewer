@@ -143,23 +143,70 @@ def clean_orphaned_records() -> Dict[str, int]:
 
 
 def get_all_artists() -> List[Dict[str, Any]]:
-    if not os.path.exists(DB_PATH):
+    import configparser
+    config_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "config.ini"))
+    root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    if os.path.exists(config_path):
+        try:
+            config = configparser.ConfigParser(interpolation=None)
+            config.read(config_path, encoding="utf-8")
+            cfg_dir = config.get("Settings", "rootDirectory", fallback=".")
+            if cfg_dir and cfg_dir != ".":
+                root_dir = os.path.abspath(cfg_dir)
+        except Exception:
+            pass
+
+    if not os.path.exists(root_dir):
         return []
+
+    disk_folders = []
+    try:
+        disk_folders = [
+            f for f in os.listdir(root_dir)
+            if os.path.isdir(os.path.join(root_dir, f)) and not f.startswith(".")
+        ]
+        disk_folders.sort()
+    except Exception as ex:
+        print(f"Error listing root directory folders: {ex}")
+
+    result = []
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        query = """
-            SELECT m.member_id, m.name, COUNT(i.image_id) as artwork_count
-            FROM pixiv_master_member m
-            INNER JOIN pixiv_master_image i ON m.member_id = i.member_id
-            WHERE m.name NOT LIKE '%_p%' AND m.name NOT LIKE '%.jpg' AND m.name NOT LIKE '%.png'
-            GROUP BY m.member_id, m.name
-            HAVING COUNT(i.image_id) > 0
-            ORDER BY m.name ASC
-        """
-        rows = cursor.execute(query).fetchall()
-        result = [dict(r) for r in rows]
 
-        # Check for unassigned images in root folder (member_id IS NULL)
+        for folder_name in disk_folders:
+            folder_path = os.path.join(root_dir, folder_name)
+
+            member_row = cursor.execute(
+                "SELECT member_id FROM pixiv_master_member WHERE name = ? OR name LIKE ? OR save_folder LIKE ?",
+                (folder_name, f"%{folder_name}%", f"%{folder_name}%")
+            ).fetchone()
+
+            member_id = member_row["member_id"] if member_row else (abs(hash(folder_name)) % 100000000)
+
+            count_row = cursor.execute("""
+                SELECT COUNT(*) as count FROM pixiv_master_image
+                WHERE save_name LIKE ? OR member_id = ?
+            """, (f"%{folder_name}%", member_id)).fetchone()
+
+            artwork_count = count_row["count"] if count_row else 0
+
+            if artwork_count == 0:
+                valid_exts = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".mp4"}
+                file_count = 0
+                for r, _, files in os.walk(folder_path):
+                    for file in files:
+                        if os.path.splitext(file)[1].lower() in valid_exts:
+                            file_count += 1
+                artwork_count = file_count
+
+            result.append({
+                "member_id": member_id,
+                "name": folder_name,
+                "folder_name": folder_name,
+                "artwork_count": artwork_count
+            })
+
+        # Check for unassigned images in root folder
         null_count_row = cursor.execute("SELECT COUNT(*) as count FROM pixiv_master_image WHERE member_id IS NULL").fetchone()
         null_count = null_count_row["count"] if null_count_row else 0
         if null_count > 0:
@@ -169,7 +216,7 @@ def get_all_artists() -> List[Dict[str, Any]]:
                 "artwork_count": null_count
             })
 
-        return result
+    return result
 
 
 def get_all_months() -> List[Dict[str, Any]]:
