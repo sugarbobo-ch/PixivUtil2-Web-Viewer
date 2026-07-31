@@ -25,6 +25,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 }) => {
   const [artistFilter, setArtistFilter] = useState('');
   const [isMonthSectionOpen, setIsMonthSectionOpen] = useState(true);
+  const [expandedYears, setExpandedYears] = useState<Record<string, boolean>>({});
 
   const filteredArtists = artists.filter(a =>
     a.name.toLowerCase().includes(artistFilter.toLowerCase())
@@ -32,6 +33,23 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   const activeArtistObj = artists.find(a => a.member_id === selectedArtist);
   const isAnyFilterActive = selectedMonth !== null || selectedArtist !== null;
+
+  // Group Months by Year
+  const yearGroupMap: Record<string, { totalCount: number; months: MonthItem[] }> = {};
+  months.forEach(m => {
+    const year = m.month.split('-')[0] || m.month;
+    if (!yearGroupMap[year]) {
+      yearGroupMap[year] = { totalCount: 0, months: [] };
+    }
+    yearGroupMap[year].totalCount += m.count;
+    yearGroupMap[year].months.push(m);
+  });
+
+  const sortedYears = Object.keys(yearGroupMap).sort((a, b) => b.localeCompare(a));
+
+  const toggleYearExpanded = (year: string) => {
+    setExpandedYears(prev => ({ ...prev, [year]: !prev[year] }));
+  };
 
   const handleResetFilters = () => {
     setSelectedMonth(null);
@@ -82,7 +100,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
             {selectedMonth !== null && (
               <span className="px-2 py-0.5 rounded-md bg-indigo-600/30 border border-indigo-500/40 text-indigo-200 flex items-center gap-1">
-                月份: {selectedMonth}
+                時間: {selectedMonth}
                 <X
                   className="w-3 h-3 cursor-pointer hover:text-white"
                   onClick={() => setSelectedMonth(null)}
@@ -93,9 +111,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
       )}
 
-      {/* Main Body - Artists First & Maximized */}
+      {/* Main Body */}
       <div className="flex-1 flex flex-col min-h-0 p-3 space-y-4 overflow-hidden">
-        {/* 1. ARTIST SELECTION SECTION (Maximized Flex Height) */}
+        {/* 1. ARTIST SELECTION SECTION */}
         <div className="flex-1 flex flex-col min-h-0">
           <div className="flex items-center justify-between mb-2 text-xs font-semibold text-zinc-400 uppercase tracking-wider">
             <div className="flex items-center gap-2">
@@ -150,7 +168,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </div>
         </div>
 
-        {/* 2. MONTH TIMELINE SECTION (Collapsible Accordion with Max Height) */}
+        {/* 2. YEAR -> MONTH HIERARCHICAL ACCORDION SECTION */}
         <div className="border-t border-zinc-800 pt-3 shrink-0">
           <div
             onClick={() => setIsMonthSectionOpen(!isMonthSectionOpen)}
@@ -158,7 +176,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           >
             <div className="flex items-center gap-2">
               <Calendar className="w-4 h-4 text-indigo-400" />
-              <span>更新月份時間軸</span>
+              <span>發布時間 (年份 / 月份)</span>
             </div>
             <div className="flex items-center gap-1">
               {selectedMonth && <span className="text-[11px] text-indigo-400 lowercase">{selectedMonth}</span>}
@@ -167,33 +185,78 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </div>
 
           {isMonthSectionOpen && (
-            <div className="space-y-1 max-h-36 overflow-y-auto pr-1 border border-zinc-800/60 rounded-xl p-1 bg-zinc-950/40">
+            <div className="space-y-1.5 max-h-56 overflow-y-auto pr-1 border border-zinc-800/60 rounded-xl p-1.5 bg-zinc-950/40 text-xs">
               <button
                 onClick={() => setSelectedMonth(null)}
-                className={`w-full flex items-center justify-between px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                className={`w-full flex items-center justify-between px-3 py-1.5 rounded-lg font-medium transition-colors ${
                   selectedMonth === null
                     ? 'bg-indigo-600 text-white shadow-sm'
                     : 'text-zinc-300 hover:bg-zinc-800'
                 }`}
               >
-                <span>全部月份</span>
+                <span>不限時間 (全部)</span>
                 {selectedMonth === null && <Check className="w-3.5 h-3.5" />}
               </button>
 
-              {months.map((m) => (
-                <button
-                  key={m.month}
-                  onClick={() => setSelectedMonth(m.month === selectedMonth ? null : m.month)}
-                  className={`w-full flex items-center justify-between px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                    selectedMonth === m.month
-                      ? 'bg-indigo-600 text-white shadow-sm'
-                      : 'text-zinc-300 hover:bg-zinc-800'
-                  }`}
-                >
-                  <span>{m.month}</span>
-                  <span className="text-[11px] opacity-70">({m.count})</span>
-                </button>
-              ))}
+              {/* Year Accordions */}
+              {sortedYears.map((year) => {
+                const isExpanded = expandedYears[year] ?? (selectedMonth?.startsWith(year) || sortedYears[0] === year);
+                const isYearSelected = selectedMonth === year;
+                const group = yearGroupMap[year];
+
+                return (
+                  <div key={year} className="border border-zinc-800/80 rounded-lg overflow-hidden bg-zinc-900/40">
+                    {/* Year Header */}
+                    <div className={`flex items-center justify-between px-2.5 py-1.5 cursor-pointer transition-colors ${
+                      isYearSelected ? 'bg-indigo-600/30 text-indigo-200 border-l-2 border-indigo-500' : 'hover:bg-zinc-800/60 text-zinc-200'
+                    }`}>
+                      <div
+                        onClick={() => toggleYearExpanded(year)}
+                        className="flex items-center gap-1.5 flex-1 font-semibold"
+                      >
+                        {isExpanded ? <ChevronDown className="w-3.5 h-3.5 text-zinc-400" /> : <ChevronRight className="w-3.5 h-3.5 text-zinc-400" />}
+                        <span>{year} 年</span>
+                        <span className="text-[11px] font-normal text-zinc-400">({group.totalCount})</span>
+                      </div>
+
+                      <button
+                        onClick={() => setSelectedMonth(isYearSelected ? null : year)}
+                        className={`text-[11px] px-2 py-0.5 rounded transition-colors ${
+                          isYearSelected ? 'bg-indigo-600 text-white font-bold' : 'bg-zinc-800 text-zinc-400 hover:text-white'
+                        }`}
+                        title={`篩選 ${year} 全年作品`}
+                      >
+                        {isYearSelected ? '已選全年' : '選全年'}
+                      </button>
+                    </div>
+
+                    {/* Expanded Month Grid */}
+                    {isExpanded && (
+                      <div className="grid grid-cols-2 gap-1 p-1.5 bg-zinc-950/60 border-t border-zinc-800/60">
+                        {group.months.map((m) => {
+                          const isMonthSelected = selectedMonth === m.month;
+                          const monthNum = m.month.split('-')[1] || m.month;
+
+                          return (
+                            <button
+                              key={m.month}
+                              onClick={() => setSelectedMonth(isMonthSelected ? null : m.month)}
+                              className={`flex items-center justify-between px-2 py-1 rounded text-[11px] font-medium transition-colors ${
+                                isMonthSelected
+                                  ? 'bg-indigo-600 text-white shadow-sm'
+                                  : 'bg-zinc-800/80 text-zinc-300 hover:bg-zinc-700'
+                              }`}
+                            >
+                              <span>{monthNum} 月</span>
+                              <span className="opacity-70 text-[10px]">({m.count})</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>

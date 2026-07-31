@@ -271,7 +271,10 @@ def get_images(
             params = []
 
             if month:
-                conditions.append("strftime('%Y-%m', i.created_date) = ?")
+                if len(month) == 4:
+                    conditions.append("strftime('%Y', i.created_date) = ?")
+                else:
+                    conditions.append("strftime('%Y-%m', i.created_date) = ?")
                 params.append(month)
             if artist_id is not None:
                 if artist_id == -1:
