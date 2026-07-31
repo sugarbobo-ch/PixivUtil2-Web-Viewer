@@ -159,7 +159,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 : 'border-transparent text-zinc-400 hover:text-zinc-200'
             }`}
           >
-            <Folder className="w-4 h-4" /> 📁 目錄與圖片掃描
+            <Folder className="w-4 h-4" /> 目錄與圖片掃描
           </button>
 
           <button
@@ -170,7 +170,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 : 'border-transparent text-zinc-400 hover:text-zinc-200'
             }`}
           >
-            <FileText className="w-4 h-4" /> 🏷️ 檔名格式設定
+            <FileText className="w-4 h-4" /> 檔名格式設定
           </button>
 
           <button
@@ -181,7 +181,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 : 'border-transparent text-zinc-400 hover:text-zinc-200'
             }`}
           >
-            <Shield className="w-4 h-4" /> 🛡️ 設定備份與還原
+            <Shield className="w-4 h-4" /> 設定備份與還原
           </button>
         </div>
 
