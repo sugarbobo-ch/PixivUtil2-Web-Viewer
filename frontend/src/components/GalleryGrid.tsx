@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { ImageItem } from '../types';
 import { Check, Film, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Calendar, ArrowUpDown } from 'lucide-react';
 
@@ -73,6 +73,8 @@ export const GalleryGrid: React.FC<GalleryGridProps> = ({
     groupedByMonth[monthKey].items.push({ item, globalIndex });
   });
 
+  const [indexSortAsc, setIndexSortAsc] = useState(false);
+
   const monthKeys = Object.keys(groupedByMonth);
   if (sortMode === 'oldest') {
     monthKeys.sort((a, b) => a.localeCompare(b));
@@ -81,6 +83,10 @@ export const GalleryGrid: React.FC<GalleryGridProps> = ({
   } else {
     monthKeys.sort((a, b) => b.localeCompare(a));
   }
+
+  const displayedIndexMonthKeys = [...monthKeys].sort((a, b) =>
+    indexSortAsc ? a.localeCompare(b) : b.localeCompare(a)
+  );
 
   // Generate page numbers for pagination
   const getPageNumbers = () => {
@@ -109,7 +115,14 @@ export const GalleryGrid: React.FC<GalleryGridProps> = ({
           <span className="text-xs font-semibold text-zinc-400 whitespace-nowrap flex items-center gap-1 mr-1">
             <Calendar className="w-3.5 h-3.5 text-indigo-400" /> 月份索引:
           </span>
-          {monthKeys.map(mKey => (
+          <button
+            onClick={() => setIndexSortAsc(!indexSortAsc)}
+            className="px-2 py-1 text-[11px] font-semibold rounded-lg bg-zinc-900 border border-zinc-700/80 hover:bg-zinc-800 text-indigo-300 transition-colors flex items-center gap-1 shrink-0 mr-1"
+            title={indexSortAsc ? "目前索引為舊到新 (點擊切換為新到舊)" : "目前索引為新到舊 (點擊切換為舊到新)"}
+          >
+            {indexSortAsc ? '舊到新 ↑' : '新到舊 ↓'}
+          </button>
+          {displayedIndexMonthKeys.map(mKey => (
             <button
               key={mKey}
               onClick={() => {
