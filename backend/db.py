@@ -13,6 +13,105 @@ def get_db_connection() -> sqlite3.Connection:
     return conn
 
 
+def init_db_schema():
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS pixiv_master_member (
+                member_id INTEGER PRIMARY KEY,
+                name TEXT,
+                save_folder TEXT,
+                created_date DATE,
+                last_update_date DATE
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS pixiv_master_image (
+                image_id INTEGER PRIMARY KEY,
+                member_id INTEGER,
+                title TEXT,
+                save_name TEXT,
+                created_date DATE,
+                last_update_date DATE
+            )
+        """)
+        conn.commit()
+
+
+def scan_and_index_directory(target_dir: str) -> Dict[str, Any]:
+    init_db_schema()
+    abs_dir = os.path.abspath(target_dir)
+    if not os.path.exists(abs_dir):
+        return {"scanned": 0, "indexed": 0, "error": f"Directory does not exist: {abs_dir}"}
+
+    import re, time
+    valid_exts = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".mp4"}
+    scanned_count = 0
+    indexed_count = 0
+
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        # Fetch existing save_names to avoid duplicate indexing
+        existing_rows = cursor.execute("SELECT save_name, image_id FROM pixiv_master_image").fetchall()
+        existing_paths = {r["save_name"]: r["image_id"] for r in existing_rows if r["save_name"]}
+
+        # Auto-increment generator for unindexed images
+        max_id_row = cursor.execute("SELECT MAX(image_id) as max_id FROM pixiv_master_image").fetchone()
+        next_custom_id = (max_id_row["max_id"] or 1000000) + 1
+
+        for root, _, files in os.walk(abs_dir):
+            for file in files:
+                ext = os.path.splitext(file)[1].lower()
+                if ext not in valid_exts:
+                    continue
+                scanned_count += 1
+                full_path = os.path.join(root, file)
+
+                if full_path in existing_paths or file in existing_paths:
+                    continue
+
+                # Try to parse Pixiv image_id from filename (e.g. 12345678_p0.jpg or 12345678.png)
+                match = re.search(r"(\d{5,12})", file)
+                if match:
+                    image_id = int(match.group(1))
+                else:
+                    image_id = next_custom_id
+                    next_custom_id += 1
+
+                # Try to parse member_id or folder name
+                member_id = None
+                folder_name = os.path.basename(root)
+                member_match = re.search(r"(\d{4,10})", folder_name)
+                if member_match:
+                    member_id = int(member_match.group(1))
+
+                mtime = os.path.getmtime(full_path)
+                created_date = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(mtime))
+                title = os.path.splitext(file)[0]
+
+                try:
+                    cursor.execute("""
+                        INSERT OR REPLACE INTO pixiv_master_image 
+                        (image_id, member_id, title, save_name, created_date, last_update_date)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                    """, (image_id, member_id, title, full_path, created_date, created_date))
+
+                    if member_id:
+                        cursor.execute("""
+                            INSERT OR IGNORE INTO pixiv_master_member
+                            (member_id, name, created_date)
+                            VALUES (?, ?, ?)
+                        """, (member_id, folder_name, created_date))
+
+                    indexed_count += 1
+                except Exception as ex:
+                    print(f"Error indexing {file}: {ex}")
+
+        conn.commit()
+
+    return {"scanned": scanned_count, "indexed": indexed_count, "directory": abs_dir}
+
+
 def get_all_artists() -> List[Dict[str, Any]]:
     if not os.path.exists(DB_PATH):
         return []

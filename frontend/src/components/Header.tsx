@@ -7,7 +7,8 @@ import {
   Moon, 
   CheckSquare, 
   Search, 
-  SlidersHorizontal 
+  SlidersHorizontal,
+  Settings
 } from 'lucide-react';
 import { ViewMode, ThemeMode } from '../types';
 
@@ -22,6 +23,7 @@ interface HeaderProps {
   setSearchQuery: (query: string) => void;
   toggleSidebar: () => void;
   totalCount: number;
+  onOpenSettings: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -34,7 +36,8 @@ export const Header: React.FC<HeaderProps> = ({
   searchQuery,
   setSearchQuery,
   toggleSidebar,
-  totalCount
+  totalCount,
+  onOpenSettings
 }) => {
   return (
     <header className="sticky top-0 z-30 flex items-center justify-between px-4 py-3 bg-zinc-900/90 dark:bg-zinc-900/90 backdrop-blur-md border-b border-zinc-800 text-zinc-100 transition-colors">
@@ -132,6 +135,15 @@ export const Header: React.FC<HeaderProps> = ({
           title="切換深色/淺色主題"
         >
           {theme === 'dark' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+        </button>
+
+        {/* Settings Toggle */}
+        <button
+          onClick={onOpenSettings}
+          className="p-2 rounded-lg bg-zinc-800 border border-zinc-700 text-zinc-300 hover:bg-zinc-700 transition-colors"
+          title="系統與目錄設定"
+        >
+          <Settings className="w-4 h-4 text-indigo-400" />
         </button>
       </div>
     </header>

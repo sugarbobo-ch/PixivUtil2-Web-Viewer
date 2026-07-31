@@ -26,8 +26,116 @@ THUMB_CACHE_DIR = os.path.join(os.path.dirname(__file__), "cache_thumbs")
 os.makedirs(THUMB_CACHE_DIR, exist_ok=True)
 
 
+CONFIG_INI_PATH = os.path.join(WORKSPACE_ROOT, "config.ini")
+CONFIG_BAK_PATH = os.path.join(WORKSPACE_ROOT, "config.ini.bak")
+
+
 class BatchDeleteRequest(BaseModel):
     image_ids: List[int]
+
+
+class RescanRequest(BaseModel):
+    directory: Optional[str] = None
+
+
+class SettingsUpdateRequest(BaseModel):
+    rootDirectory: Optional[str] = None
+    dbPath: Optional[str] = None
+    filenameFormat: Optional[str] = None
+    overwrite: Optional[bool] = None
+
+
+@app.get("/api/settings")
+def get_settings():
+    import configparser
+    config = configparser.ConfigParser()
+    if os.path.exists(CONFIG_INI_PATH):
+        config.read(CONFIG_INI_PATH, encoding="utf-8")
+
+    root_directory = config.get("Settings", "rootDirectory", fallback=".")
+    db_path = config.get("Settings", "dbPath", fallback="./db.sqlite")
+    filename_format = config.get("Settings", "filenameFormat", fallback="%artist% (%member_id%)/%urlFilename% - %title%")
+    overwrite = config.getboolean("Settings", "overwrite", fallback=False)
+
+    has_backup = os.path.exists(CONFIG_BAK_PATH)
+
+    return {
+        "rootDirectory": root_directory,
+        "dbPath": db_path,
+        "filenameFormat": filename_format,
+        "overwrite": overwrite,
+        "hasBackup": has_backup,
+        "configPath": CONFIG_INI_PATH
+    }
+
+
+@app.post("/api/settings")
+def update_settings(req: SettingsUpdateRequest):
+    import configparser, shutil
+    if not os.path.exists(CONFIG_INI_PATH):
+        raise HTTPException(status_code=404, detail="config.ini not found")
+
+    # Step 1: Create automatic backup config.ini.bak before modifying
+    try:
+        shutil.copyfile(CONFIG_INI_PATH, CONFIG_BAK_PATH)
+    except Exception as ex:
+        raise HTTPException(status_code=500, detail=f"Failed to create backup config.ini.bak: {ex}")
+
+    # Step 2: Safely update config.ini
+    try:
+        config = configparser.ConfigParser()
+        config.read(CONFIG_INI_PATH, encoding="utf-8")
+
+        if "Settings" not in config.sections():
+            config.add_section("Settings")
+
+        if req.rootDirectory is not None:
+            config.set("Settings", "rootDirectory", req.rootDirectory)
+        if req.dbPath is not None:
+            config.set("Settings", "dbPath", req.dbPath)
+        if req.filenameFormat is not None:
+            config.set("Settings", "filenameFormat", req.filenameFormat)
+        if req.overwrite is not None:
+            config.set("Settings", "overwrite", "True" if req.overwrite else "False")
+
+        with open(CONFIG_INI_PATH, "w", encoding="utf-8") as f:
+            config.write(f)
+
+        return {"status": "success", "message": "Settings updated cleanly.", "hasBackup": True}
+    except Exception as err:
+        # Atomic rollback on failure
+        if os.path.exists(CONFIG_BAK_PATH):
+            shutil.copyfile(CONFIG_BAK_PATH, CONFIG_INI_PATH)
+        raise HTTPException(status_code=500, detail=f"Failed to write config.ini (restored from backup): {err}")
+
+
+@app.post("/api/settings/restore")
+def restore_settings():
+    import shutil
+    if not os.path.exists(CONFIG_BAK_PATH):
+        raise HTTPException(status_code=404, detail="No config.ini.bak backup file found.")
+    try:
+        shutil.copyfile(CONFIG_BAK_PATH, CONFIG_INI_PATH)
+        return {"status": "success", "message": "config.ini successfully restored from backup."}
+    except Exception as err:
+        raise HTTPException(status_code=500, detail=f"Failed to restore config.ini: {err}")
+
+
+@app.post("/api/rescan")
+def rescan_directory(req: RescanRequest):
+    import configparser
+    target_dir = req.directory
+    if not target_dir:
+        config = configparser.ConfigParser()
+        if os.path.exists(CONFIG_INI_PATH):
+            config.read(CONFIG_INI_PATH, encoding="utf-8")
+        target_dir = config.get("Settings", "rootDirectory", fallback=".")
+
+    if not target_dir or target_dir == ".":
+        target_dir = WORKSPACE_ROOT
+
+    result = db.scan_and_index_directory(target_dir)
+    return result
 
 
 @app.get("/api/artists")

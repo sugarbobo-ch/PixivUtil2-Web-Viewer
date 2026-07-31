@@ -7,12 +7,14 @@ import { FullscreenViewer } from './components/FullscreenViewer';
 import { WebtoonFeed } from './components/WebtoonFeed';
 import { BatchEditToolbar } from './components/BatchEditToolbar';
 import { ConfirmModal } from './components/ConfirmModal';
+import { SettingsModal } from './components/SettingsModal';
 
 export const App: React.FC = () => {
   const [theme, setTheme] = useState<ThemeMode>('dark');
   const [viewMode, setViewMode] = useState<ViewMode>('grid');
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isEditMode, setIsEditMode] = useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
   // Data States
   const [artists, setArtists] = useState<Artist[]>([]);
@@ -153,6 +155,7 @@ export const App: React.FC = () => {
         setSearchQuery={setSearchQuery}
         toggleSidebar={() => setIsSidebarOpen(!isSidebarOpen)}
         totalCount={images.length}
+        onOpenSettings={() => setIsSettingsOpen(true)}
       />
 
       <div className="flex flex-1">
@@ -226,6 +229,18 @@ export const App: React.FC = () => {
         cancelLabel="取消"
         onConfirm={confirmExecuteDelete}
         onCancel={() => setShowConfirmModal(false)}
+      />
+
+      {/* Settings Modal */}
+      <SettingsModal
+        isOpen={isSettingsOpen}
+        onClose={() => setIsSettingsOpen(false)}
+        onSettingsSaved={() => {
+          fetchImages();
+          // Also refetch artists and months in case directory rescan indexed new files
+          fetch('/api/artists').then(res => res.json()).then(data => setArtists(data)).catch(err => console.error(err));
+          fetch('/api/months').then(res => res.json()).then(data => setMonths(data)).catch(err => console.error(err));
+        }}
       />
     </div>
   );
