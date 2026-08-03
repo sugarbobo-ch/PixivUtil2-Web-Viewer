@@ -1,16 +1,21 @@
 import React from 'react';
-import { 
-  Grid, 
-  Maximize2, 
-  ScrollText, 
-  Sun, 
-  Moon, 
-  CheckSquare, 
-  Search, 
-  SlidersHorizontal,
-  Settings
+import { useEffect, useRef, useState } from 'react';
+import {
+  CheckSquare,
+  Eye,
+  EyeOff,
+  Grid,
+  Layers,
+  Menu,
+  Maximize2,
+  Moon,
+  ScrollText,
+  Search,
+  Settings,
+  Sun,
+  X,
 } from 'lucide-react';
-import { ViewMode, ThemeMode } from '../types';
+import { ThemeMode, ViewMode } from '../types';
 
 interface HeaderProps {
   viewMode: ViewMode;
@@ -22,8 +27,15 @@ interface HeaderProps {
   searchQuery: string;
   setSearchQuery: (query: string) => void;
   toggleSidebar: () => void;
+  toggleMenu: () => void;
+  isSidebarOpen: boolean;
+  isMobileMenuOpen: boolean;
   totalCount: number;
   onOpenSettings: () => void;
+  groupMangaPosts?: boolean;
+  onToggleGroupMangaPosts?: () => void;
+  blurEnabled?: boolean;
+  onToggleBlur?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -36,115 +48,226 @@ export const Header: React.FC<HeaderProps> = ({
   searchQuery,
   setSearchQuery,
   toggleSidebar,
+  toggleMenu,
+  isSidebarOpen,
+  isMobileMenuOpen,
   totalCount,
-  onOpenSettings
+  onOpenSettings,
+  groupMangaPosts = false,
+  onToggleGroupMangaPosts,
+  blurEnabled = false,
+  onToggleBlur,
 }) => {
+  const [isMobileSearchOpen, setIsMobileSearchOpen] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!isMobileSearchOpen) return undefined;
+
+    const frame = window.requestAnimationFrame(() => searchInputRef.current?.focus());
+    return () => window.cancelAnimationFrame(frame);
+  }, [isMobileSearchOpen]);
+
+  useEffect(() => {
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      setIsMobileSearchOpen(false);
+    };
+
+    document.addEventListener('keydown', handleEscape);
+    return () => document.removeEventListener('keydown', handleEscape);
+  }, []);
+
+  const headerClassName = [
+    'app-header shrink-0 z-30',
+    isMobileSearchOpen ? 'is-mobile-search-open' : '',
+  ].filter(Boolean).join(' ');
+
   return (
-    <header className="sticky top-0 z-30 flex items-center justify-between px-4 py-3 bg-zinc-900/90 dark:bg-zinc-900/90 backdrop-blur-md border-b border-zinc-800 text-zinc-100 transition-colors">
-      <div className="flex items-center gap-3">
+    <header className={headerClassName}>
+      <div className="app-header__leading">
         <button
+          type="button"
           onClick={toggleSidebar}
-          aria-label="開啟選單"
-          className="p-2 rounded-lg hover:bg-zinc-800 text-zinc-300 transition-colors"
-          title="開啟/收折側邊欄"
+          aria-label="切換側邊欄"
+          aria-expanded={isSidebarOpen}
+          aria-controls="gallery-filter-sidebar"
+          className="app-header__desktop-sidebar-trigger header-action header-action-icon"
+          title="顯示或隱藏側邊欄"
         >
-          <SlidersHorizontal className="w-5 h-5" />
+          <Menu className="h-5 w-5" aria-hidden="true" />
         </button>
-        <div className="flex items-center gap-2">
-          <span className="font-bold text-lg tracking-tight bg-gradient-to-r from-indigo-400 to-purple-400 bg-clip-text text-transparent">
-            PixivUtil2 Gallery
-          </span>
-          <span className="text-xs px-2 py-0.5 rounded-full bg-zinc-800 text-zinc-400">
-            {totalCount} 作品
-          </span>
+        <button
+          type="button"
+          onClick={toggleMenu}
+          aria-label="切換功能選單"
+          aria-expanded={isMobileMenuOpen}
+          aria-controls="mobile-menu-drawer"
+          className="app-header__mobile-menu-trigger header-action header-action-icon"
+          title="開啟功能選單"
+        >
+          <Menu className="h-5 w-5" aria-hidden="true" />
+        </button>
+        <div className="app-header__identity">
+          <span className="header-logo">PixivUtil2 Gallery</span>
+          <span className="header-count">{totalCount} 作品</span>
         </div>
       </div>
 
-      {/* Search Input */}
-      <div className="relative flex-1 max-w-md mx-4">
-        <Search className="absolute left-3 top-2.5 w-4 h-4 text-zinc-400" />
+      <button
+        type="button"
+        onClick={() => setIsMobileSearchOpen(open => !open)}
+        aria-expanded={isMobileSearchOpen}
+        aria-controls="header-search"
+        aria-label={isMobileSearchOpen ? '關閉搜尋' : '開啟搜尋'}
+        className="app-header__mobile-search-toggle header-action header-action-icon"
+        title={isMobileSearchOpen ? '關閉搜尋' : '開啟搜尋'}
+      >
+        {isMobileSearchOpen ? (
+          <X className="h-5 w-5" aria-hidden="true" />
+        ) : (
+          <Search className="h-5 w-5" aria-hidden="true" />
+        )}
+      </button>
+
+      <div id="header-search" className="app-header__search">
+        <Search className="header-search-icon" aria-hidden="true" />
         <input
+          ref={searchInputRef}
           type="text"
           value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
+          onChange={(event) => setSearchQuery(event.target.value)}
+          aria-label="搜尋標題或繪師名稱"
           placeholder="搜尋標題或繪師名稱..."
-          className="w-full pl-9 pr-4 py-1.5 text-sm bg-zinc-800/80 border border-zinc-700/60 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent text-zinc-100 placeholder-zinc-500 transition-all"
+          className="header-search-input"
         />
+        {searchQuery && (
+          <button
+            type="button"
+            onClick={() => setSearchQuery('')}
+            aria-label="清除搜尋"
+            className="header-clear-button"
+            title="清除搜尋"
+          >
+            <X className="h-3.5 w-3.5" aria-hidden="true" />
+          </button>
+        )}
       </div>
 
-      {/* Control Buttons */}
-      <div className="flex items-center gap-2">
-        {/* View Mode Switcher */}
-        <div className="flex items-center p-1 bg-zinc-800/90 rounded-lg border border-zinc-700/50">
+      <div className="app-header__desktop-actions">
+        <div className="app-header__controls">
+        <div className="header-mode-group" role="group" aria-label="檢視模式">
           <button
+            type="button"
             onClick={() => setViewMode('grid')}
-            className={`p-1.5 rounded-md text-xs font-medium flex items-center gap-1 transition-all ${
-              viewMode === 'grid'
-                ? 'bg-indigo-600 text-white shadow-sm'
-                : 'text-zinc-400 hover:text-zinc-200'
-            }`}
-            title="網格瀑布流"
+            aria-pressed={viewMode === 'grid'}
+            aria-label="網格檢視"
+            className={`header-mode-button ${viewMode === 'grid' ? 'is-active' : ''}`}
+            title="網格檢視"
           >
-            <Grid className="w-4 h-4" />
+            <Grid className="h-4 w-4" aria-hidden="true" />
             <span className="hidden sm:inline">網格</span>
           </button>
           <button
+            type="button"
             onClick={() => setViewMode('fullscreen')}
-            className={`p-1.5 rounded-md text-xs font-medium flex items-center gap-1 transition-all ${
-              viewMode === 'fullscreen'
-                ? 'bg-indigo-600 text-white shadow-sm'
-                : 'text-zinc-400 hover:text-zinc-200'
-            }`}
-            title="滾輪翻頁模式 (Wheel Flip)"
+            aria-pressed={viewMode === 'fullscreen'}
+            aria-label="全螢幕檢視"
+            className={`header-mode-button ${viewMode === 'fullscreen' ? 'is-active' : ''}`}
+            title="全螢幕檢視"
           >
-            <Maximize2 className="w-4 h-4" />
-            <span className="hidden sm:inline">滾輪翻頁</span>
+            <Maximize2 className="h-4 w-4" aria-hidden="true" />
+            <span className="hidden sm:inline">全螢幕</span>
           </button>
           <button
+            type="button"
             onClick={() => setViewMode('webtoon')}
-            className={`p-1.5 rounded-md text-xs font-medium flex items-center gap-1 transition-all ${
-              viewMode === 'webtoon'
-                ? 'bg-indigo-600 text-white shadow-sm'
-                : 'text-zinc-400 hover:text-zinc-200'
-            }`}
-            title="條漫垂直連貫模式 (Webtoon Strip)"
+            aria-pressed={viewMode === 'webtoon'}
+            aria-label="條漫檢視"
+            className={`header-mode-button ${viewMode === 'webtoon' ? 'is-active' : ''}`}
+            title="條漫檢視"
           >
-            <ScrollText className="w-4 h-4" />
-            <span className="hidden sm:inline">條漫連畫</span>
+            <ScrollText className="h-4 w-4" aria-hidden="true" />
+            <span className="hidden sm:inline">條漫</span>
+          </button>
+        </div>
+      </div>
+
+        <div
+          id="header-mobile-tools"
+        className="app-header__mobile-tools"
+        aria-label="更多工具"
+      >
+        <div className="app-header__mode-actions">
+          {onToggleGroupMangaPosts && (
+            <button
+              type="button"
+              onClick={onToggleGroupMangaPosts}
+              aria-pressed={groupMangaPosts}
+              aria-label={groupMangaPosts ? '關閉組圖模式' : '開啟組圖模式'}
+              className={`header-action header-action-labeled ${groupMangaPosts ? 'is-active' : ''}`}
+              title="切換組圖模式"
+            >
+              <Layers className="h-4 w-4" aria-hidden="true" />
+              <span className="hidden md:inline">{groupMangaPosts ? '組圖模式（開）' : '組圖模式'}</span>
+            </button>
+          )}
+
+          {onToggleBlur && (
+            <button
+              type="button"
+              onClick={onToggleBlur}
+              aria-pressed={blurEnabled}
+              aria-label={blurEnabled ? '關閉模糊遮罩' : '開啟模糊遮罩'}
+              className={`header-action header-action-labeled ${blurEnabled ? 'is-active' : ''}`}
+              title={blurEnabled ? '關閉模糊遮罩' : '開啟模糊遮罩'}
+            >
+              {blurEnabled ? (
+                <EyeOff className="h-4 w-4" aria-hidden="true" />
+              ) : (
+                <Eye className="h-4 w-4" aria-hidden="true" />
+              )}
+              <span className="hidden md:inline">{blurEnabled ? '模糊遮罩（開）' : '模糊遮罩'}</span>
+            </button>
+          )}
+
+          <button
+            type="button"
+            onClick={() => setIsEditMode(!isEditMode)}
+            aria-pressed={isEditMode}
+            aria-label={isEditMode ? '結束編輯模式' : '開啟編輯模式'}
+            className={`header-action header-action-labeled ${isEditMode ? 'is-danger' : ''}`}
+            title="切換編輯模式 (E)"
+          >
+            <CheckSquare className="h-4 w-4" aria-hidden="true" />
+            <span>{isEditMode ? '編輯中' : '編輯模式'}</span>
+            <kbd className="header-shortcut">E</kbd>
           </button>
         </div>
 
-        {/* Edit Mode Toggle */}
-        <button
-          onClick={() => setIsEditMode(!isEditMode)}
-          className={`px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 border transition-all ${
-            isEditMode
-              ? 'bg-rose-600 border-rose-500 text-white shadow-md shadow-rose-900/40 animate-pulse'
-              : 'bg-zinc-800 border-zinc-700 text-zinc-300 hover:bg-zinc-700'
-          }`}
-          title="切換批次編輯模式 (快捷鍵 E)"
-        >
-          <CheckSquare className="w-4 h-4" />
-          <span>{isEditMode ? '結束編輯' : '編輯模式 (E)'}</span>
-        </button>
+        <div className="app-header__utility-actions">
+          <button
+            type="button"
+            onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+            aria-label={theme === 'dark' ? '切換至亮色模式' : '切換至暗色模式'}
+            aria-pressed={theme === 'light'}
+            className="header-action header-action-icon"
+            title={theme === 'dark' ? '切換至亮色模式' : '切換至暗色模式'}
+          >
+            {theme === 'dark' ? <Sun className="h-5 w-5" aria-hidden="true" /> : <Moon className="h-5 w-5" aria-hidden="true" />}
+          </button>
 
-        {/* Theme Toggle */}
-        <button
-          onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-          className="p-2 rounded-lg bg-zinc-800 border border-zinc-700 text-zinc-300 hover:bg-zinc-700 transition-colors"
-          title="切換深色/淺色主題"
-        >
-          {theme === 'dark' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
-        </button>
-
-        {/* Settings Toggle */}
-        <button
-          onClick={onOpenSettings}
-          className="p-2 rounded-lg bg-zinc-800 border border-zinc-700 text-zinc-300 hover:bg-zinc-700 transition-colors"
-          title="系統與目錄設定"
-        >
-          <Settings className="w-4 h-4 text-indigo-400" />
-        </button>
+          <button
+            type="button"
+            onClick={onOpenSettings}
+            aria-label="開啟設定"
+            className="header-action header-action-icon"
+            title="開啟設定"
+          >
+            <Settings className="h-5 w-5" aria-hidden="true" />
+          </button>
+        </div>
+        </div>
       </div>
     </header>
   );

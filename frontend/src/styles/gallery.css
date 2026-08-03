@@ -1,0 +1,554 @@
+@tailwind components;
+
+@layer components {
+  /* Let the gallery reach the viewport edge; the fixed scroll-to-top control
+     floats above the content only while it is visible. */
+  .gallery-grid-root {
+    display: flex;
+    height: 100%;
+    min-height: 0;
+    flex-direction: column;
+  }
+
+  /* Keep the context bar outside the scrolling surface. This makes the
+     content scrollbar begin below it, so the bar can use the full pane width. */
+  .gallery-month-content {
+    min-height: 0;
+    flex: 1 1 auto;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+  }
+
+  /* Keep the fixed scroll-to-top control clear of the pagination footer when
+     the gallery reaches the end of its scroll surface. */
+  .gallery-grid-root:not(.is-empty) .gallery-month-content {
+    padding-block-end: calc(var(--ui-icon-button-size) + 1.75rem);
+  }
+
+  .gallery-grid-root.is-drag-selecting {
+    user-select: none;
+  }
+
+  .gallery-card--editable {
+    touch-action: pan-y;
+  }
+
+  .gallery-grid-root.is-drag-selecting .gallery-card--editable {
+    touch-action: none;
+  }
+
+  .gallery-card--selected {
+    border-color: var(--viewer-primary) !important;
+    box-shadow: 0 0 0 2px color-mix(in oklch, var(--viewer-primary) 72%, transparent), 0 10px 24px color-mix(in oklch, var(--viewer-primary) 20%, transparent);
+    transform: scale(0.98);
+  }
+
+  .gallery-selection-indicator {
+    display: flex;
+    width: 1.75rem;
+    height: 1.75rem;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid oklch(1 0 0 / 0.42);
+    border-radius: 0.5rem;
+    background: oklch(0 0 0 / 0.42);
+    color: transparent;
+    transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease, box-shadow 150ms ease;
+  }
+
+  .gallery-selection-indicator:hover {
+    border-color: oklch(1 0 0 / 0.8);
+  }
+
+  .gallery-selection-indicator.is-selected {
+    border-color: transparent;
+    background: var(--viewer-primary);
+    color: var(--viewer-primary-ink);
+    box-shadow: 0 0.375rem 1rem color-mix(in oklch, var(--viewer-primary) 30%, transparent);
+  }
+
+  .gallery-month-header {
+    border-color: var(--viewer-border) !important;
+    background: color-mix(in oklch, var(--viewer-surface-raised) 92%, var(--viewer-primary)) !important;
+  }
+
+  .gallery-month-header__actions {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    gap: 0.75rem;
+  }
+
+  .gallery-month-select {
+    display: inline-flex;
+    min-height: 2rem;
+    align-items: center;
+    justify-content: center;
+    gap: 0.375rem;
+    border: 1px solid var(--viewer-border);
+    border-radius: 0.625rem;
+    padding: 0.25rem 0.625rem;
+    background: var(--viewer-control);
+    color: var(--viewer-control-text);
+    cursor: pointer;
+    font-size: 0.6875rem;
+    font-weight: 700;
+    line-height: 1rem;
+    transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease, transform 150ms ease;
+  }
+
+  .gallery-month-select svg {
+    width: 0.875rem;
+    height: 0.875rem;
+    flex-shrink: 0;
+  }
+
+  .gallery-month-select:hover {
+    border-color: var(--viewer-accent-hover);
+    background: var(--viewer-control-hover);
+  }
+
+  .gallery-month-select:active {
+    transform: scale(0.96);
+  }
+
+  .gallery-month-select:focus-visible,
+  .gallery-card:focus-visible,
+  .gallery-card--editable:focus-visible,
+  .batch-edit-toolbar__button:focus-visible,
+  .batch-edit-toolbar__close:focus-visible {
+    outline: 2px solid var(--viewer-accent-hover);
+    outline-offset: 2px;
+  }
+
+  .gallery-month-select.is-selected {
+    border-color: var(--viewer-primary);
+    background: var(--viewer-primary);
+    color: var(--viewer-primary-ink);
+  }
+
+  .batch-edit-toolbar {
+    position: fixed;
+    inset-inline-start: 50%;
+    bottom: calc(1rem + env(safe-area-inset-bottom));
+    z-index: 40;
+    display: flex;
+    width: min(46rem, calc(100vw - 1rem));
+    min-width: 0;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    transform: translateX(-50%);
+    border: 1px solid var(--viewer-border);
+    border-radius: 1rem;
+    padding: 0.75rem 1rem;
+    background: color-mix(in oklch, var(--viewer-surface-raised) 94%, var(--viewer-primary));
+    color: var(--viewer-text);
+    box-shadow: var(--viewer-shadow);
+    backdrop-filter: blur(18px) saturate(1.08);
+  }
+
+  .batch-edit-toolbar__summary {
+    display: inline-flex;
+    min-height: 2.5rem;
+    align-items: center;
+    gap: 0.375rem;
+    min-width: 7rem;
+    border-radius: 0.75rem;
+    padding: 0.375rem 0.75rem;
+    background: var(--viewer-control);
+    color: var(--viewer-text-muted);
+    font-size: 0.75rem;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  .batch-edit-toolbar__summary strong {
+    color: var(--viewer-primary);
+    font-size: 0.875rem;
+  }
+
+  .batch-edit-toolbar__summary-label {
+    color: var(--viewer-text-muted);
+  }
+
+  .batch-edit-toolbar__actions {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.5rem;
+    flex: 1 1 auto;
+    flex-wrap: wrap;
+  }
+
+  .batch-edit-toolbar__button,
+  .batch-edit-toolbar__close {
+    box-sizing: border-box;
+    display: inline-flex;
+    min-height: var(--ui-icon-button-size);
+    align-items: center;
+    justify-content: center;
+    gap: 0.375rem;
+    border: 1px solid var(--viewer-border);
+    border-radius: var(--ui-icon-button-radius);
+    padding: 0.5rem 0.75rem;
+    color: var(--viewer-control-text);
+    cursor: pointer;
+    font-size: 0.75rem;
+    font-weight: 700;
+    line-height: 1rem;
+    transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease, opacity 150ms ease, transform 150ms ease;
+  }
+
+  .batch-edit-toolbar__button svg,
+  .batch-edit-toolbar__close svg {
+    width: 1rem;
+    height: 1rem;
+    flex-shrink: 0;
+  }
+
+  .batch-edit-toolbar__close svg {
+    width: var(--ui-icon-button-icon-size);
+    height: var(--ui-icon-button-icon-size);
+  }
+
+  .batch-edit-toolbar__button:hover:not(:disabled),
+  .batch-edit-toolbar__close:hover {
+    border-color: var(--viewer-accent-hover);
+    background: var(--viewer-control-hover);
+  }
+
+  .batch-edit-toolbar__button:active:not(:disabled),
+  .batch-edit-toolbar__close:active {
+    transform: scale(0.96);
+  }
+
+  .batch-edit-toolbar__button:disabled {
+    cursor: not-allowed;
+    opacity: 0.48;
+  }
+
+  .batch-edit-toolbar__button--primary {
+    border-color: transparent;
+    background: var(--viewer-primary);
+    color: var(--viewer-primary-ink);
+    box-shadow: 0 0.5rem 1.25rem color-mix(in oklch, var(--viewer-primary) 20%, transparent);
+  }
+
+  .batch-edit-toolbar__button--primary:hover:not(:disabled) {
+    border-color: transparent;
+    background: var(--viewer-primary-hover);
+  }
+
+  .batch-edit-toolbar__button--secondary.is-active {
+    border-color: var(--viewer-border);
+    background: var(--viewer-control);
+    color: var(--viewer-control-text);
+    box-shadow: none;
+  }
+
+  .batch-edit-toolbar__button--secondary.is-active:hover:not(:disabled) {
+    border-color: var(--viewer-accent-hover);
+    background: var(--viewer-control-hover);
+    color: var(--viewer-text);
+  }
+
+  .batch-edit-toolbar__button--danger {
+    border-color: transparent;
+    background: var(--viewer-danger);
+    color: white;
+  }
+
+  .batch-edit-toolbar__button--danger:hover:not(:disabled) {
+    border-color: transparent;
+    background: var(--viewer-danger-hover);
+  }
+
+  .batch-edit-toolbar__close {
+    width: var(--ui-icon-button-size);
+    min-width: var(--ui-icon-button-size);
+    height: var(--ui-icon-button-size);
+    flex-shrink: 0;
+    padding: 0;
+    background: transparent;
+    color: var(--viewer-text-muted);
+  }
+
+  .batch-edit-toolbar__close:hover {
+    color: var(--viewer-text);
+  }
+
+  .batch-edit-toolbar__spinner {
+    animation: batch-edit-toolbar-spin 800ms linear infinite;
+  }
+
+  .batch-edit-toolbar__error {
+    flex-basis: 100%;
+    margin: 0;
+    color: var(--viewer-danger-hover);
+    font-size: 0.75rem;
+    line-height: 1.35;
+  }
+
+  @keyframes batch-edit-toolbar-spin {
+    to { transform: rotate(360deg); }
+  }
+
+  @media (max-width: 40rem) {
+    .batch-edit-toolbar {
+      align-items: stretch;
+    }
+
+    .batch-edit-toolbar__summary,
+    .batch-edit-toolbar__actions {
+      flex-basis: 100%;
+    }
+
+    .batch-edit-toolbar__actions {
+      justify-content: stretch;
+    }
+
+    .batch-edit-toolbar__button {
+      flex: 1 1 auto;
+    }
+  }
+
+  @media (max-width: 30rem) {
+    .gallery-month-select {
+      width: 2rem;
+      padding-inline: 0;
+    }
+
+    .gallery-month-select span {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip: rect(0 0 0 0);
+      white-space: nowrap;
+    }
+
+    .batch-edit-toolbar {
+      padding-inline: 0.75rem;
+    }
+
+    .batch-edit-toolbar__button {
+      padding-inline: 0.5rem;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .gallery-card--selected,
+    .gallery-month-select,
+    .batch-edit-toolbar__button,
+    .batch-edit-toolbar__close,
+    .gallery-selection-indicator {
+      transition-duration: 0.01ms;
+    }
+
+    .batch-edit-toolbar__spinner {
+      animation: none;
+    }
+  }
+
+  .gallery-grid__items-per-page-select .custom-select__menu {
+    min-width: 12rem;
+  }
+
+  /* Avoid painting hundreds of off-screen cards while keeping their grid
+     slots stable during a page jump. */
+  .gallery-card {
+    content-visibility: auto;
+    contain-intrinsic-size: 320px 320px;
+    isolation: isolate;
+  }
+
+  /* Keep card chrome above a blurred thumbnail. The media itself owns the
+     lowest stacking layer so blur mode cannot blur or cover badges/text. */
+  .gallery-card > .gallery-thumbnail {
+    z-index: 0;
+  }
+
+  .gallery-card__video-badge,
+  .gallery-card__group-count,
+  .gallery-card__overlay {
+    z-index: 2;
+  }
+
+  .gallery-card__video-badge,
+  .gallery-card__group-count {
+    pointer-events: none;
+  }
+
+  .viewer-group-badge {
+    border: 1px solid var(--viewer-border);
+    background: color-mix(in oklch, var(--viewer-surface-raised) 90%, var(--viewer-control));
+    color: var(--viewer-text);
+    box-shadow: 0 0.25rem 0.75rem oklch(0 0 0 / 0.18);
+    backdrop-filter: blur(12px) saturate(1.08);
+  }
+
+  .viewer-group-badge svg {
+    color: var(--viewer-primary);
+  }
+
+  .gallery-card__video-badge {
+    transition: background-color 150ms ease, color 150ms ease, transform 150ms ease;
+  }
+
+  .gallery-card:hover .gallery-card__video-badge,
+  .gallery-card:focus-within .gallery-card__video-badge {
+    background: oklch(0.12 0.01 260 / 0.9);
+    transform: translateY(-1px);
+  }
+
+  /* Keep the grid stable while the first viewport's thumbnails arrive. */
+  .gallery-thumbnail {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    background: var(--viewer-surface-muted);
+  }
+
+  .gallery-thumbnail__skeleton {
+    position: absolute;
+    inset: 0;
+    background-color: var(--viewer-surface-muted);
+    background-image: linear-gradient(
+      105deg,
+      transparent 24%,
+      color-mix(in oklch, var(--viewer-text) 8%, transparent) 50%,
+      transparent 76%
+    );
+    background-size: 220% 100%;
+    animation: gallery-thumbnail-shimmer 1.35s linear infinite;
+    transition: opacity 180ms ease;
+  }
+
+  .gallery-thumbnail.is-ready .gallery-thumbnail__skeleton {
+    opacity: 0;
+  }
+
+  .gallery-thumbnail__image {
+    position: relative;
+    z-index: 1;
+    opacity: 0;
+    transition: opacity 180ms ease, transform 300ms ease, filter 180ms ease;
+  }
+
+  .gallery-thumbnail__image.is-loaded {
+    opacity: 1;
+  }
+
+  .gallery-thumbnail__error {
+    position: absolute;
+    inset: auto 0 0;
+    z-index: 2;
+    padding: 0.5rem 0.65rem;
+    background: oklch(0.08 0.01 260 / 0.82);
+    color: var(--viewer-text-muted);
+    font-size: 0.7rem;
+    text-align: center;
+  }
+
+  @keyframes gallery-thumbnail-shimmer {
+    from { background-position: 200% 0; }
+    to { background-position: -20% 0; }
+  }
+
+  /* Keep sensitive artwork unreadable while preserving its shape and layout. */
+  .blur-media {
+    filter: blur(18px);
+    transform: none;
+    transition: filter 180ms cubic-bezier(0.2, 0, 0, 1);
+  }
+
+  .blur-media--thumbnail {
+    filter: blur(14px);
+  }
+
+  .blur-media--filmstrip {
+    filter: blur(10px);
+  }
+
+  .blur-media--feed {
+    filter: blur(22px);
+  }
+
+  .blur-media--viewer {
+    filter: blur(24px);
+  }
+
+  .gallery-card__overlay {
+    pointer-events: none;
+    transition: opacity 180ms cubic-bezier(0.2, 0, 0, 1);
+  }
+
+  .gallery-card:hover .gallery-card__overlay,
+  .gallery-card:focus-within .gallery-card__overlay {
+    opacity: 1;
+  }
+
+  .gallery-card__overlay > p:first-child {
+    color: oklch(1 0 0);
+  }
+
+  .gallery-card__overlay > p:last-child {
+    color: oklch(0.88 0.01 260);
+  }
+
+  .manga-group-card {
+    isolation: isolate;
+  }
+
+  .manga-group-card > img {
+    position: relative;
+    z-index: 0;
+  }
+
+  .manga-group-card__page-badge,
+  .manga-group-card__video-badge,
+  .manga-group-card__hover-overlay {
+    z-index: 2;
+  }
+
+  .manga-group-card__page-badge,
+  .manga-group-card__video-badge {
+    pointer-events: none;
+  }
+
+  .manga-group-card__video-badge {
+    transition: background-color 150ms ease, color 150ms ease, transform 150ms ease;
+  }
+
+  .manga-group-card:hover .manga-group-card__video-badge,
+  .manga-group-card:focus-within .manga-group-card__video-badge {
+    background: oklch(0.12 0.01 260 / 0.92);
+    transform: translateY(-1px);
+  }
+
+  .manga-group-card__hover-overlay {
+    pointer-events: none;
+  }
+
+  .manga-group-card:focus-visible {
+    outline: 2px solid var(--viewer-accent-hover);
+    outline-offset: 2px;
+  }
+
+  .light .gallery-card__video-badge {
+    color: oklch(1 0 0) !important;
+  }
+
+  .light .gallery-card:hover .gallery-card__video-badge,
+  .light .gallery-card:focus-within .gallery-card__video-badge {
+    background: oklch(0.14 0.01 260 / 0.92);
+  }
+
+  .light .manga-group-card__video-badge {
+    color: oklch(1 0 0) !important;
+  }
+
+}

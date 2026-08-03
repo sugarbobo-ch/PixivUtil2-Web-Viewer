@@ -1,11 +1,13 @@
 import React from 'react';
 import { ImageItem } from '../types';
+import { MediaIssuePlaceholder } from './MediaIssuePlaceholder';
 
 interface WebtoonFeedProps {
   images: ImageItem[];
+  blurEnabled?: boolean;
 }
 
-export const WebtoonFeed: React.FC<WebtoonFeedProps> = ({ images }) => {
+export const WebtoonFeed: React.FC<WebtoonFeedProps> = ({ images, blurEnabled = false }) => {
   if (images.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center p-12 text-zinc-500">
@@ -28,19 +30,23 @@ export const WebtoonFeed: React.FC<WebtoonFeedProps> = ({ images }) => {
             </div>
 
             <div className="w-full flex items-center justify-center bg-black/40 p-2">
-              {isVideo ? (
+              {item.media_status ? (
+                <div className="h-[min(70vh,720px)] w-full max-w-2xl overflow-hidden rounded-lg">
+                  <MediaIssuePlaceholder message={item.media_error} />
+                </div>
+              ) : isVideo ? (
                 <video
                   src={mediaUrl}
                   controls
                   loop
-                  className="max-h-[85vh] w-auto object-contain rounded-lg"
+                  className={`max-h-[85vh] w-auto object-contain rounded-lg ${blurEnabled ? 'blur-media blur-media--feed' : ''}`}
                 />
               ) : (
                 <img
                   src={mediaUrl}
                   alt={item.title}
                   loading="lazy"
-                  className="max-h-[90vh] w-auto object-contain rounded-lg"
+                  className={`max-h-[90vh] w-auto object-contain rounded-lg ${blurEnabled ? 'blur-media blur-media--feed' : ''}`}
                 />
               )}
             </div>

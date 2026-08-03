@@ -1,8 +1,11 @@
 {
   "webTheme": "dark",
   "defaultViewMode": "grid",
-  "thumbnailWidth": 60,
-  "thumbnailHeight": 320,
-  "itemsPerPage": 200,
-  "autoOpenBrowser": true
+  "thumbnailSize": 480,
+  "itemsPerPage": 500,
+  "autoOpenBrowser": true,
+  "pixivConfigPath": "",
+  "groupMangaPosts": false,
+  "blurEnabled": true,
+  "preloadImageCount": 10
 }

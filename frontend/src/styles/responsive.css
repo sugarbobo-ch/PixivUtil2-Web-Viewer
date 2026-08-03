@@ -1,0 +1,238 @@
+@media (min-width: 640px) {
+  .header-shortcut {
+    display: inline-flex;
+  }
+}
+
+@media (max-width: 1024px) {
+  .app-header__search {
+    margin-inline-start: 0.5rem;
+    margin-inline-end: 0;
+  }
+
+  .header-action-labeled {
+    padding-right: 0.625rem;
+    padding-left: 0.625rem;
+  }
+}
+
+/* Keep the brand readable while the desktop controls compact before the
+   mobile layout takes over. */
+@media (min-width: 641px) and (max-width: 1024px) {
+  .app-header {
+    gap: 0.5rem;
+    padding-inline: 0.75rem;
+  }
+
+  .app-header__identity,
+  .header-logo {
+    flex-shrink: 0;
+  }
+
+  .app-header__identity .header-count {
+    display: none;
+  }
+
+  .header-logo {
+    max-width: none;
+  }
+
+  .app-header__search {
+    flex: 1 1 clamp(6rem, 15vw, 14rem);
+    margin-inline-start: 0.25rem;
+  }
+
+  .app-header__desktop-actions,
+  .app-header__controls,
+  .app-header__mode-actions,
+  .app-header__utility-actions {
+    gap: 0.25rem;
+  }
+
+  .header-mode-group {
+    gap: 0.125rem;
+    padding: 0.1875rem;
+  }
+
+  .header-mode-button {
+    width: 2rem;
+    min-width: 2rem;
+    padding-inline: 0;
+  }
+
+  .header-action-labeled {
+    width: 2.5rem;
+    min-width: 2.5rem;
+    gap: 0;
+    padding-inline: 0;
+  }
+
+  .header-mode-button > span,
+  .header-action-labeled > span:not(.header-shortcut),
+  .header-shortcut {
+    display: none !important;
+  }
+}
+
+@media (max-width: 640px) {
+  .app-header {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-areas: "leading . search-toggle";
+    column-gap: 0.5rem;
+    padding-right: 0.625rem;
+    padding-left: 0.625rem;
+  }
+
+  .app-header.is-mobile-search-open {
+    grid-template-areas:
+      "leading . search-toggle"
+      "search search search";
+    row-gap: 0.5rem;
+  }
+
+  .app-header__leading {
+    grid-area: leading;
+    min-height: 2.75rem;
+  }
+
+  .app-header__mobile-search-toggle {
+    grid-area: search-toggle;
+    display: inline-flex;
+  }
+
+  .app-header__desktop-sidebar-trigger {
+    display: none;
+  }
+
+  .app-header__mobile-menu-trigger {
+    display: inline-flex;
+  }
+
+  .app-header__search {
+    grid-area: search;
+    display: none;
+    width: 100%;
+    max-width: none;
+    min-width: 0;
+    margin: 0;
+  }
+
+  .app-header.is-mobile-search-open .app-header__search {
+    display: flex;
+  }
+
+  .app-header__controls,
+  .app-header__mobile-tools,
+  .app-header__desktop-actions {
+    display: none;
+  }
+
+  .app-header__identity {
+    position: absolute;
+    inset-inline-start: 50%;
+    display: flex;
+    max-width: calc(100% - 8rem);
+    transform: translateX(-50%);
+  }
+
+  .app-header__identity .header-count {
+    display: none;
+  }
+
+  .header-logo {
+    max-width: 100%;
+    font-size: 1rem;
+  }
+
+  .header-search-input {
+    height: 2.75rem;
+    border-radius: 0.875rem;
+    padding-inline-start: 2.75rem;
+    padding-inline-end: 2.75rem;
+    font-size: 1rem;
+  }
+
+  .app-header.is-mobile-search-open .header-clear-button {
+    position: absolute;
+    display: inline-flex;
+    inset-inline-end: 0.375rem;
+    width: var(--ui-inline-icon-button-size);
+    height: var(--ui-inline-icon-button-size);
+  }
+
+  .header-action,
+  .header-mode-button {
+    min-height: 2.75rem;
+  }
+
+  .header-action-icon {
+    width: var(--ui-icon-button-size);
+    min-width: var(--ui-icon-button-size);
+    height: var(--ui-icon-button-size);
+    min-height: var(--ui-icon-button-size);
+  }
+
+  .fullscreen-viewer__topbar {
+    align-items: flex-start;
+    gap: 0.5rem;
+    padding-right: 1rem;
+    padding-left: 1rem;
+  }
+
+  .fullscreen-viewer__topbar-group {
+    align-items: flex-start;
+    gap: 0.5rem;
+  }
+
+  .fullscreen-viewer__title {
+    flex-basis: 100%;
+    max-width: 100%;
+    font-size: 0.9375rem;
+    line-height: 1.3;
+  }
+
+  .fullscreen-viewer__stage {
+    padding-right: 0.5rem;
+    padding-left: 0.5rem;
+  }
+
+  .viewer-nav-button--previous {
+    left: 0.5rem;
+  }
+
+  .viewer-nav-button--next {
+    right: 0.5rem;
+  }
+
+  .fullscreen-viewer__details {
+    top: 0.75rem;
+    right: 0.75rem;
+    bottom: 0.75rem;
+    left: 0.75rem;
+    width: auto;
+    padding: 1rem;
+  }
+
+  .fullscreen-viewer__details h4 {
+    font-size: 1.125rem;
+    line-height: 1.25;
+  }
+
+  .fullscreen-viewer__details-body {
+    gap: 0.625rem;
+    font-size: 0.8125rem;
+    line-height: 1.5;
+  }
+
+  .viewer-details-actions {
+    gap: 0.5rem;
+    padding-top: 1rem;
+  }
+
+  .viewer-secondary-action,
+  .viewer-primary-action {
+    min-height: 2.75rem;
+    font-size: 0.8125rem;
+  }
+}
