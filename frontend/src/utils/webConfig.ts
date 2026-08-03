@@ -37,6 +37,17 @@ export const normalizeWebConfig = (value: WebConfigInput | null | undefined): We
       DEFAULT_WEB_CONFIG.blurEnabled,
     ),
     preloadImageCount: clampInteger(source.preloadImageCount, DEFAULT_WEB_CONFIG.preloadImageCount, 0, 10),
+    analyzeColorsAfterLibraryUpdate: toBoolean(
+      source.analyzeColorsAfterLibraryUpdate,
+      DEFAULT_WEB_CONFIG.analyzeColorsAfterLibraryUpdate,
+    ),
+    manageThumbnailCache: toBoolean(source.manageThumbnailCache, DEFAULT_WEB_CONFIG.manageThumbnailCache),
+    thumbnailCacheLimitMiB: clampInteger(
+      source.thumbnailCacheLimitMiB,
+      DEFAULT_WEB_CONFIG.thumbnailCacheLimitMiB,
+      128,
+      102400,
+    ),
   };
 
   if (source.pixivConfigPath !== undefined) {

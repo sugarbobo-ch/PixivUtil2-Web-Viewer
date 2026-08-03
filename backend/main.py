@@ -2,16 +2,18 @@
 import io
 import json
 import hashlib
+import hmac
 import os
 import re
 import configparser
+import secrets
 import shutil
 import tempfile
 import zipfile
 import threading
 import time
 from typing import List, Dict, Any, Optional, Literal
-from fastapi import FastAPI, HTTPException, Query, Response, status
+from fastapi import FastAPI, HTTPException, Query, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.background import BackgroundTask
 from fastapi.responses import FileResponse, StreamingResponse
@@ -21,13 +23,31 @@ from PIL import Image
 import db
 import config_paths
 import source_resolver
+import library_jobs
+import path_picker
 
 app = FastAPI(title="PixivUtil2 Web Viewer Backend API", version="1.0.0")
 
+_default_allowed_origins = {
+    "http://localhost:4173",
+    "http://127.0.0.1:4173",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+}
+_configured_allowed_origins = os.getenv("WEB_VIEWER_ALLOWED_ORIGINS", "")
+ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in (_configured_allowed_origins.split(",") if _configured_allowed_origins else _default_allowed_origins)
+    if origin.strip()
+]
+VIEWER_SESSION_TOKEN = secrets.token_urlsafe(32)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -43,6 +63,7 @@ THUMB_GENERATION_LOCK = threading.Lock()
 THUMB_GENERATION_INFLIGHT: dict[str, threading.Event] = {}
 
 WEB_CONFIG_PATH = config_paths.WEB_CONFIG_PATH
+LIBRARY_JOB_MANAGER = library_jobs.LibraryJobManager()
 
 
 def generate_thumbnail_once(thumb_path: str, generator) -> bool:
@@ -110,6 +131,9 @@ DEFAULT_WEB_CONFIG = {
     "groupMangaPosts": False,
     "blurEnabled": False,
     "preloadImageCount": 3,
+    "analyzeColorsAfterLibraryUpdate": True,
+    "manageThumbnailCache": True,
+    "thumbnailCacheLimitMiB": 1024,
 }
 
 
@@ -131,6 +155,20 @@ def normalize_web_config_file(data: Any) -> Dict[str, Any]:
             "thumbnailWidth",
             current.get("thumbnailHeight", DEFAULT_WEB_CONFIG["thumbnailSize"]),
         )
+
+    for key in ("analyzeColorsAfterLibraryUpdate", "manageThumbnailCache"):
+        value = normalized.get(key)
+        if isinstance(value, str):
+            normalized[key] = value.strip().lower() not in {"", "0", "false", "no", "off"}
+        else:
+            normalized[key] = bool(value)
+    try:
+        normalized["thumbnailCacheLimitMiB"] = max(
+            128,
+            min(102400, int(normalized.get("thumbnailCacheLimitMiB", 1024))),
+        )
+    except (TypeError, ValueError):
+        normalized["thumbnailCacheLimitMiB"] = DEFAULT_WEB_CONFIG["thumbnailCacheLimitMiB"]
 
     return normalized
 
@@ -207,6 +245,12 @@ class RescanRequest(BaseModel):
     directory: Optional[str] = None
 
 
+class LibraryJobRequest(BaseModel):
+    type: Literal["update-library", "analyze-missing-colors", "organize-thumbnail-cache"] = "update-library"
+    directory: Optional[str] = None
+    analyze_colors: bool = False
+
+
 class PixivConfigItemUpdate(BaseModel):
     section: str
     option: str
@@ -221,6 +265,53 @@ class OpenMediaRequest(BaseModel):
     path: str
     image_id: Optional[int] = None
     target: Literal["file", "folder"]
+
+
+class SystemPickerRequest(BaseModel):
+    mode: Literal["folder", "existing-file", "save-file"]
+    purpose: Literal[
+        "root-directory",
+        "pixiv-config",
+        "download-list-directory",
+        "database-file",
+        "irfanview-directory",
+        "ffmpeg-executable",
+        "fanbox-list-file",
+    ]
+
+
+def _validate_picker_origin(request: Request) -> None:
+    origin = request.headers.get("origin")
+    if origin and origin not in ALLOWED_ORIGINS:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="不允許的 Web Viewer 來源。")
+
+
+def _require_picker_session(request: Request) -> None:
+    _validate_picker_origin(request)
+    token = request.headers.get("x-web-viewer-session", "")
+    if not hmac.compare_digest(token, VIEWER_SESSION_TOKEN):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="無效的 Web Viewer 工作階段。")
+
+
+@app.get("/api/system/session")
+def get_system_session(request: Request):
+    _validate_picker_origin(request)
+    return {"token": VIEWER_SESSION_TOKEN}
+
+
+@app.post("/api/system/picker")
+def open_system_picker(req: SystemPickerRequest, request: Request):
+    _require_picker_session(request)
+    try:
+        return path_picker.open_native_picker(req.mode, req.purpose)
+    except path_picker.PickerBusyError as error:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+    except path_picker.PickerTimeoutError as error:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
+    except path_picker.PickerUnavailableError as error:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
+    except path_picker.PathPickerError as error:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)) from error
 
 
 # --- Web Viewer Dedicated Config API (web_config.json) ---
@@ -258,12 +349,15 @@ def update_web_config(data: Dict[str, Any]):
         incoming.pop("mosaicEnabled", None)
         if "pixivConfigPath" in data:
             configured_path = data.get("pixivConfigPath")
-            if configured_path and not os.path.isfile(config_paths.resolve_config_path(configured_path)):
-                resolved_path = config_paths.resolve_config_path(configured_path)
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"找不到 PixivUtil2 設定檔：{resolved_path}"
-                )
+            if configured_path:
+                try:
+                    incoming["pixivConfigPath"] = path_picker.validate_selected_path(
+                        str(configured_path),
+                        "pixiv-config",
+                        "existing-file",
+                    )
+                except path_picker.PathPickerError as error:
+                    raise HTTPException(status_code=422, detail=str(error)) from error
 
         current.update(incoming)
         if "thumbnailSize" in incoming:
@@ -384,15 +478,129 @@ def restore_settings():
 
 @app.post("/api/rescan")
 def rescan_directory(req: RescanRequest):
+    active_job = LIBRARY_JOB_MANAGER.current()
+    if active_job and active_job.get("status") in db.LIBRARY_JOB_ACTIVE_STATUSES:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"message": "A media library job is already running.", "job": active_job},
+        )
     target_dir = req.directory or get_root_directory()
     result = db.scan_and_index_directory(target_dir)
     return result
 
 
-@app.post("/api/db/clean-orphans")
-def clean_db_orphans():
-    result = db.clean_orphaned_records()
-    return {"status": "success", "archived_members": result.get("archived_members", 0)}
+@app.post("/api/library/jobs", status_code=status.HTTP_202_ACCEPTED)
+def start_library_job(req: LibraryJobRequest):
+    target_dir = os.path.abspath(req.directory or get_root_directory())
+    if req.type != "organize-thumbnail-cache" and not os.path.isdir(target_dir):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Directory does not exist: {target_dir}",
+        )
+
+    try:
+        job = LIBRARY_JOB_MANAGER.start(
+            req.type,
+            target_dir,
+            analyze_colors=req.analyze_colors,
+        )
+    except library_jobs.LibraryJobAlreadyRunning as error:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"message": "A media library job is already running.", "job": error.job},
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error))
+    return {"job": job}
+
+
+@app.get("/api/library/jobs/current")
+def read_current_library_job():
+    return {"job": LIBRARY_JOB_MANAGER.current()}
+
+
+@app.get("/api/library/jobs/{job_id}")
+def read_library_job(job_id: str):
+    job = LIBRARY_JOB_MANAGER.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Library job not found")
+    return {"job": job}
+
+
+@app.post("/api/library/jobs/{job_id}/cancel")
+def cancel_library_job(job_id: str):
+    job = LIBRARY_JOB_MANAGER.cancel(job_id)
+    if job is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Library job not found")
+    return {"job": job}
+
+
+@app.get("/api/library/stats")
+def read_library_stats():
+    return library_jobs.get_thumbnail_cache_stats()
+
+
+@app.get("/api/library/cache/{job_id}/entries")
+def read_library_cache_entries(
+    job_id: str,
+    offset: int = Query(0, ge=0),
+    limit: int = Query(24, ge=1, le=100),
+):
+    try:
+        return library_jobs.get_thumbnail_cache_recovery_entries(job_id, offset=offset, limit=limit)
+    except FileNotFoundError as error:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)) from error
+
+
+@app.get("/api/library/cache/{job_id}/preview/{recovery_name}")
+def read_library_cache_preview(job_id: str, recovery_name: str):
+    try:
+        preview_path = library_jobs.get_thumbnail_cache_recovery_path(job_id, recovery_name)
+    except FileNotFoundError as error:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)) from error
+    return FileResponse(
+        preview_path,
+        media_type="image/webp",
+        headers={"Cache-Control": "private, max-age=300"},
+    )
+
+
+@app.delete("/api/library/cache/{job_id}")
+def permanently_delete_library_cache(job_id: str):
+    active_job = LIBRARY_JOB_MANAGER.current()
+    if active_job and active_job.get("status") in db.LIBRARY_JOB_ACTIVE_STATUSES:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="請先等待目前的縮圖整理或還原工作完成。",
+        )
+    try:
+        result = library_jobs.permanently_delete_thumbnail_cache(job_id)
+    except FileNotFoundError as error:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)) from error
+    return {"status": "success", **result}
+
+
+@app.post("/api/library/cache/{job_id}/restore")
+def restore_library_cache(job_id: str):
+    active_job = LIBRARY_JOB_MANAGER.current()
+    if active_job and active_job.get("status") in db.LIBRARY_JOB_ACTIVE_STATUSES:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="請先等待目前的媒體資料庫工作完成。",
+        )
+    try:
+        result = library_jobs.restore_thumbnail_cache(job_id)
+    except FileNotFoundError as error:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)) from error
+    return {"status": "success", **result}
 
 
 @app.get("/api/artists")
@@ -450,6 +658,7 @@ def read_images(
 
 @app.get("/api/file")
 def get_media_file(path: str, image_id: Optional[int] = None):
+    library_jobs.note_interactive_media_activity()
     resolved = resolve_image_path(image_id, path)
     if not resolved or not os.path.isfile(resolved):
         raise HTTPException(status_code=404, detail="File not found")
@@ -582,6 +791,7 @@ def get_thumbnail(
     width: int = Query(320, ge=16, le=4096),
     height: int = Query(320, ge=16, le=4096),
 ):
+    library_jobs.note_interactive_media_activity()
     if size is not None:
         width = size
         height = size
@@ -599,14 +809,23 @@ def get_thumbnail(
     # entry. Python's built-in hash() is intentionally randomized per process.
     try:
         source_stat = os.stat(resolved)
-        source_key = f"{os.path.normcase(resolved)}:{source_stat.st_mtime_ns}:{source_stat.st_size}:{width}x{height}"
+        thumb_name = library_jobs.thumbnail_cache_name(resolved, width, height, source_stat)
     except OSError:
+        source_stat = None
         source_key = f"{os.path.normcase(resolved)}:{width}x{height}"
-    thumb_key = hashlib.sha1(source_key.encode("utf-8")).hexdigest()
-    thumb_name = f"{thumb_key}_{width}x{height}.webp"
+        thumb_key = hashlib.sha1(source_key.encode("utf-8")).hexdigest()
+        thumb_name = f"{thumb_key}_{width}x{height}.webp"
     thumb_path = os.path.join(THUMB_CACHE_DIR, thumb_name)
 
     if os.path.exists(thumb_path):
+        if source_stat is not None:
+            library_jobs.record_thumbnail_cache_access(
+                thumb_name,
+                resolved,
+                source_stat,
+                width,
+                height,
+            )
         return FileResponse(thumb_path, media_type="image/webp", headers=THUMB_CACHE_HEADERS)
 
     if ext in [".mp4", ".mkv", ".webm", ".avi", ".mov"]:
@@ -614,6 +833,14 @@ def get_thumbnail(
             thumb_path,
             lambda temporary_path: extract_video_frame(resolved, temporary_path, width, height),
         ):
+            if source_stat is not None:
+                library_jobs.record_thumbnail_cache_access(
+                    thumb_name,
+                    resolved,
+                    source_stat,
+                    width,
+                    height,
+                )
             return FileResponse(thumb_path, media_type="image/webp", headers=THUMB_CACHE_HEADERS)
         return Response(content=generate_fallback_svg(filename), media_type="image/svg+xml")
 
@@ -636,6 +863,14 @@ def get_thumbnail(
     try:
         if not generate_thumbnail_once(thumb_path, generate_raster_thumbnail):
             return FileResponse(resolved)
+        if source_stat is not None:
+            library_jobs.record_thumbnail_cache_access(
+                thumb_name,
+                resolved,
+                source_stat,
+                width,
+                height,
+            )
         return FileResponse(thumb_path, media_type="image/webp", headers=THUMB_CACHE_HEADERS)
     except Exception:
         return FileResponse(resolved)

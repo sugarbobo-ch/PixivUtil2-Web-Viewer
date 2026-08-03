@@ -330,11 +330,14 @@ def _find_artist_identity(artist_id: int) -> Optional[int]:
     except OSError:
         folder_names = []
 
-    # The web viewer uses a process-local hash for folders that are not yet
-    # represented by pixiv_master_member.  Resolve that hash back to the same
-    # folder, then trust only an explicit numeric suffix in its name.
-    hash_matches = [name for name in folder_names if abs(hash(name)) % 100000000 == artist_id]
-    for name in hash_matches:
+    # Resolve the same deterministic folder identity used by the gallery, then
+    # trust only an explicit numeric suffix in the folder name.
+    stable_matches = [
+        name
+        for name in folder_names
+        if db.get_folder_member_id(os.path.join(root_dir, name)) == artist_id
+    ]
+    for name in stable_matches:
         explicit_id = _get_explicit_member_id(os.path.join(root_dir, name, "placeholder"))
         if explicit_id:
             return explicit_id

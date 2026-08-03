@@ -4,7 +4,8 @@ import re
 import sqlite3
 import time
 import uuid
-from typing import List, Dict, Any, Optional, Tuple
+import hashlib
+from typing import Callable, List, Dict, Any, Optional, Tuple
 
 import config_paths
 
@@ -17,6 +18,10 @@ MEDIA_SIGNATURES = {
     ".gif": (b"GIF87a", b"GIF89a"),
     ".webp": (b"RIFF",),
 }
+SYNTHETIC_MEMBER_ID_BASE = 900_000_000
+SYNTHETIC_MEMBER_ID_RANGE = 100_000_000
+SYNTHETIC_IMAGE_ID_BASE = 1_000_000_000
+SYNTHETIC_IMAGE_ID_RANGE = 8_000_000_000
 # Internal working directories created by external archive/import tools are not
 # part of the user's image collection. In particular, discord-fanbox-archiver
 # stores temporary downloads and extraction staging under ``_state\partial``.
@@ -120,10 +125,141 @@ def get_media_status(file_path: Optional[str]) -> Tuple[Optional[str], Optional[
 
 
 def get_db_connection() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute("PRAGMA busy_timeout=30000;")
     return conn
+
+
+VIEWER_SCHEMA_VERSION = 3
+DOMINANT_COLOR_ALGORITHM_VERSION = "rgb-bucket-v1"
+LIBRARY_JOB_ACTIVE_STATUSES = ("queued", "running", "cancelling")
+LIBRARY_JOB_TERMINAL_STATUSES = ("completed", "cancelled", "failed", "interrupted")
+
+
+def _utc_timestamp() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def _ensure_viewer_schema(cursor: sqlite3.Cursor) -> None:
+    """Create and migrate tables owned by the Web Viewer.
+
+    PixivUtil2's existing tables are intentionally left unchanged. Viewer
+    metadata has its own tables so future migrations can evolve independently
+    from the upstream database schema.
+    """
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS viewer_schema_version (
+            schema_name TEXT PRIMARY KEY,
+            version INTEGER NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS viewer_media_metadata (
+            normalized_path TEXT PRIMARY KEY,
+            image_id INTEGER,
+            file_size INTEGER NOT NULL,
+            mtime_ns INTEGER NOT NULL,
+            fingerprint TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    """)
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_viewer_media_metadata_image_id
+        ON viewer_media_metadata (image_id)
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS viewer_dominant_color (
+            normalized_path TEXT PRIMARY KEY,
+            fingerprint TEXT NOT NULL,
+            algorithm_version TEXT NOT NULL,
+            dominant_color TEXT,
+            updated_at TEXT NOT NULL
+        )
+    """)
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_viewer_dominant_color_lookup
+        ON viewer_dominant_color (fingerprint, algorithm_version)
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS viewer_thumbnail_cache (
+            cache_name TEXT PRIMARY KEY,
+            normalized_path TEXT NOT NULL,
+            source_file_size INTEGER NOT NULL,
+            source_mtime_ns INTEGER NOT NULL,
+            fingerprint TEXT NOT NULL,
+            width INTEGER NOT NULL,
+            height INTEGER NOT NULL,
+            generated_at TEXT NOT NULL,
+            last_accessed_at TEXT NOT NULL,
+            cache_bytes INTEGER NOT NULL DEFAULT 0
+        )
+    """)
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_viewer_thumbnail_cache_source
+        ON viewer_thumbnail_cache (normalized_path, width, height)
+    """)
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_viewer_thumbnail_cache_access
+        ON viewer_thumbnail_cache (last_accessed_at)
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS viewer_library_job (
+            job_id TEXT PRIMARY KEY,
+            job_type TEXT NOT NULL,
+            status TEXT NOT NULL,
+            phase TEXT NOT NULL,
+            directory TEXT NOT NULL,
+            analyze_colors INTEGER NOT NULL DEFAULT 0,
+            discovered INTEGER NOT NULL DEFAULT 0,
+            total INTEGER,
+            processed INTEGER NOT NULL DEFAULT 0,
+            added INTEGER NOT NULL DEFAULT 0,
+            updated INTEGER NOT NULL DEFAULT 0,
+            unchanged INTEGER NOT NULL DEFAULT 0,
+            conflicts INTEGER NOT NULL DEFAULT 0,
+            errors INTEGER NOT NULL DEFAULT 0,
+            colors_created INTEGER NOT NULL DEFAULT 0,
+            colors_reused INTEGER NOT NULL DEFAULT 0,
+            cache_moved INTEGER NOT NULL DEFAULT 0,
+            current_file TEXT,
+            error_message TEXT,
+            cancel_requested INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            started_at TEXT,
+            finished_at TEXT,
+            updated_at TEXT NOT NULL
+        )
+    """)
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_viewer_library_job_status
+        ON viewer_library_job (status, created_at)
+    """)
+    job_columns = {
+        row["name"]
+        for row in cursor.execute("PRAGMA table_info(viewer_library_job)").fetchall()
+    }
+    if "colors_created" not in job_columns:
+        cursor.execute(
+            "ALTER TABLE viewer_library_job ADD COLUMN colors_created INTEGER NOT NULL DEFAULT 0"
+        )
+    if "colors_reused" not in job_columns:
+        cursor.execute(
+            "ALTER TABLE viewer_library_job ADD COLUMN colors_reused INTEGER NOT NULL DEFAULT 0"
+        )
+    if "cache_moved" not in job_columns:
+        cursor.execute(
+            "ALTER TABLE viewer_library_job ADD COLUMN cache_moved INTEGER NOT NULL DEFAULT 0"
+        )
+    cursor.execute("""
+        INSERT INTO viewer_schema_version (schema_name, version, updated_at)
+        VALUES ('viewer', ?, ?)
+        ON CONFLICT(schema_name) DO UPDATE SET
+            version = excluded.version,
+            updated_at = excluded.updated_at
+    """, (VIEWER_SCHEMA_VERSION, _utc_timestamp()))
 
 
 def init_db_schema():
@@ -161,138 +297,737 @@ def init_db_schema():
             CREATE INDEX IF NOT EXISTS idx_pixivutil2_trash_image_id
             ON pixivutil2_trash_image (image_id)
         """)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS pixivutil2_archived_member (
-                member_id INTEGER PRIMARY KEY,
-                archived_at TEXT NOT NULL,
-                reason TEXT NOT NULL DEFAULT ''
-            )
-        """)
+        _ensure_viewer_schema(cursor)
         conn.commit()
 
 
-def scan_and_index_directory(target_dir: str) -> Dict[str, Any]:
+def _normalise_media_path(file_path: str) -> str:
+    return os.path.normcase(os.path.normpath(os.path.abspath(file_path)))
+
+
+def _media_fingerprint(file_size: int, mtime_ns: int) -> str:
+    payload = f"{file_size}:{mtime_ns}".encode("ascii")
+    return hashlib.sha1(payload).hexdigest()
+
+
+def _stable_integer_id(value: str, base: int, value_range: int) -> int:
+    """Return a deterministic integer ID without Python's process-local hash()."""
+    digest = hashlib.sha1(value.encode("utf-8")).digest()
+    return base + (int.from_bytes(digest[:8], "big") % value_range)
+
+
+def _stable_synthetic_member_id(folder_path: str) -> int:
+    return _stable_integer_id(
+        _normalise_media_path(folder_path),
+        SYNTHETIC_MEMBER_ID_BASE,
+        SYNTHETIC_MEMBER_ID_RANGE,
+    )
+
+
+def _stable_synthetic_image_id(file_path: str) -> int:
+    return _stable_integer_id(
+        _normalise_media_path(file_path),
+        SYNTHETIC_IMAGE_ID_BASE,
+        SYNTHETIC_IMAGE_ID_RANGE,
+    )
+
+
+def _emit_scan_progress(
+    progress_callback: Optional[Callable[..., None]],
+    payload: Dict[str, Any],
+    connection: Optional[sqlite3.Connection] = None,
+) -> None:
+    if not progress_callback:
+        return
+    try:
+        if connection is not None and getattr(
+            progress_callback,
+            "accepts_database_connection",
+            False,
+        ):
+            progress_callback(payload, connection)
+        else:
+            progress_callback(payload)
+    except Exception as error:
+        # Progress reporting must never interrupt the indexing transaction.
+        print(f"scan progress callback failed: {error}")
+
+
+def _discover_media_files(
+    abs_dir: str,
+    cancel_event: Any = None,
+    progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+) -> Tuple[List[Dict[str, Any]], bool, int, List[str]]:
+    """Walk a directory once and collect cheap file fingerprints.
+
+    The total is intentionally unknown during discovery. The caller can only
+    expose a determinate progress bar after this function returns.
+    """
+    candidates: List[Dict[str, Any]] = []
+    discovered = 0
+    errors: List[str] = []
+
+    def handle_walk_error(error: OSError) -> None:
+        if len(errors) < 20:
+            errors.append(f"{getattr(error, 'filename', abs_dir)}: {error}")
+
+    for root, dirs, files in os.walk(abs_dir, onerror=handle_walk_error):
+        _prune_internal_directories(dirs)
+        dirs.sort(key=natural_sort_key)
+        files.sort(key=natural_sort_key)
+        for file in files:
+            if cancel_event is not None and cancel_event.is_set():
+                return candidates, True, discovered, errors
+
+            extension = os.path.splitext(file)[1].lower()
+            full_path = os.path.abspath(os.path.join(root, file))
+            if extension not in MEDIA_EXTENSIONS or is_internal_media_path(full_path):
+                continue
+
+            try:
+                file_stat = os.stat(full_path)
+            except OSError as error:
+                if len(errors) < 20:
+                    errors.append(f"{full_path}: {error}")
+                continue
+
+            discovered += 1
+            candidate = {
+                "path": full_path,
+                "normalized_path": _normalise_media_path(full_path),
+                "file_name": file,
+                "root": root,
+                "file_size": int(file_stat.st_size),
+                "mtime_ns": int(file_stat.st_mtime_ns),
+                "fingerprint": _media_fingerprint(int(file_stat.st_size), int(file_stat.st_mtime_ns)),
+            }
+            candidates.append(candidate)
+            _emit_scan_progress(progress_callback, {
+                "phase": "discovering",
+                "discovered": discovered,
+                "total": None,
+                "processed": 0,
+                "errors": len(errors),
+                "current_file": full_path,
+            })
+
+    return candidates, False, discovered, errors
+
+
+def _top_level_folder_for_path(abs_dir: str, root: str) -> Optional[str]:
+    """Return the first folder below the scan root for a discovered path."""
+    scan_root = os.path.abspath(abs_dir)
+    current_root = os.path.abspath(root)
+    if os.path.normcase(scan_root) == os.path.normcase(current_root):
+        return None
+
+    try:
+        relative_root = os.path.relpath(current_root, scan_root)
+    except ValueError:
+        return None
+    if relative_root in (".", os.pardir) or relative_root.startswith(os.pardir + os.sep):
+        return None
+
+    top_level_name = relative_root.split(os.sep, 1)[0]
+    if not top_level_name or top_level_name in (".", os.pardir):
+        return None
+    return os.path.join(scan_root, top_level_name)
+
+
+def _explicit_member_id_from_folder_name(folder_name: str) -> Optional[int]:
+    """Read the normal PixivUtil2 ``Artist (member_id)`` folder suffix."""
+    member_match = re.search(r"\((\d{4,10})\)\s*$", folder_name)
+    if member_match:
+        return int(member_match.group(1))
+    if re.fullmatch(r"\d{4,10}", folder_name):
+        return int(folder_name)
+    return None
+
+
+def get_folder_member_id(folder_path: str, existing_member_id: Optional[int] = None) -> int:
+    """Return the stable member identity represented by one top-level folder.
+
+    Numeric PixivUtil2 folder names keep their real member ID. Other folders
+    receive a deterministic Web Viewer ID derived from their canonical path;
+    this must not use Python's randomized ``hash()``.
+    """
+    folder_name = os.path.basename(os.path.normpath(folder_path))
+    explicit_id = _explicit_member_id_from_folder_name(folder_name)
+    if explicit_id is not None:
+        return explicit_id
+    if existing_member_id is not None:
+        return int(existing_member_id)
+    return _stable_synthetic_member_id(folder_path)
+
+
+def _member_for_media_path(
+    abs_dir: str,
+    root: str,
+    existing_members_by_name: Optional[Dict[str, int]] = None,
+) -> Tuple[Optional[int], Optional[str]]:
+    """Group nested media under the first folder below the scan root."""
+    folder_path = _top_level_folder_for_path(abs_dir, root)
+    if not folder_path:
+        return None, None
+
+    folder_name = os.path.basename(folder_path)
+    existing_member_id = None
+    if existing_members_by_name:
+        existing_member_id = existing_members_by_name.get(os.path.normcase(folder_name))
+    return get_folder_member_id(folder_path, existing_member_id), folder_name
+
+
+def scan_and_index_directory(
+    target_dir: str,
+    cancel_event: Any = None,
+    progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+    interactive_wait_callback: Optional[Callable[[Any], None]] = None,
+) -> Dict[str, Any]:
+    """Discover and index media without replacing unrelated artwork rows.
+
+    Existing callers can continue to call this synchronously. Background jobs
+    pass a cancellation event and progress callback; commits are batched so a
+    cancelled job retains records that were already processed.
+    """
     init_db_schema()
     abs_dir = os.path.abspath(target_dir)
-    if not os.path.exists(abs_dir):
-        return {"scanned": 0, "indexed": 0, "error": f"Directory does not exist: {abs_dir}"}
+    if not os.path.isdir(abs_dir):
+        return {
+            "scanned": 0,
+            "indexed": 0,
+            "added": 0,
+            "updated": 0,
+            "unchanged": 0,
+            "conflicts": 0,
+            "errors": 1,
+            "error_details": [f"Directory does not exist: {abs_dir}"],
+            "processed": 0,
+            "total": 0,
+            "error": f"Directory does not exist: {abs_dir}",
+            "directory": abs_dir,
+            "cancelled": False,
+        }
 
-    import re, time
-    scanned_count = 0
-    indexed_count = 0
+    candidates, cancelled_during_discovery, scanned_count, discovery_errors = _discover_media_files(
+        abs_dir,
+        cancel_event=cancel_event,
+        progress_callback=progress_callback,
+    )
+    result: Dict[str, Any] = {
+        "scanned": scanned_count,
+        "indexed": 0,
+        "added": 0,
+        "updated": 0,
+        "unchanged": 0,
+        "conflicts": 0,
+        "errors": len(discovery_errors),
+        "error_details": discovery_errors[:20],
+        "directory": abs_dir,
+        "cancelled": cancelled_during_discovery,
+        "processed": 0,
+        "total": None if cancelled_during_discovery else len(candidates),
+    }
+
+    if cancelled_during_discovery:
+        _emit_scan_progress(progress_callback, {
+            "phase": "discovering",
+            "discovered": scanned_count,
+            "total": None,
+            "processed": 0,
+            "errors": result["errors"],
+        })
+        return result
+
+    _emit_scan_progress(progress_callback, {
+        "phase": "indexing",
+        "discovered": scanned_count,
+        "total": len(candidates),
+        "processed": 0,
+        "errors": result["errors"],
+    })
 
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        # Fetch existing save_names to avoid duplicate indexing
-        existing_rows = cursor.execute("SELECT save_name, image_id FROM pixiv_master_image").fetchall()
-        existing_paths = {r["save_name"]: r["image_id"] for r in existing_rows if r["save_name"]}
+        existing_rows = cursor.execute("""
+            SELECT image_id, member_id, title, save_name, created_date, last_update_date
+            FROM pixiv_master_image
+        """).fetchall()
+        member_rows = cursor.execute("""
+            SELECT member_id, name
+            FROM pixiv_master_member
+            WHERE name IS NOT NULL AND name != ''
+        """).fetchall()
+        existing_members_by_name = {
+            os.path.normcase(str(row["name"])): int(row["member_id"])
+            for row in member_rows
+            if row["member_id"] is not None
+        }
+        existing_by_path = {
+            _normalise_media_path(row["save_name"]): row
+            for row in existing_rows
+            if row["save_name"]
+        }
+        metadata_rows = cursor.execute("""
+            SELECT normalized_path, image_id, file_size, mtime_ns, fingerprint
+            FROM viewer_media_metadata
+        """).fetchall()
+        metadata_by_path = {row["normalized_path"]: row for row in metadata_rows}
+        used_image_ids = {int(row["image_id"]) for row in existing_rows if row["image_id"] is not None}
 
-        # Auto-increment generator for unindexed images
         max_id_row = cursor.execute("SELECT MAX(image_id) as max_id FROM pixiv_master_image").fetchone()
-        next_custom_id = (max_id_row["max_id"] or 1000000) + 1
+        next_custom_id = max(int(max_id_row["max_id"] or 1000000) + 1, 1000001)
 
-        for root, dirs, files in os.walk(abs_dir):
-            _prune_internal_directories(dirs)
-            dirs.sort(key=natural_sort_key)
-            files.sort(key=natural_sort_key)
-            for file in files:
-                ext = os.path.splitext(file)[1].lower()
-                full_path = os.path.join(root, file)
-                if ext not in MEDIA_EXTENSIONS or is_internal_media_path(full_path):
-                    continue
-                scanned_count += 1
+        for candidate in candidates:
+            if cancel_event is not None and cancel_event.is_set():
+                result["cancelled"] = True
+                break
+            if interactive_wait_callback is not None:
+                interactive_wait_callback(cancel_event)
+                if cancel_event is not None and cancel_event.is_set():
+                    result["cancelled"] = True
+                    break
 
-                if full_path in existing_paths or file in existing_paths:
-                    continue
+            path_key = candidate["normalized_path"]
+            file_name = candidate["file_name"]
+            full_path = candidate["path"]
+            file_date = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(candidate["mtime_ns"] / 1_000_000_000))
+            title = os.path.splitext(file_name)[0]
+            member_id, folder_name = _member_for_media_path(
+                abs_dir,
+                candidate["root"],
+                existing_members_by_name,
+            )
 
-                # Try to parse Pixiv image_id from filename (e.g. 12345678_p0.jpg or 12345678.png)
-                match = re.search(r"(\d{5,12})", file)
-                if match:
-                    image_id = int(match.group(1))
-                else:
-                    image_id = next_custom_id
-                    next_custom_id += 1
-
-                # Only parse member_id if root is a subfolder, NOT the rootDirectory itself
-                member_id = None
-                if root != abs_dir:
-                    folder_name = os.path.basename(root)
-                    member_match = re.search(r"(\d{4,10})", folder_name)
-                    if member_match:
-                        member_id = int(member_match.group(1))
+            try:
+                existing = existing_by_path.get(path_key)
+                metadata = metadata_by_path.get(path_key)
+                if existing:
+                    image_id = int(existing["image_id"])
+                    is_unchanged = bool(metadata and metadata["fingerprint"] == candidate["fingerprint"])
+                    created_date = existing["created_date"] or file_date
+                    last_update_date = existing["last_update_date"] or file_date
+                    if not is_unchanged:
+                        last_update_date = file_date
+                        result["updated"] += 1
                     else:
-                        # Stable ID hash for non-numeric folder names
-                        member_id = abs(hash(folder_name)) % 100000000
+                        result["unchanged"] += 1
 
-                mtime = os.path.getmtime(full_path)
-                created_date = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(mtime))
-                title = os.path.splitext(file)[0]
-
-                try:
                     cursor.execute("""
-                        INSERT OR REPLACE INTO pixiv_master_image 
+                        UPDATE pixiv_master_image
+                        SET member_id = ?, title = ?, save_name = ?, created_date = ?, last_update_date = ?
+                        WHERE image_id = ?
+                    """, (member_id, title, full_path, created_date, last_update_date, image_id))
+                else:
+                    match = re.search(r"(\d{5,12})", file_name)
+                    image_id = int(match.group(1)) if match else next_custom_id
+                    if not match:
+                        next_custom_id += 1
+                    if image_id in used_image_ids:
+                        result["conflicts"] += 1
+                        image_id = next_custom_id
+                        while image_id in used_image_ids:
+                            image_id += 1
+                        next_custom_id = image_id + 1
+
+                    used_image_ids.add(image_id)
+                    cursor.execute("""
+                        INSERT INTO pixiv_master_image
                         (image_id, member_id, title, save_name, created_date, last_update_date)
                         VALUES (?, ?, ?, ?, ?, ?)
-                    """, (image_id, member_id, title, full_path, created_date, created_date))
+                    """, (image_id, member_id, title, full_path, file_date, file_date))
+                    existing_by_path[path_key] = {
+                        "image_id": image_id,
+                        "member_id": member_id,
+                        "title": title,
+                        "save_name": full_path,
+                        "created_date": file_date,
+                        "last_update_date": file_date,
+                    }
+                    result["added"] += 1
 
-                    if member_id and root != abs_dir:
-                        cursor.execute("""
-                            INSERT OR REPLACE INTO pixiv_master_member
-                            (member_id, name, created_date)
-                            VALUES (?, ?, ?)
-                        """, (member_id, folder_name, created_date))
+                cursor.execute("""
+                    INSERT INTO viewer_media_metadata
+                    (normalized_path, image_id, file_size, mtime_ns, fingerprint, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(normalized_path) DO UPDATE SET
+                        image_id = excluded.image_id,
+                        file_size = excluded.file_size,
+                        mtime_ns = excluded.mtime_ns,
+                        fingerprint = excluded.fingerprint,
+                        updated_at = excluded.updated_at
+                """, (
+                    path_key,
+                    image_id,
+                    candidate["file_size"],
+                    candidate["mtime_ns"],
+                    candidate["fingerprint"],
+                    _utc_timestamp(),
+                ))
+                if metadata and metadata["fingerprint"] != candidate["fingerprint"]:
+                    cursor.execute("""
+                        UPDATE viewer_dominant_color
+                        SET fingerprint = ?, dominant_color = NULL, updated_at = ?
+                        WHERE normalized_path = ?
+                    """, (candidate["fingerprint"], _utc_timestamp(), path_key))
 
-                    indexed_count += 1
-                except Exception as ex:
-                    print(f"Error indexing {file}: {ex}")
+                if member_id and folder_name:
+                    cursor.execute("""
+                        INSERT INTO pixiv_master_member
+                        (member_id, name, created_date, last_update_date)
+                        VALUES (?, ?, ?, ?)
+                        ON CONFLICT(member_id) DO UPDATE SET
+                            name = excluded.name,
+                            last_update_date = excluded.last_update_date
+                    """, (member_id, folder_name, file_date, file_date))
+
+                metadata_by_path[path_key] = {
+                    "normalized_path": path_key,
+                    "image_id": image_id,
+                    "file_size": candidate["file_size"],
+                    "mtime_ns": candidate["mtime_ns"],
+                    "fingerprint": candidate["fingerprint"],
+                }
+            except Exception as error:
+                result["errors"] += 1
+                if len(result["error_details"]) < 20:
+                    result["error_details"].append(f"{full_path}: {error}")
+                print(f"Error indexing {full_path}: {error}")
+
+            result["processed"] = int(result.get("processed", 0)) + 1
+            _emit_scan_progress(progress_callback, {
+                "phase": "indexing",
+                "discovered": scanned_count,
+                "total": len(candidates),
+                "processed": result["processed"],
+                "added": result["added"],
+                "updated": result["updated"],
+                "unchanged": result["unchanged"],
+                "conflicts": result["conflicts"],
+                "errors": result["errors"],
+                "current_file": full_path,
+            }, connection=conn)
+
+            if result["processed"] % 50 == 0:
+                conn.commit()
 
         conn.commit()
 
     # A rescan may add/remove files, so the next gallery request must rebuild
     # the cached path list for this directory tree.
     invalidate_scan_cache(abs_dir)
-    return {"scanned": scanned_count, "indexed": indexed_count, "directory": abs_dir}
+    result["indexed"] = result["added"] + result["updated"]
+    return result
 
 
-def clean_orphaned_records() -> Dict[str, int]:
-    """Archive orphaned member records without deleting database rows."""
-    if not os.path.exists(DB_PATH):
-        return {"archived_members": 0}
+def _job_row_to_dict(row: Optional[sqlite3.Row]) -> Optional[Dict[str, Any]]:
+    if row is None:
+        return None
+    result = dict(row)
+    result["analyze_colors"] = bool(result.get("analyze_colors"))
+    result["cancel_requested"] = bool(result.get("cancel_requested"))
+    return result
 
-    init_db_schema()
+
+def get_media_metadata_for_directory(directory: str) -> List[Dict[str, Any]]:
+    """Return indexed media metadata below a directory without walking disk."""
+    normalized_directory = _normalise_media_path(directory).rstrip(os.sep)
+    prefix = normalized_directory + os.sep
     with get_db_connection() as conn:
-        cursor = conn.cursor()
+        rows = conn.execute(
+            """
+                SELECT normalized_path, image_id, file_size, mtime_ns, fingerprint
+                FROM viewer_media_metadata
+                WHERE normalized_path = ? OR normalized_path LIKE ?
+                ORDER BY normalized_path
+            """,
+            (normalized_directory, prefix + "%"),
+        ).fetchall()
+    return [dict(row) for row in rows]
 
-        orphan_rows = cursor.execute("""
-            SELECT member_id, '沒有對應圖片' AS reason
-            FROM pixiv_master_member
-            WHERE member_id NOT IN (
-                SELECT DISTINCT member_id
-                FROM pixiv_master_image
-                WHERE member_id IS NOT NULL
-            )
-            UNION
-            SELECT member_id, '疑似由檔名建立' AS reason
-            FROM pixiv_master_member
-            WHERE name LIKE '%_p%' OR name LIKE '%.jpg'
-               OR name LIKE '%.png' OR name LIKE '%.jpeg'
-        """).fetchall()
 
-        archived_at = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())
-        archived_members = 0
-        for row in orphan_rows:
-            cursor.execute(
-                """
-                    INSERT OR IGNORE INTO pixivutil2_archived_member
-                    (member_id, archived_at, reason)
-                    VALUES (?, ?, ?)
+def get_dominant_colors(normalized_paths: List[str]) -> Dict[str, str]:
+    """Return only current, validated dominant colors for requested paths."""
+    if not normalized_paths:
+        return {}
+
+    colors: Dict[str, str] = {}
+    with get_db_connection() as conn:
+        for offset in range(0, len(normalized_paths), 500):
+            chunk = normalized_paths[offset:offset + 500]
+            placeholders = ",".join("?" for _ in chunk)
+            rows = conn.execute(
+                f"""
+                    SELECT normalized_path, dominant_color
+                    FROM viewer_dominant_color
+                    WHERE normalized_path IN ({placeholders})
+                      AND fingerprint = (
+                          SELECT fingerprint
+                          FROM viewer_media_metadata metadata
+                          WHERE metadata.normalized_path = viewer_dominant_color.normalized_path
+                      )
+                      AND algorithm_version = ?
                 """,
-                (int(row["member_id"]), archived_at, row["reason"]),
-            )
-            archived_members += cursor.rowcount
+                (*chunk, DOMINANT_COLOR_ALGORITHM_VERSION),
+            ).fetchall()
+            for row in rows:
+                color = row["dominant_color"]
+                if color and re.fullmatch(r"#[0-9A-Fa-f]{6}", color):
+                    colors[row["normalized_path"]] = color
+    return colors
 
+
+def save_dominant_color(
+    normalized_path: str,
+    fingerprint: str,
+    dominant_color: Optional[str],
+) -> None:
+    """Persist a validated color for the current media fingerprint."""
+    if dominant_color is not None and not re.fullmatch(r"#[0-9A-Fa-f]{6}", dominant_color):
+        raise ValueError("dominant_color must be a #RRGGBB value or null")
+    now = _utc_timestamp()
+    with get_db_connection() as conn:
+        conn.execute(
+            """
+                INSERT INTO viewer_dominant_color
+                (normalized_path, fingerprint, algorithm_version, dominant_color, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(normalized_path) DO UPDATE SET
+                    fingerprint = excluded.fingerprint,
+                    algorithm_version = excluded.algorithm_version,
+                    dominant_color = excluded.dominant_color,
+                    updated_at = excluded.updated_at
+            """,
+            (
+                normalized_path,
+                fingerprint,
+                DOMINANT_COLOR_ALGORITHM_VERSION,
+                dominant_color,
+                now,
+            ),
+        )
         conn.commit()
-    return {"archived_members": archived_members}
+
+
+def upsert_thumbnail_cache_entry(
+    cache_name: str,
+    source_path: str,
+    source_file_size: int,
+    source_mtime_ns: int,
+    width: int,
+    height: int,
+    cache_bytes: int = 0,
+    accessed_at: Optional[str] = None,
+) -> None:
+    """Record the source version and dimensions behind one generated thumbnail."""
+    if not cache_name or os.path.basename(cache_name) != cache_name:
+        raise ValueError("cache_name must be a plain file name")
+    now = accessed_at or _utc_timestamp()
+    normalized_path = _normalise_media_path(source_path)
+    fingerprint = _media_fingerprint(int(source_file_size), int(source_mtime_ns))
+    with get_db_connection() as conn:
+        conn.execute(
+            """
+                INSERT INTO viewer_thumbnail_cache
+                (cache_name, normalized_path, source_file_size, source_mtime_ns,
+                 fingerprint, width, height, generated_at, last_accessed_at, cache_bytes)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(cache_name) DO UPDATE SET
+                    normalized_path = excluded.normalized_path,
+                    source_file_size = excluded.source_file_size,
+                    source_mtime_ns = excluded.source_mtime_ns,
+                    fingerprint = excluded.fingerprint,
+                    width = excluded.width,
+                    height = excluded.height,
+                    last_accessed_at = excluded.last_accessed_at,
+                    cache_bytes = excluded.cache_bytes
+            """,
+            (
+                cache_name,
+                normalized_path,
+                int(source_file_size),
+                int(source_mtime_ns),
+                fingerprint,
+                int(width),
+                int(height),
+                now,
+                now,
+                max(0, int(cache_bytes)),
+            ),
+        )
+        conn.commit()
+
+
+def get_thumbnail_cache_entry(cache_name: str) -> Optional[Dict[str, Any]]:
+    with get_db_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM viewer_thumbnail_cache WHERE cache_name = ?",
+            (cache_name,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def get_thumbnail_cache_entries(cache_names: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+    with get_db_connection() as conn:
+        if cache_names is None:
+            rows = conn.execute(
+                "SELECT * FROM viewer_thumbnail_cache ORDER BY last_accessed_at"
+            ).fetchall()
+        else:
+            if not cache_names:
+                return []
+            entries: List[Dict[str, Any]] = []
+            for offset in range(0, len(cache_names), 500):
+                chunk = cache_names[offset:offset + 500]
+                placeholders = ",".join("?" for _ in chunk)
+                rows = conn.execute(
+                    f"SELECT * FROM viewer_thumbnail_cache WHERE cache_name IN ({placeholders})",
+                    chunk,
+                ).fetchall()
+                entries.extend(dict(row) for row in rows)
+            return entries
+    return [dict(row) for row in rows]
+
+
+def delete_thumbnail_cache_entries(cache_names: List[str]) -> int:
+    """Remove metadata for cache files that are no longer present on disk."""
+    unique_names = list(dict.fromkeys(
+        name for name in cache_names
+        if name and os.path.basename(name) == name
+    ))
+    if not unique_names:
+        return 0
+
+    deleted = 0
+    with get_db_connection() as conn:
+        for offset in range(0, len(unique_names), 500):
+            chunk = unique_names[offset:offset + 500]
+            placeholders = ",".join("?" for _ in chunk)
+            cursor = conn.execute(
+                f"DELETE FROM viewer_thumbnail_cache WHERE cache_name IN ({placeholders})",
+                chunk,
+            )
+            deleted += max(0, int(cursor.rowcount))
+        conn.commit()
+    return deleted
+
+
+def create_library_job(job_id: str, job_type: str, directory: str, analyze_colors: bool) -> Dict[str, Any]:
+    now = _utc_timestamp()
+    with get_db_connection() as conn:
+        conn.execute("""
+            INSERT INTO viewer_library_job
+            (job_id, job_type, status, phase, directory, analyze_colors, created_at, updated_at)
+            VALUES (?, ?, 'queued', 'queued', ?, ?, ?, ?)
+        """, (job_id, job_type, directory, int(analyze_colors), now, now))
+        conn.commit()
+        row = conn.execute("SELECT * FROM viewer_library_job WHERE job_id = ?", (job_id,)).fetchone()
+    return _job_row_to_dict(row) or {}
+
+
+def get_library_job(job_id: str) -> Optional[Dict[str, Any]]:
+    with get_db_connection() as conn:
+        row = conn.execute("SELECT * FROM viewer_library_job WHERE job_id = ?", (job_id,)).fetchone()
+    return _job_row_to_dict(row)
+
+
+def get_current_library_job() -> Optional[Dict[str, Any]]:
+    active_placeholders = ",".join("?" for _ in LIBRARY_JOB_ACTIVE_STATUSES)
+    with get_db_connection() as conn:
+        row = conn.execute(
+            f"""
+                SELECT * FROM viewer_library_job
+                WHERE status IN ({active_placeholders})
+                ORDER BY created_at DESC
+                LIMIT 1
+            """,
+            LIBRARY_JOB_ACTIVE_STATUSES,
+        ).fetchone()
+        if row is None:
+            row = conn.execute("""
+                SELECT * FROM viewer_library_job
+                ORDER BY created_at DESC
+                LIMIT 1
+            """).fetchone()
+    return _job_row_to_dict(row)
+
+
+def update_library_job(
+    job_id: str,
+    _connection: Optional[sqlite3.Connection] = None,
+    **fields: Any,
+) -> Optional[Dict[str, Any]]:
+    allowed_fields = {
+        "status", "phase", "discovered", "total", "processed", "added", "updated",
+        "unchanged", "conflicts", "errors", "colors_created", "colors_reused", "cache_moved",
+        "current_file", "error_message",
+        "cancel_requested", "started_at", "finished_at",
+    }
+    updates = {key: value for key, value in fields.items() if key in allowed_fields}
+    if not updates:
+        return get_library_job(job_id)
+    if "cancel_requested" in updates:
+        updates["cancel_requested"] = int(bool(updates["cancel_requested"]))
+    updates["updated_at"] = _utc_timestamp()
+    assignments = ", ".join(f"{key} = ?" for key in updates)
+    values = [updates[key] for key in updates]
+    values.append(job_id)
+    if _connection is not None:
+        # A scan may already hold SQLite's single writer transaction. Updating
+        # the job on that same connection avoids a self-inflicted
+        # ``database is locked`` wait from the progress callback.
+        _connection.execute(
+            f"UPDATE viewer_library_job SET {assignments} WHERE job_id = ?",
+            values,
+        )
+        row = _connection.execute(
+            "SELECT * FROM viewer_library_job WHERE job_id = ?",
+            (job_id,),
+        ).fetchone()
+    else:
+        with get_db_connection() as conn:
+            conn.execute(
+                f"UPDATE viewer_library_job SET {assignments} WHERE job_id = ?",
+                values,
+            )
+            conn.commit()
+            row = conn.execute(
+                "SELECT * FROM viewer_library_job WHERE job_id = ?",
+                (job_id,),
+            ).fetchone()
+    return _job_row_to_dict(row)
+
+
+def request_library_job_cancel(job_id: str) -> Optional[Dict[str, Any]]:
+    job = get_library_job(job_id)
+    if job is None or job["status"] in LIBRARY_JOB_TERMINAL_STATUSES:
+        return job
+    return update_library_job(
+        job_id,
+        status="cancelling",
+        phase="cancelling",
+        cancel_requested=True,
+    )
+
+
+def recover_interrupted_library_jobs() -> int:
+    init_db_schema()
+    active_placeholders = ",".join("?" for _ in LIBRARY_JOB_ACTIVE_STATUSES)
+    now = _utc_timestamp()
+    with get_db_connection() as conn:
+        cursor = conn.execute(
+            f"""
+                UPDATE viewer_library_job
+                SET status = 'interrupted',
+                    phase = 'interrupted',
+                    error_message = 'Backend restarted; run the library job again',
+                    finished_at = ?,
+                    updated_at = ?
+                WHERE status IN ({active_placeholders})
+            """,
+            (now, now, *LIBRARY_JOB_ACTIVE_STATUSES),
+        )
+        conn.commit()
+    return int(cursor.rowcount)
 
 
 # Directory scans are shared by all image/filter requests in the backend
@@ -361,7 +1096,7 @@ def _get_cached_file_scan(folder_path: str, recursive: bool) -> Dict[str, Any]:
                     "path": full_path,
                     "file_name": os.path.basename(full_path),
                     "created_date": time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(mtime)),
-                    "image_id": abs(hash(full_path)) % 1000000000,
+                    "image_id": _stable_synthetic_image_id(full_path),
                 })
         except Exception as ex:
             print(f"Error scanning folder {abs_folder}: {ex}")
@@ -517,7 +1252,10 @@ def get_all_artists() -> List[Dict[str, Any]]:
                 (folder_name, f"%{folder_name}%", f"%{folder_name}%")
             ).fetchone()
 
-            member_id = member_row["member_id"] if member_row else (abs(hash(folder_name)) % 100000000)
+            member_id = get_folder_member_id(
+                folder_path,
+                int(member_row["member_id"]) if member_row and member_row["member_id"] is not None else None,
+            )
 
             # Accurately count all media files inside folder_path
             artwork_count = len(get_folder_files_fast(folder_path))
@@ -772,9 +1510,22 @@ def get_images(
                         if os.path.isdir(cand):
                             target_scan_dir = cand
             if not target_scan_dir and os.path.exists(root_dir):
-                for f in os.listdir(root_dir):
-                    if os.path.isdir(os.path.join(root_dir, f)) and (abs(hash(f)) % 100000000) == artist_id:
-                        target_scan_dir = os.path.join(root_dir, f)
+                try:
+                    root_entries = sorted(
+                        (
+                            entry
+                            for entry in os.scandir(root_dir)
+                            if entry.is_dir()
+                            and not entry.name.startswith(".")
+                            and not is_internal_directory_name(entry.name)
+                        ),
+                        key=lambda entry: natural_sort_key(entry.name),
+                    )
+                except OSError:
+                    root_entries = []
+                for entry in root_entries:
+                    if get_folder_member_id(entry.path) == artist_id:
+                        target_scan_dir = entry.path
                         break
 
         existing_paths = {}
@@ -921,6 +1672,13 @@ def get_images(
     # Keep the checks page-scoped so the first paint can start as soon as the
     # requested page has been sorted and sliced.
     page_items = all_items[offset:offset+limit]
+    if os.path.exists(DB_PATH) and page_items:
+        color_paths = [_normalise_media_path(item.get("save_name", "")) for item in page_items if item.get("save_name")]
+        dominant_colors = get_dominant_colors(color_paths)
+        for item in page_items:
+            color = dominant_colors.get(_normalise_media_path(item.get("save_name", "")))
+            if color:
+                item["dominant_color"] = color
     for item in page_items:
         media_status, media_error = get_media_status(item.get("save_name"))
         if media_status:

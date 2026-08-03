@@ -409,13 +409,17 @@
     position: absolute;
     inset: 0;
     overflow: hidden;
-    background: var(--viewer-surface-muted);
+    background: var(--gallery-thumbnail-dominant, var(--viewer-surface-muted));
   }
 
   .gallery-thumbnail__skeleton {
     position: absolute;
     inset: 0;
-    background-color: var(--viewer-surface-muted);
+    background-color: color-mix(
+      in oklch,
+      var(--gallery-thumbnail-dominant, var(--viewer-surface-muted)) 86%,
+      var(--viewer-surface-muted)
+    );
     background-image: linear-gradient(
       105deg,
       transparent 24%,

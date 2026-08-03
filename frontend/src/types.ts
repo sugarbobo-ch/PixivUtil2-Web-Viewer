@@ -33,6 +33,7 @@ export interface ImageItem {
   created_date: string;
   last_update_date: string;
   artist_name?: string;
+  dominant_color?: string;
   media_status?: 'invalid' | 'missing' | 'internal';
   media_error?: string;
 }
@@ -61,6 +62,9 @@ export interface WebConfig {
   groupMangaPosts: boolean;
   blurEnabled: boolean;
   preloadImageCount: number;
+  analyzeColorsAfterLibraryUpdate: boolean;
+  manageThumbnailCache: boolean;
+  thumbnailCacheLimitMiB: number;
   pixivConfigPath?: string;
 }
 
@@ -73,4 +77,100 @@ export const DEFAULT_WEB_CONFIG: WebConfig = {
   groupMangaPosts: false,
   blurEnabled: false,
   preloadImageCount: 3,
+  analyzeColorsAfterLibraryUpdate: true,
+  manageThumbnailCache: true,
+  thumbnailCacheLimitMiB: 1024,
 };
+
+export type LibraryJobStatus =
+  | 'queued'
+  | 'running'
+  | 'cancelling'
+  | 'completed'
+  | 'cancelled'
+  | 'failed'
+  | 'interrupted';
+
+export type LibraryJobPhase =
+  | 'queued'
+  | 'discovering'
+  | 'indexing'
+  | 'analyzing_colors'
+  | 'organizing_cache'
+  | 'cancelling'
+  | 'completed'
+  | 'cancelled'
+  | 'failed'
+  | 'interrupted';
+
+export interface LibraryJob {
+  job_id: string;
+  job_type: 'update-library' | 'analyze-missing-colors' | 'organize-thumbnail-cache';
+  status: LibraryJobStatus;
+  phase: LibraryJobPhase;
+  directory: string;
+  analyze_colors: boolean;
+  discovered: number;
+  total: number | null;
+  processed: number;
+  added: number;
+  updated: number;
+  unchanged: number;
+  conflicts: number;
+  errors: number;
+  colors_created: number;
+  colors_reused: number;
+  cache_moved: number;
+  current_file: string | null;
+  error_message: string | null;
+  cancel_requested: boolean;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+  updated_at: string;
+}
+
+export interface ThumbnailCacheRecoveryJob {
+  job_id: string;
+  created_at: string | null;
+  moved: number;
+  recoverable_files: number;
+  recoverable_bytes: number;
+  restorable: boolean;
+}
+
+export interface ThumbnailCacheRecoveryEntry {
+  recovery_name: string;
+  cache_name: string | null;
+  cache_bytes: number;
+  width: number | null;
+  height: number | null;
+  reason: string;
+  moved_at: string | null;
+  source_path: string | null;
+  source_file_size: number | null;
+  source_mtime_ns: number | null;
+  generated_at: string | null;
+  last_accessed_at: string | null;
+}
+
+export interface ThumbnailCacheRecoveryDetails {
+  job_id: string;
+  created_at: string | null;
+  moved: number;
+  total: number;
+  total_bytes: number;
+  offset: number;
+  limit: number;
+  has_more: boolean;
+  entries: ThumbnailCacheRecoveryEntry[];
+}
+
+export interface ThumbnailCacheStats {
+  active_files: number;
+  active_bytes: number;
+  tracked_files: number;
+  recoverable_files: number;
+  recoverable_bytes: number;
+  recovery_jobs: ThumbnailCacheRecoveryJob[];
+}

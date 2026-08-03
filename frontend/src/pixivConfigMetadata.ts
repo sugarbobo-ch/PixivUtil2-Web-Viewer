@@ -1,10 +1,19 @@
 export type PixivFieldKind = 'text' | 'textarea' | 'number' | 'boolean';
+export type PixivPathMode = 'folder' | 'existing-file' | 'save-file';
+
+export interface PixivPathFieldMetadata {
+  mode: PixivPathMode;
+  purpose: string;
+  extensions?: string[];
+  access: 'read' | 'write' | 'read-write';
+}
 
 export interface PixivConfigFieldMetadata {
   label: string;
   description: string;
   kind: PixivFieldKind;
   secret?: boolean;
+  path?: PixivPathFieldMetadata;
 }
 
 export interface PixivConfigSectionMetadata {
@@ -43,6 +52,17 @@ const secretField = (label: string, description: string): PixivConfigFieldMetada
   description,
   kind: 'text',
   secret: true,
+});
+
+const pathField = (
+  label: string,
+  description: string,
+  path: PixivPathFieldMetadata,
+): PixivConfigFieldMetadata => ({
+  label,
+  description,
+  kind: 'text',
+  path,
 });
 
 const section = (
@@ -90,17 +110,23 @@ export const pixivConfigMetadata: Record<string, PixivConfigSectionMetadata> = {
   }),
 
   IrfanView: section('IrfanView', 'IrfanView 整合', '控制下載完成後啟動 IrfanView 與建立下載清單。', {
-    irfanviewpath: textField('IrfanView 安裝路徑', 'IrfanView 的安裝目錄；啟動 IrfanView 功能時需要設定。'),
+    irfanviewpath: pathField('IrfanView 安裝路徑', 'IrfanView 的安裝目錄；啟動 IrfanView 功能時需要設定。', {
+      mode: 'folder', purpose: 'irfanview-directory', access: 'read',
+    }),
     startirfanview: booleanField('完成後啟動 IrfanView', '結束 PixivUtil2 時是否以下載圖片啟動 IrfanView。'),
     startirfanslide: booleanField('完成後啟動幻燈片', '結束 PixivUtil2 時是否啟動 IrfanView 幻燈片播放。'),
     createdownloadlists: booleanField('自動建立下載清單', '是否自動建立供 IrfanView 使用的下載清單。'),
   }),
 
   Settings: section('Settings', '一般設定', '控制下載根目錄、資料庫與圖片資訊輸出方式。', {
-    downloadlistdirectory: textField('下載清單目錄', 'list.txt 與 IrfanView 下載清單的保存位置；留白時使用 PixivUtil2 目錄。'),
+    downloadlistdirectory: pathField('下載清單目錄', 'list.txt 與 IrfanView 下載清單的保存位置；留白時使用 PixivUtil2 目錄。', {
+      mode: 'folder', purpose: 'download-list-directory', access: 'write',
+    }),
     uselist: booleanField('讀取 list.txt', '是否解析 list.txt，並用它更新 member_id 與自訂下載資料夾。'),
     processfromdb: booleanField('從資料庫讀取繪師資料夾', '是否使用資料庫中記錄的 member_id 與資料夾資訊。'),
-    rootdirectory: textField('圖片根目錄', '下載圖片與作品資料夾的根目錄。'),
+    rootdirectory: pathField('圖片根目錄', '下載圖片與作品資料夾的根目錄。', {
+      mode: 'folder', purpose: 'root-directory', access: 'read',
+    }),
     downloadavatar: booleanField('下載繪師頭像', '是否將繪師頭像下載為各資料夾中的 folder.jpg。'),
     usesuppresstags: booleanField('排除被抑制的標籤', '是否從 %tags% 中移除 suppress_tags.txt 列出的標籤。'),
     tagslimit: numberField('標籤數量上限', '檔名中的 %tags% 最多使用幾個標籤；設為 -1 代表使用全部標籤。'),
@@ -115,7 +141,9 @@ export const pixivConfigMetadata: Record<string, PixivConfigSectionMetadata> = {
     writeurlindescription: booleanField('保存描述中的 URL', '是否把作品描述裡找到的 URL 輸出到根目錄的 URL 清單檔。'),
     striphtmltagsfromcaption: booleanField('移除描述中的 HTML', '輸出 metadata 時是否移除描述中的 HTML 標籤與其內容；連結文字也會被移除。'),
     urlblacklistregex: textAreaField('URL 黑名單正規表示式', '用正規表示式過濾作品描述中的 URL。'),
-    dbpath: textField('資料庫路徑', '指定要使用的 SQLite 資料庫；留白時使用預設資料庫。'),
+    dbpath: pathField('資料庫路徑', '指定要使用的 SQLite 資料庫；留白時使用預設資料庫。', {
+      mode: 'save-file', purpose: 'database-file', extensions: ['.db', '.sqlite', '.sqlite3'], access: 'read-write',
+    }),
     setlastmodified: booleanField('設定檔案修改時間', '是否依 Pixiv 作品上傳時間設定本機檔案的最後修改時間。'),
     uselocaltimezone: booleanField('使用本地時區', '輸出文字資訊與 XMP 時是否使用本機時區。'),
     defaultsketchoption: textField('Pixiv Sketch 預設選項', '略過下載 member_id 時的提示；填 y 一律包含、填 n 一律排除 Sketch。'),
@@ -175,11 +203,15 @@ export const pixivConfigMetadata: Record<string, PixivConfigSectionMetadata> = {
     downloadcoverwhenrestricted: booleanField('下載受限文章封面', '是否在 Fanbox 文章受限時仍下載文章封面。'),
     downloadcover: booleanField('下載 Fanbox 封面', '是否下載 Fanbox 文章的封面圖片。'),
     checkdbprocesshistory: booleanField('檢查 Fanbox 處理歷史', '是否依資料庫中的 updated_date 跳過尚未變更的 Fanbox 文章。'),
-    listpathfanbox: textField('Fanbox 清單檔案', 'Fanbox creator 清單檔案；每行一個 creator，原生設定不支援自訂路徑。'),
+    listpathfanbox: pathField('Fanbox 清單檔案', 'Fanbox creator 清單檔案；每行一個 creator，原生設定不支援自訂路徑。', {
+      mode: 'existing-file', purpose: 'fanbox-list-file', extensions: ['.txt', '.csv'], access: 'read',
+    }),
   }),
 
   FFmpeg: section('FFmpeg', 'FFmpeg 轉檔', '控制 Ugoira 轉換成影片或動畫圖片時使用的 FFmpeg 執行檔與參數。', {
-    ffmpeg: textField('FFmpeg 執行檔', 'FFmpeg 可執行檔路徑；可填完整路徑或系統 PATH 中可找到的檔名。'),
+    ffmpeg: pathField('FFmpeg 執行檔', 'FFmpeg 可執行檔路徑；可填完整路徑或系統 PATH 中可找到的檔名。', {
+      mode: 'existing-file', purpose: 'ffmpeg-executable', extensions: ['.exe', '.bat', '.cmd'], access: 'read',
+    }),
     ffmpegcodec: textField('WebM 編碼器', '建立 WebM 時使用的 FFmpeg codec，例如 libvpx-vp9。'),
     ffmpegext: textField('WebM 副檔名', '建立 WebM 時使用的容器副檔名。'),
     ffmpegparam: textAreaField('WebM FFmpeg 參數', '建立 WebM 時傳給 FFmpeg 的完整參數。'),
@@ -235,6 +267,13 @@ export const pixivConfigMetadata: Record<string, PixivConfigSectionMetadata> = {
     deletezipafterextract: booleanField('解壓後刪除 ZIP', '自動解壓縮完成後是否刪除原始 ZIP 檔。'),
   }),
 };
+
+/** Inventory used by the settings UI and tests to keep path fields explicit. */
+export const pixivPathFieldInventory = Object.entries(pixivConfigMetadata).flatMap(([section, metadata]) =>
+  Object.entries(metadata.fields).flatMap(([option, field]) => (
+    field.path ? [{ section, option, ...field.path }] : []
+  )),
+);
 
 export function getSectionMetadata(sectionName: string): PixivConfigSectionMetadata | undefined {
   const direct = pixivConfigMetadata[sectionName];

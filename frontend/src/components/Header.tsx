@@ -13,9 +13,10 @@ import {
   Search,
   Settings,
   Sun,
+  RefreshCw,
   X,
 } from 'lucide-react';
-import { ThemeMode, ViewMode } from '../types';
+import { LibraryJob, ThemeMode, ViewMode } from '../types';
 
 interface HeaderProps {
   viewMode: ViewMode;
@@ -36,7 +37,21 @@ interface HeaderProps {
   onToggleGroupMangaPosts?: () => void;
   blurEnabled?: boolean;
   onToggleBlur?: () => void;
+  libraryJob?: LibraryJob | null;
 }
+
+const isLibraryJobActive = (job?: LibraryJob | null) => (
+  !!job && ['queued', 'running', 'cancelling'].includes(job.status)
+);
+
+const getLibraryJobLabel = (job: LibraryJob) => {
+  if (job.status === 'queued') return '排隊中';
+  if (job.status === 'cancelling') return '正在停止…';
+  if (job.phase === 'discovering') return `讀取資料夾・${job.discovered.toLocaleString()}`;
+  if (job.phase === 'analyzing_colors') return `分析色彩・${job.processed.toLocaleString()} / ${job.total ?? '…'}`;
+  if (job.phase === 'organizing_cache') return `整理縮圖・${job.processed.toLocaleString()} / ${job.total ?? '…'}`;
+  return `更新資料庫・${job.processed.toLocaleString()} / ${job.total ?? '…'}`;
+};
 
 export const Header: React.FC<HeaderProps> = ({
   viewMode,
@@ -57,6 +72,7 @@ export const Header: React.FC<HeaderProps> = ({
   onToggleGroupMangaPosts,
   blurEnabled = false,
   onToggleBlur,
+  libraryJob = null,
 }) => {
   const [isMobileSearchOpen, setIsMobileSearchOpen] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -112,6 +128,18 @@ export const Header: React.FC<HeaderProps> = ({
           <span className="header-logo">PixivUtil2 Gallery</span>
           <span className="header-count">{totalCount} 作品</span>
         </div>
+        {isLibraryJobActive(libraryJob) && (
+          <button
+            type="button"
+            onClick={onOpenSettings}
+            className="header-library-status header-action"
+            aria-label={`媒體資料庫工作：${getLibraryJobLabel(libraryJob!)}`}
+            title="查看媒體資料庫工作進度"
+          >
+            <RefreshCw className="header-library-status__icon" aria-hidden="true" />
+            <span className="header-library-status__label">{getLibraryJobLabel(libraryJob!)}</span>
+          </button>
+        )}
       </div>
 
       <button

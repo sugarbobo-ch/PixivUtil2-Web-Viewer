@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { Artist, MonthItem, ImageItem, SortMode, ViewMode, ThemeMode, WorkGroup, WebConfig, DEFAULT_WEB_CONFIG } from './types';
+import { Artist, LibraryJob, MonthItem, ImageItem, SortMode, ViewMode, ThemeMode, WorkGroup, WebConfig, DEFAULT_WEB_CONFIG } from './types';
 import { ArrowUp } from 'lucide-react';
 import { groupImagesIntoWorkGroups } from './utils/grouping';
 import { buildThumbnailUrl, normalizeWebConfig } from './utils/webConfig';
@@ -76,6 +76,25 @@ const getDynamicThumbnailPrefetchCount = (thumbnailSize: number) => {
   const viewportHeight = scrollContainer?.clientHeight || window.innerHeight;
   const rows = Math.max(1, Math.ceil(viewportHeight / Math.max(1, cardHeight + rowGap)) + 1);
   return rows * columns;
+};
+
+const isLibraryJobActive = (job: LibraryJob | null) => (
+  !!job && ['queued', 'running', 'cancelling'].includes(job.status)
+);
+
+const isLibraryJobTerminal = (job: LibraryJob | null) => (
+  !!job && ['completed', 'cancelled', 'failed', 'interrupted'].includes(job.status)
+);
+
+const getLibraryJobAnnouncement = (job: LibraryJob) => {
+  if (job.status === 'completed') {
+    return job.job_type === 'organize-thumbnail-cache'
+      ? `縮圖整理完成，移出 ${job.cache_moved} 個縮圖。`
+      : `圖片資料庫更新完成，新增 ${job.added} 張、更新 ${job.updated} 張。`;
+  }
+  if (job.status === 'cancelled') return '媒體資料庫工作已取消，已完成的資料仍會保留。';
+  if (job.status === 'interrupted') return '媒體資料庫工作已中斷，請從設定重新執行。';
+  return '媒體資料庫工作失敗，請從設定查看錯誤。';
 };
 
 interface ImagePageCacheEntry {
@@ -189,6 +208,8 @@ export const App: React.FC = () => {
   const [isMangaModalOpen, setIsMangaModalOpen] = useState(false);
   const [blurEnabled, setBlurEnabled] = useState(DEFAULT_WEB_CONFIG.blurEnabled);
   const [isWebConfigReady, setIsWebConfigReady] = useState(false);
+  const [libraryJob, setLibraryJob] = useState<LibraryJob | null>(null);
+  const [libraryAnnouncement, setLibraryAnnouncement] = useState('');
 
   // Data States
   const [artists, setArtists] = useState<Artist[]>([]);
@@ -200,6 +221,15 @@ export const App: React.FC = () => {
   const [selectedMonths, setSelectedMonths] = useState<string[]>(() => getFilterStateFromUrl().selectedMonths);
   const [selectedArtist, setSelectedArtist] = useState<number | null>(() => getFilterStateFromUrl().selectedArtist);
   const [searchQuery, setSearchQuery] = useState(() => getFilterStateFromUrl().searchQuery);
+
+  const applyArtistList = useCallback((data: unknown) => {
+    const nextArtists = Array.isArray(data) ? data as Artist[] : [];
+    setArtists(nextArtists);
+    setSelectedArtist(current => {
+      if (current === null || nextArtists.length === 0) return current;
+      return nextArtists.some(artist => Number(artist.member_id) === current) ? current : null;
+    });
+  }, []);
 
   // Selection & Modal States
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
@@ -230,6 +260,9 @@ export const App: React.FC = () => {
     targetPage: number | null;
   }>({ timer: null, cacheKey: null, active: false, targetKey: null, targetPage: null });
   const paginationScrollResetRef = useRef<number | null>(null);
+  const libraryJobPollTimerRef = useRef<number | null>(null);
+  const previousLibraryJobRef = useRef<LibraryJob | null>(null);
+  const libraryAnnouncementTimerRef = useRef<number | null>(null);
 
   const handleEditModeChange = useCallback((edit: boolean) => {
     setIsEditMode(edit);
@@ -291,18 +324,65 @@ export const App: React.FC = () => {
     }
   }, [theme]);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    const schedulePoll = (delay: number) => {
+      if (cancelled) return;
+      if (libraryJobPollTimerRef.current !== null) window.clearTimeout(libraryJobPollTimerRef.current);
+      libraryJobPollTimerRef.current = window.setTimeout(() => {
+        void pollCurrentLibraryJob();
+      }, delay);
+    };
+
+    const pollCurrentLibraryJob = async () => {
+      try {
+        const response = await fetch('/api/library/jobs/current', { cache: 'no-store' });
+        if (!response.ok) throw new Error(`library job request failed: ${response.status}`);
+        const data = await response.json() as { job?: LibraryJob | null };
+        const nextJob = data.job ?? null;
+        const previousJob = previousLibraryJobRef.current;
+        previousLibraryJobRef.current = nextJob;
+        if (!cancelled) setLibraryJob(nextJob);
+
+        if (nextJob && previousJob && nextJob.job_id === previousJob.job_id && isLibraryJobActive(previousJob) && isLibraryJobTerminal(nextJob)) {
+          if (libraryAnnouncementTimerRef.current !== null) window.clearTimeout(libraryAnnouncementTimerRef.current);
+          setLibraryAnnouncement(getLibraryJobAnnouncement(nextJob));
+          libraryAnnouncementTimerRef.current = window.setTimeout(() => setLibraryAnnouncement(''), 8000);
+        }
+        schedulePoll(isLibraryJobActive(nextJob) ? 1000 : 10000);
+      } catch {
+        schedulePoll(15000);
+      }
+    };
+
+    const handleLibraryJobChanged = () => {
+      if (libraryJobPollTimerRef.current !== null) window.clearTimeout(libraryJobPollTimerRef.current);
+      void pollCurrentLibraryJob();
+    };
+
+    window.addEventListener('web-viewer-library-job-changed', handleLibraryJobChanged);
+    void pollCurrentLibraryJob();
+    return () => {
+      cancelled = true;
+      window.removeEventListener('web-viewer-library-job-changed', handleLibraryJobChanged);
+      if (libraryJobPollTimerRef.current !== null) window.clearTimeout(libraryJobPollTimerRef.current);
+      if (libraryAnnouncementTimerRef.current !== null) window.clearTimeout(libraryAnnouncementTimerRef.current);
+    };
+  }, []);
+
   // Fetch Artists & Months
   useEffect(() => {
     fetch('/api/artists')
       .then(res => res.json())
-      .then(data => setArtists(data))
+      .then(applyArtistList)
       .catch(err => console.error('Failed to fetch artists:', err));
 
     fetch('/api/months')
       .then(res => res.json())
       .then(data => setMonths(data))
       .catch(err => console.error('Failed to fetch months:', err));
-  }, []);
+  }, [applyArtistList]);
 
   // Keep filter state shareable and restore it when the browser navigates to a
   // URL that already contains filter parameters.
@@ -1173,9 +1253,9 @@ export const App: React.FC = () => {
 
     fetchImages();
     // Also refetch artists and months in case directory rescan indexed new files.
-    fetch('/api/artists').then(res => res.json()).then(data => setArtists(data)).catch(err => console.error(err));
+    fetch('/api/artists').then(res => res.json()).then(applyArtistList).catch(err => console.error(err));
     fetch('/api/months').then(res => res.json()).then(data => setMonths(data)).catch(err => console.error(err));
-  }, [applyWebConfig, fetchImages, loadWebConfig]);
+  }, [applyArtistList, applyWebConfig, fetchImages, loadWebConfig]);
 
   if (!isWebConfigReady) {
     return (
@@ -1206,7 +1286,12 @@ export const App: React.FC = () => {
         onToggleGroupMangaPosts={handleToggleGroupMangaPosts}
         blurEnabled={blurEnabled}
         onToggleBlur={handleToggleBlur}
+        libraryJob={libraryJob}
       />
+
+      <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+        {libraryAnnouncement}
+      </div>
 
       <MobileMenuDrawer
         isOpen={isMobileMenuOpen}

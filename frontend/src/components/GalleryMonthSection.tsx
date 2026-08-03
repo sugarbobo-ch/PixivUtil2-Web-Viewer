@@ -269,6 +269,7 @@ export const GalleryMonthSection: React.FC<GalleryMonthSectionProps> = ({
             priority={priority}
             loadEnabled={loadEnabled}
             blurEnabled={blurEnabled}
+            dominantColor={card.item.dominant_color}
           />
         )}
 

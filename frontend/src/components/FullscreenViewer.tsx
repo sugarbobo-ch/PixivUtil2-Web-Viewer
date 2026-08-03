@@ -91,20 +91,28 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
 }) => {
   const currentItem = images[currentIndex];
   const currentMediaUrl = currentItem ? buildMediaUrl(currentItem) : '';
+  const currentThumbnailUrl = currentItem ? buildThumbnailUrl(currentItem, thumbnailSize) : '';
   const currentItemIsVideo = currentItem?.save_name.toLowerCase().endsWith('.mp4') ?? false;
+  const thumbnailAdmitted = useImageLoadPermission({
+    url: currentThumbnailUrl,
+    priority: 0,
+    kind: 'thumbnail',
+    owner: 'fullscreen',
+    enabled: Boolean(currentItem && !currentItemIsVideo && !currentItem.media_status),
+  });
   const [isPlaying, setIsPlaying] = useState(true);
   const [showDetails, setShowDetails] = useState(false);
   const [sourceLink, setSourceLink] = useState<SourceLink | null>(null);
   const [isSourceLoading, setIsSourceLoading] = useState(false);
   const [openAction, setOpenAction] = useState<LocalOpenTarget | null>(null);
   const [openActionError, setOpenActionError] = useState<string | null>(null);
-  const [displayedImageUrl, setDisplayedImageUrl] = useState<string | null>(
-    currentItem && !currentItemIsVideo ? currentMediaUrl : null,
-  );
+  const [displayedImageUrl, setDisplayedImageUrl] = useState<string | null>(null);
+  const [thumbnailFailed, setThumbnailFailed] = useState(false);
+  const [originalLoadFailed, setOriginalLoadFailed] = useState(false);
   const viewerRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
-  const lastWheelTime = useRef<number>(0);
-  const lastWheelDirection = useRef<-1 | 0 | 1>(0);
+  const wheelGestureActive = useRef(false);
+  const wheelGestureResetTimer = useRef<number | null>(null);
   const filmstripScrollRef = useRef<HTMLDivElement>(null);
   const activeThumbnailRef = useRef<HTMLButtonElement | null>(null);
   const hasPositionedFilmstrip = useRef(false);
@@ -112,6 +120,7 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
   const preloadHandlesRef = useRef(new Map<string, { cancel: () => void }>());
   const navigationDirectionRef = useRef<1 | -1>(1);
   const displayedImageUrlRef = useRef(displayedImageUrl);
+  const displayedImagePathRef = useRef<string | null>(null);
   const [isFilmstripPositioned, setIsFilmstripPositioned] = useState(false);
   const [visibleFilmstripIndexes, setVisibleFilmstripIndexes] = useState<Set<number>>(() => new Set());
   const previouslyFocusedElement = useRef<HTMLElement | null>(null);
@@ -122,6 +131,9 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
     && currentItem.media_status !== 'internal',
   );
   const openMediaLabel = currentItemIsVideo ? '開啟影片' : '開啟圖片';
+  const visibleOriginalUrl = displayedImagePathRef.current === currentItem?.save_name
+    ? displayedImageUrl
+    : null;
 
   useEffect(() => {
     let cancelled = false;
@@ -146,6 +158,14 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
     setOpenAction(null);
     setOpenActionError(null);
   }, [currentItem?.image_id]);
+
+  useEffect(() => {
+    displayedImageUrlRef.current = null;
+    displayedImagePathRef.current = null;
+    setDisplayedImageUrl(null);
+    setThumbnailFailed(false);
+    setOriginalLoadFailed(false);
+  }, [currentItem?.save_name, currentMediaUrl]);
 
   const handleOpenLocalMedia = useCallback(async (target: LocalOpenTarget) => {
     if (!currentItem || !canOpenLocalMedia) return;
@@ -311,12 +331,16 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
     if (!currentItem || currentItemIsVideo || !currentMediaUrl) {
       if (displayedImageUrlRef.current !== null) {
         displayedImageUrlRef.current = null;
+        displayedImagePathRef.current = null;
         setDisplayedImageUrl(null);
       }
       return undefined;
     }
 
-    if (displayedImageUrlRef.current === currentMediaUrl) return undefined;
+    if (
+      displayedImageUrlRef.current === currentMediaUrl
+      && displayedImagePathRef.current === currentItem.save_name
+    ) return undefined;
 
     let cancelled = false;
     let revealFrame: number | null = null;
@@ -332,11 +356,23 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
         if (cancelled) return;
         imageLoadScheduler.markLoaded(currentMediaUrl);
         displayedImageUrlRef.current = currentMediaUrl;
+        displayedImagePathRef.current = currentItem.save_name;
+        setOriginalLoadFailed(false);
         setDisplayedImageUrl(currentMediaUrl);
       });
     };
 
+    const handleImageError = () => {
+      if (cancelled) return;
+      imageLoadScheduler.markFinished(currentMediaUrl, false);
+      displayedImageUrlRef.current = null;
+      displayedImagePathRef.current = null;
+      setDisplayedImageUrl(null);
+      setOriginalLoadFailed(true);
+    };
+
     image.onload = revealImage;
+    image.onerror = handleImageError;
     if (!cachedImage) {
       image.src = currentMediaUrl;
       preloadedImagesRef.current.set(currentMediaUrl, image);
@@ -354,7 +390,7 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
       image.onload = null;
       image.onerror = null;
     };
-  }, [currentItemIsVideo, currentMediaUrl]);
+  }, [currentItem, currentItemIsVideo, currentMediaUrl]);
 
   const handleNext = useCallback(() => {
     navigationDirectionRef.current = 1;
@@ -403,14 +439,20 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
 
       e.preventDefault();
       e.stopPropagation();
-      const now = Date.now();
-      const direction: -1 | 1 = e.deltaY > 0 ? 1 : -1;
-      if (direction === lastWheelDirection.current && now - lastWheelTime.current < 120) return;
+      // Treat one continuous wheel/trackpad stream as one navigation gesture.
+      // Trackpad inertia can alternate deltaY's sign; accepting that opposite
+      // sign immediately makes the viewer jump back and forth.
+      if (wheelGestureResetTimer.current !== null) {
+        window.clearTimeout(wheelGestureResetTimer.current);
+      }
+      wheelGestureResetTimer.current = window.setTimeout(() => {
+        wheelGestureActive.current = false;
+        wheelGestureResetTimer.current = null;
+      }, 180);
+      if (wheelGestureActive.current) return;
+      wheelGestureActive.current = true;
 
-      lastWheelTime.current = now;
-      lastWheelDirection.current = direction;
-
-      if (direction > 0) {
+      if (e.deltaY > 0) {
         handleNext();
       } else {
         handlePrev();
@@ -423,6 +465,12 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
     document.addEventListener('wheel', handleWheel, { capture: true, passive: false });
     return () => document.removeEventListener('wheel', handleWheel, true);
   }, [handleWheel]);
+
+  useEffect(() => () => {
+    if (wheelGestureResetTimer.current !== null) {
+      window.clearTimeout(wheelGestureResetTimer.current);
+    }
+  }, []);
 
   // Keyboard Shortcuts (Arrow keys, J/K, Space, Esc, Delete).
   // Consume navigation events so the page behind the dialog cannot scroll.
@@ -581,16 +629,51 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
             />
           </div>
         ) : (
-          <img
-              src={displayedImageUrl ?? mediaUrl}
-              alt={currentItem.title}
-               loading="eager"
-               decoding="async"
-               {...{ fetchpriority: 'high' }}
-               onLoad={event => imageLoadScheduler.markLoaded(event.currentTarget.currentSrc || mediaUrl)}
-               onError={event => imageLoadScheduler.markFinished(event.currentTarget.currentSrc || mediaUrl, false)}
-               className={`fullscreen-viewer__media ${blurEnabled ? 'blur-media blur-media--viewer' : ''}`}
-            />
+          <div className="fullscreen-viewer__media-stack">
+            {thumbnailAdmitted && !thumbnailFailed && (
+              <img
+                src={currentThumbnailUrl}
+                alt=""
+                aria-hidden="true"
+                loading="eager"
+                decoding="async"
+                {...{ fetchpriority: 'high' }}
+                onLoad={() => {
+                  imageLoadScheduler.markLoaded(currentThumbnailUrl);
+                }}
+                onError={() => {
+                  imageLoadScheduler.markFinished(currentThumbnailUrl, false);
+                  setThumbnailFailed(true);
+                }}
+                className={`fullscreen-viewer__media fullscreen-viewer__media--thumbnail ${blurEnabled ? 'blur-media blur-media--viewer' : ''}`}
+              />
+            )}
+            {visibleOriginalUrl && (
+              <img
+                src={visibleOriginalUrl}
+                alt={currentItem.title}
+                loading="eager"
+                decoding="async"
+                {...{ fetchpriority: 'high' }}
+                onLoad={event => {
+                  imageLoadScheduler.markLoaded(event.currentTarget.currentSrc || mediaUrl);
+                }}
+                onError={event => {
+                  imageLoadScheduler.markFinished(event.currentTarget.currentSrc || mediaUrl, false);
+                  setOriginalLoadFailed(true);
+                  displayedImageUrlRef.current = null;
+                  displayedImagePathRef.current = null;
+                  setDisplayedImageUrl(null);
+                }}
+                className={`fullscreen-viewer__media fullscreen-viewer__media--original is-visible ${blurEnabled ? 'blur-media blur-media--viewer' : ''}`}
+              />
+            )}
+            {originalLoadFailed && (
+              <p className="fullscreen-viewer__load-error" role="status">
+                原圖載入失敗，保留縮圖預覽。
+              </p>
+            )}
+          </div>
         )}
 
         {/* Details Panel Overlay */}

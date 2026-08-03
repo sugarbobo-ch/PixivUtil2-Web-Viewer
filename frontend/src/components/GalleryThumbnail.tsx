@@ -7,6 +7,7 @@ interface GalleryThumbnailProps {
   priority: ImagePriority;
   loadEnabled?: boolean;
   blurEnabled: boolean;
+  dominantColor?: string;
 }
 
 export const GalleryThumbnail: React.FC<GalleryThumbnailProps> = ({
@@ -15,6 +16,7 @@ export const GalleryThumbnail: React.FC<GalleryThumbnailProps> = ({
   priority,
   loadEnabled = true,
   blurEnabled,
+  dominantColor,
 }) => {
   const [loadState, setLoadState] = React.useState<'loading' | 'loaded' | 'error'>('loading');
   const admitted = useImageLoadPermission({
@@ -26,13 +28,19 @@ export const GalleryThumbnail: React.FC<GalleryThumbnailProps> = ({
   });
   const showCachedImage = !loadEnabled && imageLoadScheduler.isLoaded(src);
   const shouldRenderImage = admitted || showCachedImage;
+  const validatedDominantColor = /^#[0-9A-Fa-f]{6}$/.test(dominantColor ?? '')
+    ? dominantColor
+    : undefined;
+  const thumbnailStyle = validatedDominantColor
+    ? { '--gallery-thumbnail-dominant': validatedDominantColor } as React.CSSProperties
+    : undefined;
 
   React.useEffect(() => {
     setLoadState('loading');
   }, [src]);
 
   return (
-    <div className={`gallery-thumbnail${loadState === 'loaded' ? ' is-ready' : ''}`}>
+    <div className={`gallery-thumbnail${loadState === 'loaded' ? ' is-ready' : ''}`} style={thumbnailStyle}>
       {loadState !== 'loaded' && (
         <div className="gallery-thumbnail__skeleton" aria-hidden="true" />
       )}
