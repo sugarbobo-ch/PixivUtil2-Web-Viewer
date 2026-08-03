@@ -1,4 +1,5 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { getScrollTopForElement, scrollElementToContainerStart } from '../utils/galleryLayout';
 
 export interface MonthJumpItem {
   key: string;
@@ -10,13 +11,17 @@ export interface MonthJumpItem {
 export interface MonthJumpNavigationOptions {
   behavior?: ScrollBehavior;
   scrubbing?: boolean;
+  previewOnly?: boolean;
 }
+
+export type MonthNavigationPhase = 'click-start' | 'scrub-start' | 'preview' | 'settle' | 'commit' | 'cancel' | 'end';
 
 interface MonthQuickNavProps {
   items: MonthJumpItem[];
   sectionKeys?: string;
   onJumpToMonth?: (item: MonthJumpItem, options?: MonthJumpNavigationOptions) => void;
   onPrefetchMonth?: (item: MonthJumpItem) => void;
+  onNavigationChange?: (phase: MonthNavigationPhase, item?: MonthJumpItem) => void;
   isLoading?: boolean;
 }
 
@@ -30,7 +35,23 @@ interface MonthScrubGesture {
   lastKey: string | null;
 }
 
-export const MonthQuickNav: React.FC<MonthQuickNavProps> = ({ items, sectionKeys = '', onJumpToMonth, onPrefetchMonth, isLoading = false }) => {
+const getMonthScrollContainer = (target: HTMLElement) => (
+  target.closest('[data-gallery-scroll-container="true"]')
+  ?? target.closest('main')
+) as HTMLElement | null;
+
+const scrollMonthTarget = (target: HTMLElement, behavior: ScrollBehavior) => {
+  const container = getMonthScrollContainer(target);
+
+  if (!container) {
+    target.scrollIntoView({ behavior, block: 'start' });
+    return;
+  }
+
+  scrollElementToContainerStart(container, target, behavior);
+};
+
+export const MonthQuickNav: React.FC<MonthQuickNavProps> = ({ items, sectionKeys = '', onJumpToMonth, onPrefetchMonth, onNavigationChange, isLoading = false }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [activeMonthKey, setActiveMonthKey] = useState<string | null>(items[0]?.key ?? null);
   const [hoveredMonthKey, setHoveredMonthKey] = useState<string | null>(null);
@@ -169,6 +190,37 @@ export const MonthQuickNav: React.FC<MonthQuickNavProps> = ({ items, sectionKeys
     return Math.max(1, (tickList?.scrollHeight ?? 1) / Math.max(1, items.length - 1));
   };
 
+  // Keep the gallery in sync with the pointer's fractional position while a
+  // drag is in progress. Month ticks are discrete, but the content scroll can
+  // interpolate between the two surrounding section anchors for a continuous
+  // slide instead of stepping once per month.
+  const scrollScrubPreview = (clientY: number, gesture: MonthScrubGesture) => {
+    if (items.length === 0) return;
+
+    const fractionalIndex = Math.max(
+      0,
+      Math.min(
+        items.length - 1,
+        gesture.startIndex + (clientY - gesture.startY) / Math.max(1, gesture.pixelsPerMonth),
+      ),
+    );
+    const lowerIndex = Math.floor(fractionalIndex);
+    const upperIndex = Math.min(items.length - 1, lowerIndex + 1);
+    const fraction = fractionalIndex - lowerIndex;
+    const lowerTarget = document.getElementById(`month-section-${items[lowerIndex].key}`);
+    const upperTarget = document.getElementById(`month-section-${items[upperIndex].key}`);
+    const anchor = lowerTarget ?? upperTarget;
+    if (!anchor) return;
+
+    const container = getMonthScrollContainer(anchor);
+    if (!container) return;
+
+    const lowerTop = lowerTarget ? getScrollTopForElement(container, lowerTarget) : getScrollTopForElement(container, anchor);
+    const upperTop = upperTarget ? getScrollTopForElement(container, upperTarget) : lowerTop;
+    const top = lowerTop + (upperTop - lowerTop) * fraction;
+    container.scrollTo({ top, behavior: 'auto' });
+  };
+
   useEffect(() => {
     if (items.length === 0) {
       setActiveMonthKey(null);
@@ -259,9 +311,13 @@ export const MonthQuickNav: React.FC<MonthQuickNavProps> = ({ items, sectionKeys
     if (item) {
       ensureTickVisible(index);
       onPrefetchMonth?.(item);
+      // Start the target-window preload before moving the gallery so the
+      // network request gets a head start during rapid pointer movement.
+      scrollScrubPreview(clientY, gesture);
       setPopupTopAtClientY(clientY);
       setIsOpen(true);
       setHoveredMonthKey(item.key);
+      if (gesture.lastKey !== item.key) onNavigationChange?.('preview', item);
     }
     return item;
   };
@@ -283,17 +339,19 @@ export const MonthQuickNav: React.FC<MonthQuickNavProps> = ({ items, sectionKeys
     previewMonthAtClientY(event.clientY);
   };
 
-  const scrubToMonth = (item: MonthJumpItem, preserveRulerPosition = false) => {
+  const scrubToMonth = (item: MonthJumpItem, preserveRulerPosition = false, previewOnly = false) => {
     if (!preserveRulerPosition) {
       const itemIndex = items.findIndex(current => current.key === item.key);
       if (itemIndex >= 0) ensureTickVisible(itemIndex);
     }
 
     const target = document.getElementById(`month-section-${item.key}`);
-    if (!target) {
-      onJumpToMonth?.(item, { behavior: 'auto', scrubbing: true });
-    } else {
-      target.scrollIntoView({ behavior: 'auto', block: 'start' });
+    if (!previewOnly) {
+      if (!target) {
+        onJumpToMonth?.(item, { behavior: 'auto', scrubbing: true });
+      } else {
+        scrollMonthTarget(target, 'auto');
+      }
     }
 
     setActiveMonthKey(item.key);
@@ -307,11 +365,17 @@ export const MonthQuickNav: React.FC<MonthQuickNavProps> = ({ items, sectionKeys
 
     const prefersReducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
     const behavior = options.behavior ?? (prefersReducedMotion ? 'auto' : 'smooth');
+    // Start warming the destination before the scroll begins. For a same-page
+    // jump this lets thumbnail decoding overlap the smooth movement; for a
+    // cross-page jump the page request can overlap it as well.
+    onPrefetchMonth?.(item);
+    if (options.scrubbing) onNavigationChange?.('preview', item);
+    else onNavigationChange?.('click-start', item);
     const target = document.getElementById(`month-section-${item.key}`);
     if (!target) {
       onJumpToMonth?.(item, { ...options, behavior });
     } else {
-      target.scrollIntoView({ behavior, block: 'start' });
+      scrollMonthTarget(target, behavior);
     }
 
     setActiveMonthKey(item.key);
@@ -342,6 +406,7 @@ export const MonthQuickNav: React.FC<MonthQuickNavProps> = ({ items, sectionKeys
       moved: false,
       lastKey: item?.key ?? null,
     };
+    onNavigationChange?.('scrub-start', item ?? undefined);
     setIsScrubbing(true);
   };
 
@@ -359,7 +424,7 @@ export const MonthQuickNav: React.FC<MonthQuickNavProps> = ({ items, sectionKeys
       : previewMonthAtClientY(event.clientY);
     if (gesture.moved && item && gesture.lastKey !== item.key) {
       gesture.lastKey = item.key;
-      scrubToMonth(item, true);
+      scrubToMonth(item, true, true);
     }
   };
 
@@ -375,11 +440,14 @@ export const MonthQuickNav: React.FC<MonthQuickNavProps> = ({ items, sectionKeys
       scrollToMonth(item);
     } else if (!cancelled && gesture.moved) {
       suppressClickRef.current = true;
+      if (item) scrubToMonth(item, true, false);
+      onNavigationChange?.('commit', item ?? undefined);
       setActiveMonthKey(item?.key ?? activeMonthKey);
       setHoveredMonthKey(null);
       setIsOpen(false);
       setPopupTopOverride(null);
     } else {
+      if (cancelled) onNavigationChange?.('cancel');
       setIsOpen(false);
       setHoveredMonthKey(null);
       setPopupTopOverride(null);

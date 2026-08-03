@@ -1,13 +1,13 @@
 import React from 'react';
 import { Artist, ImageItem, WorkGroup } from '../types';
 import { getItemGroupKey } from '../utils/grouping';
-import { buildThumbnailUrl } from '../utils/webConfig';
 import { ArtistStickyNav } from './ArtistStickyNav';
 import { CustomSelect } from './CustomSelect';
-import { MediaIssuePlaceholder } from './MediaIssuePlaceholder';
-import { MonthJumpItem, MonthJumpNavigationOptions, MonthQuickNav } from './MonthQuickNav';
+import { MonthJumpItem, MonthJumpNavigationOptions, MonthNavigationPhase, MonthQuickNav } from './MonthQuickNav';
 import { getTimeFilterLabel } from '../utils/timeFilterLabels';
-import { Check, CheckSquare, Film, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Calendar, ArrowUpDown, Search, Filter, X, RotateCcw, Layers, List, Square } from 'lucide-react';
+import { CheckSquare, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, ArrowUpDown, Search, Filter, X, RotateCcw, List } from 'lucide-react';
+import { GalleryMonthSection } from './GalleryMonthSection';
+import { GalleryThumbnail } from './GalleryThumbnail';
 
 interface GalleryGridProps {
   images: ImageItem[];
@@ -40,6 +40,10 @@ interface GalleryGridProps {
   monthIndexItems?: MonthJumpItem[];
   onJumpToMonth?: (item: MonthJumpItem, options?: MonthJumpNavigationOptions) => void;
   onPrefetchMonth?: (item: MonthJumpItem) => void;
+  onNavigationChange?: (phase: MonthNavigationPhase, item?: MonthJumpItem) => void;
+  navigationMode?: 'idle' | 'click-scrolling' | 'scrubbing-preview' | 'scrubbing-settle' | 'scrubbing-commit';
+  destinationMonthKey?: string | null;
+  destinationGlobalIndex?: number | null;
   isLoading?: boolean;
   blurEnabled?: boolean;
 }
@@ -61,8 +65,23 @@ interface SelectionGesture {
   autoScrollVelocity: number;
 }
 
+interface SelectionModelCard {
+  key: string;
+  ids: number[];
+}
+
 const SELECTION_AUTO_SCROLL_EDGE = 72;
 const SELECTION_MAX_SCROLL_SPEED = 24;
+
+const getMonthKeyForLayout = (dateStr?: string) => {
+  if (!dateStr) return '未指定月份';
+  const value = dateStr.trim();
+  const hyphenMatch = value.match(/^(\d{4})[\-/](\d{1,2})/);
+  if (hyphenMatch) return `${hyphenMatch[1]}-${hyphenMatch[2].padStart(2, '0')}`;
+  const compactMatch = value.match(/^(\d{4})(\d{2})/);
+  if (compactMatch) return `${compactMatch[1]}-${compactMatch[2]}`;
+  return '未指定月份';
+};
 
 const sortOptions = [
   { value: 'newest_month', label: '最新月份', description: '月份新到舊・作品正序 1-1 → 1-10' },
@@ -78,43 +97,6 @@ const itemsPerPageOptions = [
   { value: 1000, label: '1000 張' },
   { value: 5000, label: '全部 (5000)' },
 ] as const;
-
-interface GalleryThumbnailProps {
-  src: string;
-  alt: string;
-  eager: boolean;
-  blurEnabled: boolean;
-}
-
-const GalleryThumbnail: React.FC<GalleryThumbnailProps> = ({ src, alt, eager, blurEnabled }) => {
-  const [loadState, setLoadState] = React.useState<'loading' | 'loaded' | 'error'>('loading');
-
-  React.useEffect(() => {
-    setLoadState('loading');
-  }, [src]);
-
-  return (
-    <div className={`gallery-thumbnail${loadState === 'loaded' ? ' is-ready' : ''}`}>
-      {loadState !== 'loaded' && (
-        <div className="gallery-thumbnail__skeleton" aria-hidden="true" />
-      )}
-      <img
-        src={src}
-        alt={alt}
-        draggable={false}
-        loading={eager ? 'eager' : 'lazy'}
-        decoding="async"
-        {...{ fetchpriority: eager ? 'high' : 'auto' }}
-        onLoad={() => setLoadState('loaded')}
-        onError={() => setLoadState('error')}
-        className={`gallery-thumbnail__image w-full h-full object-cover ${loadState === 'loaded' ? 'is-loaded' : ''} ${blurEnabled ? 'blur-media blur-media--thumbnail' : 'transition-transform duration-300 group-hover:scale-105'}`}
-      />
-      {loadState === 'error' && (
-        <span className="gallery-thumbnail__error" aria-hidden="true">縮圖載入失敗</span>
-      )}
-    </div>
-  );
-};
 
 export const GalleryGrid: React.FC<GalleryGridProps> = ({
   images,
@@ -147,16 +129,56 @@ export const GalleryGrid: React.FC<GalleryGridProps> = ({
   monthIndexItems,
   onJumpToMonth,
   onPrefetchMonth,
+  onNavigationChange,
+  navigationMode = 'idle',
+  destinationMonthKey = null,
+  destinationGlobalIndex = null,
   isLoading = false,
   blurEnabled = false,
 }) => {
   const galleryRootRef = React.useRef<HTMLDivElement | null>(null);
   const filterChromeRef = React.useRef<HTMLDivElement | null>(null);
   const selectionGestureRef = React.useRef<SelectionGesture | null>(null);
+  const scrollContainerRef = React.useRef<HTMLElement | null>(null);
   const suppressClickRef = React.useRef(false);
   const [isDragSelecting, setIsDragSelecting] = React.useState(false);
   const [filterChromeHeight, setFilterChromeHeight] = React.useState<number | null>(null);
   const [pageInput, setPageInput] = React.useState(String(currentPage));
+  const [scrollTick, setScrollTick] = React.useState(0);
+
+  const selectionModel = React.useMemo<SelectionModelCard[]>(() => {
+    const monthRank = new Map((monthIndexItems ?? []).map((item, index) => [item.key, index]));
+    const sortedImages = images
+      .map((item, index) => ({ item, index, monthKey: getMonthKeyForLayout(item.created_date) }))
+      .sort((left, right) => {
+        const leftRank = monthRank.get(left.monthKey);
+        const rightRank = monthRank.get(right.monthKey);
+        if (leftRank !== undefined || rightRank !== undefined) {
+          return (leftRank ?? Number.MAX_SAFE_INTEGER) - (rightRank ?? Number.MAX_SAFE_INTEGER)
+            || left.index - right.index;
+        }
+        const monthOrder = sortMode === 'newest_month' ? -1 : 1;
+        return monthOrder * left.monthKey.localeCompare(right.monthKey) || left.index - right.index;
+      });
+
+    if (!groupMangaPosts) {
+      return sortedImages.map(({ item, index }) => ({ key: `image:${index}`, ids: [item.image_id] }));
+    }
+
+    const grouped = new Map<string, SelectionModelCard>();
+    sortedImages
+      .forEach(({ item, index, monthKey }) => {
+        const groupKey = getItemGroupKey(item);
+        const selectionKey = `${monthKey}|${groupKey}`;
+        const existing = grouped.get(selectionKey);
+        if (existing) {
+          if (!existing.ids.includes(item.image_id)) existing.ids.push(item.image_id);
+        } else {
+          grouped.set(selectionKey, { key: `work:${groupKey}:${index}`, ids: [item.image_id] });
+        }
+      });
+    return Array.from(grouped.values());
+  }, [groupMangaPosts, images, monthIndexItems, sortMode]);
 
   React.useLayoutEffect(() => {
     const chrome = filterChromeRef.current;
@@ -251,9 +273,8 @@ export const GalleryGrid: React.FC<GalleryGridProps> = ({
     const gesture = selectionGestureRef.current;
     if (!gesture?.active) return;
 
-    const cards = getSelectionCards();
-    const anchorIndex = cards.findIndex(card => card.dataset.selectionKey === gesture.anchorKey);
-    const targetIndex = cards.findIndex(card => card.dataset.selectionKey === cardKey);
+    const anchorIndex = selectionModel.findIndex(card => card.key === gesture.anchorKey);
+    const targetIndex = selectionModel.findIndex(card => card.key === cardKey);
     if (anchorIndex < 0 || targetIndex < 0) return;
 
     const rangeStart = Math.min(anchorIndex, targetIndex);
@@ -262,12 +283,8 @@ export const GalleryGrid: React.FC<GalleryGridProps> = ({
     if (gesture.lastRangeKey === rangeKey) return;
 
     const rangeIds = new Set<number>();
-    cards.slice(rangeStart, rangeEnd + 1).forEach(card => {
-      (card.dataset.selectionIds ?? '')
-        .split(',')
-        .map(Number)
-        .filter(Number.isFinite)
-        .forEach(imageId => rangeIds.add(imageId));
+    selectionModel.slice(rangeStart, rangeEnd + 1).forEach(card => {
+      card.ids.forEach(imageId => rangeIds.add(imageId));
     });
 
     const nextSelectedIds = new Set(gesture.initiallySelectedIds);
@@ -278,7 +295,7 @@ export const GalleryGrid: React.FC<GalleryGridProps> = ({
 
     gesture.lastRangeKey = rangeKey;
     onReplaceSelection(Array.from(nextSelectedIds));
-  }, [getSelectionCards, onReplaceSelection]);
+  }, [onReplaceSelection, selectionModel]);
 
   const selectCardAtPoint = React.useCallback((clientX: number, clientY: number) => {
     const gesture = selectionGestureRef.current;
@@ -308,6 +325,28 @@ export const GalleryGrid: React.FC<GalleryGridProps> = ({
       ?? (root?.closest('main') as HTMLElement | null)
       ?? document.scrollingElement as HTMLElement | null;
   }, []);
+
+  React.useLayoutEffect(() => {
+    const container = getScrollContainer();
+    scrollContainerRef.current = container;
+    setScrollTick(tick => tick + 1);
+  }, [getScrollContainer, images.length, groupMangaPosts]);
+
+  React.useEffect(() => {
+    const container = scrollContainerRef.current;
+    if (!container) return undefined;
+    const onScroll = () => {
+      // The month ruler uses auto scroll while the pointer is held down. Keep
+      // the virtual window in the same event turn as that scroll instead of
+      // waiting for the next animation frame, otherwise the new viewport can
+      // briefly contain only stale skeletons.
+      setScrollTick(tick => tick + 1);
+    };
+    container.addEventListener('scroll', onScroll, { passive: true });
+    return () => {
+      container.removeEventListener('scroll', onScroll);
+    };
+  }, [images.length, groupMangaPosts]);
 
   const getAutoScrollVelocity = React.useCallback((clientY: number) => {
     const container = getScrollContainer();
@@ -533,29 +572,14 @@ export const GalleryGrid: React.FC<GalleryGridProps> = ({
     itemsPerPage,
   ].join('|');
 
-  const normalizeMonthKey = (dateStr: string | undefined): { key: string; label: string } => {
-    if (!dateStr) return { key: '未指定月份', label: '未指定月份' };
-    const str = dateStr.trim();
-    const matchHyphen = str.match(/^(\d{4})[\-/](\d{1,2})/);
-    if (matchHyphen) {
-      const y = matchHyphen[1];
-      const m = matchHyphen[2].padStart(2, '0');
-      return { key: `${y}-${m}`, label: `${y} 年 ${m} 月` };
-    }
-    const matchDigits = str.match(/^(\d{4})(\d{2})/);
-    if (matchDigits) {
-      const y = matchDigits[1];
-      const m = matchDigits[2];
-      return { key: `${y}-${m}`, label: `${y} 年 ${m} 月` };
-    }
-    return { key: '未指定月份', label: '未指定月份' };
-  };
-
   // Group images by Month
   const groupedByMonth: Record<string, { label: string; items: { item: ImageItem; globalIndex: number }[] }> = {};
 
   images.forEach((item, globalIndex) => {
-    const { key: monthKey, label: monthLabel } = normalizeMonthKey(item.created_date);
+    const monthKey = getMonthKeyForLayout(item.created_date);
+    const monthLabel = monthKey === '未指定月份'
+      ? monthKey
+      : `${monthKey.slice(0, 4)} 年 ${monthKey.slice(5)} 月`;
     if (!groupedByMonth[monthKey]) {
       groupedByMonth[monthKey] = { label: monthLabel, items: [] };
     }
@@ -626,6 +650,7 @@ export const GalleryGrid: React.FC<GalleryGridProps> = ({
         sectionKeys={monthKeys.join('|')}
         onJumpToMonth={onJumpToMonth}
         onPrefetchMonth={onPrefetchMonth}
+        onNavigationChange={onNavigationChange}
         isLoading={isLoading}
       />
 
@@ -797,216 +822,28 @@ export const GalleryGrid: React.FC<GalleryGridProps> = ({
           </div>
         ) : (
           <>
-            {monthKeys.map(mKey => {
-          const group = groupedByMonth[mKey];
-          const monthIds = Array.from(new Set(group.items.map(({ item }) => item.image_id)));
-          const selectedMonthCount = monthIds.filter(imageId => selectedIds.has(imageId)).length;
-          const isMonthSelected = monthIds.length > 0 && selectedMonthCount === monthIds.length;
-          return (
-            <div key={mKey} id={`month-section-${mKey}`} className="gallery-month-section space-y-3">
-              {/* Sticky Month Section Header */}
-              <div
-                className="gallery-month-header sticky z-10 py-2 px-3.5 bg-zinc-900/90 backdrop-blur border border-zinc-800/80 rounded-xl flex items-center justify-between shadow-md"
-                style={{ top: '-1rem' }}
-              >
-                <div className="gallery-month-header__title flex items-center gap-2 text-xs font-bold text-indigo-300">
-                  <Calendar className="w-4 h-4 text-indigo-400" />
-                  <span>{group.label}</span>
-                </div>
-                <div className="gallery-month-header__actions">
-                  <span className="gallery-month-header__count gallery-month-header__count--full text-[11px] font-medium text-zinc-400">
-                    此月份共有 {group.items.length} 張作品
-                  </span>
-                  <span className="gallery-month-header__count gallery-month-header__count--compact text-[11px] font-medium text-zinc-400" aria-hidden="true">
-                    {group.items.length} 張
-                  </span>
-                  {isEditMode && (
-                    <button
-                      type="button"
-                      onClick={() => onSetSelection(monthIds, !isMonthSelected)}
-                      className={`gallery-month-select${isMonthSelected ? ' is-selected' : ''}`}
-                      aria-pressed={isMonthSelected}
-                      title={`${isMonthSelected ? '取消' : '選取'}目前頁面中的${group.label}作品`}
-                    >
-                      {isMonthSelected ? <CheckSquare aria-hidden="true" /> : <Square aria-hidden="true" />}
-                      <span>{isMonthSelected ? '取消本月' : '選取本月'}</span>
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              {/* Artwork Cards Grid for this Month */}
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
-                {(() => {
-                  if (!groupMangaPosts) {
-                    return group.items.map(({ item, globalIndex }) => {
-                      const isSelected = selectedIds.has(item.image_id);
-                      const isVideo = item.save_name.toLowerCase().endsWith('.mp4');
-
-                      return (
-                        <div
-                          key={`${mKey}-${item.image_id}-${globalIndex}`}
-                          data-selection-card="true"
-                          data-selection-key={`${mKey}-${item.image_id}-${globalIndex}`}
-                          data-selection-ids={item.image_id}
-                          role={isEditMode ? 'checkbox' : 'button'}
-                          tabIndex={0}
-                          aria-checked={isEditMode ? isSelected : undefined}
-                          aria-label={item.title || '作品'}
-                          onPointerDown={event => beginPointerGesture(event, `${mKey}-${item.image_id}-${globalIndex}`, [item.image_id])}
-                          onClick={event => handleCardClick(event, [item.image_id], () => onOpenFullscreen(globalIndex))}
-                          onKeyDown={event => handleCardKeyDown(event, [item.image_id], () => onOpenFullscreen(globalIndex))}
-                          className={`gallery-card group relative aspect-square rounded-xl overflow-hidden bg-zinc-900 border border-zinc-800 transition-[border-color,box-shadow,transform,background-color] duration-200 cursor-pointer select-none ${
-                            isSelected ? 'gallery-card--selected' : 'hover:border-zinc-700 hover:shadow-lg hover:shadow-indigo-500/10'
-                          }${isEditMode ? ' gallery-card--editable' : ''}`}
-                        >
-                          {/* Thumbnail Image */}
-                          {item.media_status ? (
-                            <MediaIssuePlaceholder message={item.media_error} />
-                          ) : (
-                            <GalleryThumbnail
-                              src={buildThumbnailUrl(item, thumbnailSize)}
-                              alt={item.title}
-                              eager={globalIndex < 12}
-                              blurEnabled={blurEnabled}
-                            />
-                          )}
-
-                          {/* Video Badge */}
-                          {isVideo && (
-                            <div className="gallery-card__video-badge absolute top-2 right-2 p-1.5 rounded-full bg-black/60 backdrop-blur-md text-white">
-                              <Film className="w-3.5 h-3.5" />
-                            </div>
-                          )}
-
-                          {/* Selection Checkbox (Edit Mode) */}
-                          {isEditMode && (
-                            <div className="absolute top-2 left-2 z-10">
-                              <div
-                                className={`gallery-selection-indicator${isSelected ? ' is-selected' : ''}`}
-                                aria-hidden="true"
-                              >
-                                <Check className="w-4 h-4" />
-                              </div>
-                            </div>
-                          )}
-
-                          {/* Gradient Overlay & Metadata Title */}
-                          <div className="gallery-card__overlay pointer-events-none absolute inset-x-0 bottom-0 p-2.5 bg-gradient-to-t from-black/80 via-black/40 to-transparent opacity-0 group-hover:opacity-100 transition-opacity">
-                            <p className="text-xs font-medium text-white truncate">{item.title || '無題'}</p>
-                            <p className="text-[10px] text-zinc-400 truncate">{item.artist_name || `繪師 ID: ${item.member_id}`}</p>
-                          </div>
-                        </div>
-                      );
-                    });
-                  }
-
-                  // Group Manga Posts Mode (groupMangaPosts = true)
-                  const wgMap = new Map<string, { group_id: string; cover: ImageItem; items: { item: ImageItem; globalIndex: number }[] }>();
-                  group.items.forEach(entry => {
-                    const key = getItemGroupKey(entry.item);
-                    if (!wgMap.has(key)) {
-                      wgMap.set(key, { group_id: key, cover: entry.item, items: [entry] });
-                    } else {
-                      wgMap.get(key)!.items.push(entry);
-                    }
-                  });
-
-                  return Array.from(wgMap.values()).map(wg => {
-                    const cover = wg.cover;
-                    const groupIds = Array.from(new Set(wg.items.map(entry => entry.item.image_id)));
-                    const isSelected = groupIds.length > 0 && groupIds.every(imageId => selectedIds.has(imageId));
-                    const isVideo = cover.save_name.toLowerCase().endsWith('.mp4');
-                    const workGroupObj: WorkGroup = {
-                      group_id: wg.group_id,
-                      image_id: cover.image_id,
-                      member_id: cover.member_id,
-                      title: cover.title,
-                      artist_name: cover.artist_name,
-                      created_date: cover.created_date,
-                      cover,
-                      items: wg.items.map(x => x.item),
-                    };
-
-                    return (
-                      <div
-                        key={`${mKey}-${wg.group_id}`}
-                        data-selection-card="true"
-                        data-selection-key={`${mKey}-${wg.group_id}`}
-                        data-selection-ids={groupIds.join(',')}
-                        role={isEditMode ? 'checkbox' : 'button'}
-                        tabIndex={0}
-                        aria-checked={isEditMode ? isSelected : undefined}
-                        aria-label={`${cover.title || '作品群組'}，${groupIds.length} 頁`}
-                        onPointerDown={event => beginPointerGesture(event, `${mKey}-${wg.group_id}`, groupIds)}
-                        onClick={event => handleCardClick(event, groupIds, () => {
-                          if (onOpenWorkGroup) {
-                            onOpenWorkGroup(workGroupObj);
-                          } else {
-                            onOpenFullscreen(wg.items[0].globalIndex);
-                          }
-                        })}
-                        onKeyDown={event => handleCardKeyDown(event, groupIds, () => {
-                          if (onOpenWorkGroup) {
-                            onOpenWorkGroup(workGroupObj);
-                          } else {
-                            onOpenFullscreen(wg.items[0].globalIndex);
-                          }
-                        })}
-                        className={`gallery-card group relative aspect-square rounded-xl overflow-hidden bg-zinc-900 border border-zinc-800 transition-[border-color,box-shadow,transform,background-color] duration-200 cursor-pointer select-none ${
-                          isSelected ? 'gallery-card--selected' : 'hover:border-zinc-700 hover:shadow-lg hover:shadow-indigo-500/10'
-                        }${isEditMode ? ' gallery-card--editable' : ''}`}
-                      >
-                        {/* Cover Image */}
-                        {cover.media_status ? (
-                          <MediaIssuePlaceholder message={cover.media_error} />
-                        ) : (
-                          <GalleryThumbnail
-                            src={buildThumbnailUrl(cover, thumbnailSize)}
-                            alt={cover.title}
-                            eager={wg.items[0].globalIndex < 12}
-                            blurEnabled={blurEnabled}
-                          />
-                        )}
-
-                        {/* Manga Group Page Count Badge */}
-                        <div className="gallery-card__group-count viewer-group-badge absolute top-2 right-2 px-2 py-0.5 rounded-md font-bold text-xs flex items-center gap-1">
-                          <Layers className="w-3.5 h-3.5" />
-                          <span>{wg.items.length}P</span>
-                        </div>
-
-                        {/* Video Badge */}
-                        {isVideo && (
-                          <div className="gallery-card__video-badge absolute top-2 left-2 p-1.5 rounded-full bg-black/60 backdrop-blur-md text-white">
-                            <Film className="w-3.5 h-3.5" />
-                          </div>
-                        )}
-
-                        {/* Selection Checkbox (Edit Mode) */}
-                          {isEditMode && (
-                            <div className="absolute top-2 left-2 z-10">
-                              <div
-                                className={`gallery-selection-indicator${isSelected ? ' is-selected' : ''}`}
-                                aria-hidden="true"
-                              >
-                                <Check className="w-4 h-4" />
-                            </div>
-                          </div>
-                        )}
-
-                        {/* Gradient Overlay & Metadata Title */}
-                        <div className="gallery-card__overlay pointer-events-none absolute inset-x-0 bottom-0 p-2.5 bg-gradient-to-t from-black/80 via-black/40 to-transparent opacity-0 group-hover:opacity-100 transition-opacity">
-                          <p className="text-xs font-medium text-white truncate">{cover.title || '無題'}</p>
-                          <p className="text-[10px] text-zinc-400 truncate">{cover.artist_name || `繪師 ID: ${cover.member_id}`}</p>
-                        </div>
-                      </div>
-                    );
-                  });
-                })()}
-              </div>
-            </div>
-          );
-            })}
+            {monthKeys.map(mKey => (
+              <GalleryMonthSection
+                key={mKey}
+                group={{ key: mKey, ...groupedByMonth[mKey] }}
+                groupMangaPosts={groupMangaPosts}
+                thumbnailSize={thumbnailSize}
+                isEditMode={isEditMode}
+                selectedIds={selectedIds}
+                onSetSelection={onSetSelection}
+                onOpenFullscreen={onOpenFullscreen}
+                onOpenWorkGroup={onOpenWorkGroup}
+                beginPointerGesture={beginPointerGesture}
+                handleCardClick={handleCardClick}
+                handleCardKeyDown={handleCardKeyDown}
+                blurEnabled={blurEnabled}
+                scrollContainerRef={scrollContainerRef}
+                scrollTick={scrollTick}
+                navigationMode={navigationMode}
+                destinationMonthKey={destinationMonthKey}
+                destinationGlobalIndex={destinationGlobalIndex}
+              />
+            ))}
 
             {/* Pagination Bar */}
             <div className="gallery-pagination flex flex-col sm:flex-row items-center justify-between gap-3 pt-6 border-t border-zinc-800 text-xs text-zinc-400">

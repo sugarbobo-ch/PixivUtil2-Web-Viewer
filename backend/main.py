@@ -8,6 +8,8 @@ import configparser
 import shutil
 import tempfile
 import zipfile
+import threading
+import time
 from typing import List, Dict, Any, Optional, Literal
 from fastapi import FastAPI, HTTPException, Query, Response, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -34,8 +36,69 @@ WORKSPACE_ROOT = config_paths.WORKSPACE_ROOT
 THUMB_CACHE_DIR = os.path.join(os.path.dirname(__file__), "cache_thumbs")
 os.makedirs(THUMB_CACHE_DIR, exist_ok=True)
 THUMB_CACHE_HEADERS = {"Cache-Control": "public, max-age=86400, immutable"}
+MEDIA_CACHE_HEADERS = {"Cache-Control": "private, max-age=300, stale-while-revalidate=60"}
+THUMB_GENERATION_LIMIT = 2
+THUMB_GENERATION_SEMAPHORE = threading.BoundedSemaphore(THUMB_GENERATION_LIMIT)
+THUMB_GENERATION_LOCK = threading.Lock()
+THUMB_GENERATION_INFLIGHT: dict[str, threading.Event] = {}
 
 WEB_CONFIG_PATH = config_paths.WEB_CONFIG_PATH
+
+
+def generate_thumbnail_once(thumb_path: str, generator) -> bool:
+    """Coordinate one thumbnail key and bound CPU/disk-heavy generation.
+
+    FastAPI executes this synchronous route in a worker pool.  Without a
+    single-flight guard, two requests for the same uncached image can both
+    decode and write it.  The temporary output also prevents another request
+    from observing a partially written WebP.
+    """
+    with THUMB_GENERATION_LOCK:
+        if os.path.exists(thumb_path):
+            return True
+        event = THUMB_GENERATION_INFLIGHT.get(thumb_path)
+        if event is None:
+            event = threading.Event()
+            THUMB_GENERATION_INFLIGHT[thumb_path] = event
+            owner = True
+        else:
+            owner = False
+
+    if not owner:
+        event.wait()
+        return os.path.exists(thumb_path)
+
+    temporary_path = ""
+    started = time.perf_counter()
+    try:
+        file_descriptor, temporary_path = tempfile.mkstemp(
+            prefix=".thumb-",
+            suffix=".tmp",
+            dir=THUMB_CACHE_DIR,
+        )
+        os.close(file_descriptor)
+        try:
+            with THUMB_GENERATION_SEMAPHORE:
+                generated = bool(generator(temporary_path))
+        except Exception as error:
+            print(f"thumbnail generation failed for {os.path.basename(thumb_path)}: {error}")
+            generated = False
+        if generated and os.path.exists(temporary_path):
+            os.replace(temporary_path, thumb_path)
+            temporary_path = ""
+        return generated and os.path.exists(thumb_path)
+    finally:
+        if temporary_path:
+            try:
+                os.remove(temporary_path)
+            except OSError:
+                pass
+        with THUMB_GENERATION_LOCK:
+            THUMB_GENERATION_INFLIGHT.pop(thumb_path, None)
+            event.set()
+        elapsed_ms = (time.perf_counter() - started) * 1000
+        if elapsed_ms > 250:
+            print(f"thumbnail generation {elapsed_ms:.0f}ms: {os.path.basename(thumb_path)}")
 
 DEFAULT_WEB_CONFIG = {
     "webTheme": "dark",
@@ -406,7 +469,7 @@ def get_media_file(path: str, image_id: Optional[int] = None):
     elif ext == ".mp4":
         mime_type = "video/mp4"
 
-    return FileResponse(resolved, media_type=mime_type)
+    return FileResponse(resolved, media_type=mime_type, headers=MEDIA_CACHE_HEADERS)
 
 
 @app.post("/api/open-media")
@@ -547,23 +610,34 @@ def get_thumbnail(
         return FileResponse(thumb_path, media_type="image/webp", headers=THUMB_CACHE_HEADERS)
 
     if ext in [".mp4", ".mkv", ".webm", ".avi", ".mov"]:
-        if extract_video_frame(resolved, thumb_path, width, height):
+        if generate_thumbnail_once(
+            thumb_path,
+            lambda temporary_path: extract_video_frame(resolved, temporary_path, width, height),
+        ):
             return FileResponse(thumb_path, media_type="image/webp", headers=THUMB_CACHE_HEADERS)
         return Response(content=generate_fallback_svg(filename), media_type="image/svg+xml")
 
     if ext == ".zip":
         return Response(content=generate_fallback_svg(filename), media_type="image/svg+xml")
 
+    def generate_raster_thumbnail(temporary_path: str) -> bool:
+        try:
+            with Image.open(resolved) as img:
+                img.thumbnail((width, height), Image.Resampling.LANCZOS)
+                if img.mode in ("RGBA", "P"):
+                    img = img.convert("RGBA")
+                else:
+                    img = img.convert("RGB")
+                img.save(temporary_path, "WEBP", quality=80)
+            return True
+        except Exception:
+            return False
+
     try:
-        with Image.open(resolved) as img:
-            img.thumbnail((width, height), Image.Resampling.LANCZOS)
-            if img.mode in ("RGBA", "P"):
-                img = img.convert("RGBA")
-            else:
-                img = img.convert("RGB")
-            img.save(thumb_path, "WEBP", quality=80)
+        if not generate_thumbnail_once(thumb_path, generate_raster_thumbnail):
+            return FileResponse(resolved)
         return FileResponse(thumb_path, media_type="image/webp", headers=THUMB_CACHE_HEADERS)
-    except Exception as err:
+    except Exception:
         return FileResponse(resolved)
 
 

@@ -463,6 +463,17 @@
     object-fit: cover;
   }
 
+  .fullscreen-viewer__thumbnail-slot,
+  .fullscreen-viewer__thumbnail-placeholder {
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+
+  .fullscreen-viewer__thumbnail-placeholder {
+    background: var(--viewer-surface-raised);
+  }
+
   .fullscreen-viewer__thumbnail-index {
     position: absolute;
     right: 0.125rem;

@@ -13,7 +13,9 @@ import { BatchEditToolbar } from './components/BatchEditToolbar';
 import { ConfirmModal } from './components/ConfirmModal';
 import { SettingsModal } from './components/SettingsModal';
 import { MangaGroupModal } from './components/MangaGroupModal';
-import { MonthJumpItem, MonthJumpNavigationOptions } from './components/MonthQuickNav';
+import { MonthJumpItem, MonthJumpNavigationOptions, MonthNavigationPhase } from './components/MonthQuickNav';
+import { getScrollTopForElement, scrollElementToContainerStart, getTargetPageAndLocalIndex } from './utils/galleryLayout';
+import { imageLoadScheduler, ImagePreloadHandle } from './utils/imageLoadScheduler';
 
 const getMonthKeyFromDate = (dateStr?: string) => {
   const value = dateStr?.trim() ?? '';
@@ -60,13 +62,33 @@ const getMonthJumpItemsFromApi = (value: unknown): MonthJumpItem[] => {
   });
 };
 
+const getDynamicThumbnailPrefetchCount = (thumbnailSize: number) => {
+  if (typeof window === 'undefined') return 1;
+
+  const scrollContainer = document.querySelector<HTMLElement>('[data-gallery-scroll-container="true"]');
+  const grid = document.querySelector<HTMLElement>('.gallery-month-virtual-grid');
+  const gridStyle = grid ? window.getComputedStyle(grid) : null;
+  const columns = Math.max(1, gridStyle?.gridTemplateColumns.trim().split(/\s+/).filter(Boolean).length ?? 1);
+  const rowGap = Number.parseFloat(gridStyle?.rowGap ?? '') || 12;
+  const firstCard = grid?.querySelector<HTMLElement>('[data-selection-card="true"]');
+  const cardHeight = firstCard?.getBoundingClientRect().height
+    || Math.max(96, Math.min(480, thumbnailSize));
+  const viewportHeight = scrollContainer?.clientHeight || window.innerHeight;
+  const rows = Math.max(1, Math.ceil(viewportHeight / Math.max(1, cardHeight + rowGap)) + 1);
+  return rows * columns;
+};
+
 interface ImagePageCacheEntry {
   images: ImageItem[];
   total: number;
   monthIndexItems: MonthJumpItem[];
 }
 
-const GRID_THUMBNAIL_PREFETCH_COUNT = 6;
+interface ImagePageRequest {
+  promise: Promise<ImagePageCacheEntry>;
+  controller: AbortController;
+  kind: 'navigation' | 'scrub-settle' | 'hover-prefetch';
+}
 
 interface FilterUrlState {
   selectedMonths: string[];
@@ -190,13 +212,24 @@ export const App: React.FC = () => {
   const mainScrollRef = useRef<HTMLElement | null>(null);
   const imageRequestIdRef = useRef(0);
   const imagePageCacheRef = useRef(new Map<string, ImagePageCacheEntry>());
-  const imagePageRequestsRef = useRef(new Map<string, Promise<ImagePageCacheEntry>>());
-  const thumbnailPreloadRequestsRef = useRef(new Map<string, Promise<void>>());
+  const imagePageRequestsRef = useRef(new Map<string, ImagePageRequest>());
+  const thumbnailPreloadRequestsRef = useRef(new Map<string, ImagePreloadHandle>());
   const blurSaveRequestRef = useRef(0);
   const groupSaveRequestRef = useRef(0);
   const [isLoadingImages, setIsLoadingImages] = useState(false);
   const [pendingMonthKey, setPendingMonthKey] = useState<string | null>(null);
   const pendingMonthScrollBehaviorRef = useRef<ScrollBehavior>('smooth');
+  const [navigationMode, setNavigationMode] = useState<'idle' | 'click-scrolling' | 'scrubbing-preview' | 'scrubbing-settle' | 'scrubbing-commit'>('idle');
+  const [destinationMonthKey, setDestinationMonthKey] = useState<string | null>(null);
+  const [destinationGlobalIndex, setDestinationGlobalIndex] = useState<number | null>(null);
+  const scrubSettleRef = useRef<{
+    timer: number | null;
+    cacheKey: string | null;
+    active: boolean;
+    targetKey: string | null;
+    targetPage: number | null;
+  }>({ timer: null, cacheKey: null, active: false, targetKey: null, targetPage: null });
+  const paginationScrollResetRef = useRef<number | null>(null);
 
   const handleEditModeChange = useCallback((edit: boolean) => {
     setIsEditMode(edit);
@@ -231,10 +264,14 @@ export const App: React.FC = () => {
     setShowScrollTop(scrollTarget.scrollTop > 240);
   };
 
+  const getGalleryScrollContainer = useCallback(() => (
+    mainScrollRef.current?.querySelector<HTMLElement>('[data-gallery-scroll-container="true"]')
+      ?? mainScrollRef.current
+  ), []);
+
   const handleScrollToTop = () => {
     const prefersReducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-    const scrollContainer = mainScrollRef.current?.querySelector<HTMLElement>('[data-gallery-scroll-container="true"]')
-      ?? mainScrollRef.current;
+    const scrollContainer = getGalleryScrollContainer();
     scrollContainer?.scrollTo({
       top: 0,
       behavior: prefersReducedMotion ? 'auto' : 'smooth',
@@ -312,10 +349,9 @@ export const App: React.FC = () => {
     setCurrentPage(1);
     setPendingMonthKey(null);
     pendingMonthScrollBehaviorRef.current = 'smooth';
-    const scrollContainer = mainScrollRef.current?.querySelector<HTMLElement>('[data-gallery-scroll-container="true"]')
-      ?? mainScrollRef.current;
+    const scrollContainer = getGalleryScrollContainer();
     scrollContainer?.scrollTo({ top: 0, behavior: 'auto' });
-  }, [selectedMonths, selectedArtist, searchQuery, sortMode]);
+  }, [getGalleryScrollContainer, selectedMonths, selectedArtist, searchQuery, sortMode]);
 
   const buildImageRequestParams = useCallback((page: number) => {
     const params = new URLSearchParams();
@@ -334,32 +370,43 @@ export const App: React.FC = () => {
     setAvailableMonthIndexItems(page.monthIndexItems);
   }, []);
 
-  const loadImagePage = useCallback((params: URLSearchParams) => {
+  const loadImagePage = useCallback((params: URLSearchParams, kind: ImagePageRequest['kind'] = 'navigation') => {
     const cacheKey = params.toString();
     const cachedPage = imagePageCacheRef.current.get(cacheKey);
     if (cachedPage) return Promise.resolve(cachedPage);
 
     const pendingRequest = imagePageRequestsRef.current.get(cacheKey);
-    if (pendingRequest) return pendingRequest;
+    if (pendingRequest) {
+      if (kind === 'navigation') pendingRequest.kind = 'navigation';
+      return pendingRequest.promise;
+    }
 
-    const request = fetch(`/api/images?${cacheKey}`)
+    const controller = new AbortController();
+    const request = fetch(`/api/images?${cacheKey}`, { signal: controller.signal })
       .then(res => {
         if (!res.ok) throw new Error(`Images request failed: ${res.status}`);
         return res.json();
       })
       .then(data => {
         const page = normalizeImagePage(data);
+        imagePageCacheRef.current.delete(cacheKey);
         imagePageCacheRef.current.set(cacheKey, page);
+        while (imagePageCacheRef.current.size > 24) {
+          const oldestKey = imagePageCacheRef.current.keys().next().value as string | undefined;
+          if (!oldestKey) break;
+          imagePageCacheRef.current.delete(oldestKey);
+        }
         return page;
       });
 
-    imagePageRequestsRef.current.set(cacheKey, request);
+    const requestEntry: ImagePageRequest = { promise: request, controller, kind };
+    imagePageRequestsRef.current.set(cacheKey, requestEntry);
     request.then(
       () => {
-        if (imagePageRequestsRef.current.get(cacheKey) === request) imagePageRequestsRef.current.delete(cacheKey);
+        if (imagePageRequestsRef.current.get(cacheKey) === requestEntry) imagePageRequestsRef.current.delete(cacheKey);
       },
       () => {
-        if (imagePageRequestsRef.current.get(cacheKey) === request) imagePageRequestsRef.current.delete(cacheKey);
+        if (imagePageRequestsRef.current.get(cacheKey) === requestEntry) imagePageRequestsRef.current.delete(cacheKey);
       },
     );
     return request;
@@ -386,6 +433,7 @@ export const App: React.FC = () => {
       })
       .catch(err => {
         if (requestId === imageRequestIdRef.current) {
+          if (err instanceof DOMException && err.name === 'AbortError') return;
           console.error('Failed to fetch images:', err);
         }
       })
@@ -401,7 +449,22 @@ export const App: React.FC = () => {
     fetchImages();
   }, [fetchImages, isWebConfigReady]);
 
-  const resolveMonthTargetPage = useCallback((item: MonthJumpItem) => {
+  useEffect(() => {
+    const fullscreenActive = fullscreenIndex !== null || viewMode === 'fullscreen';
+    if (fullscreenActive) {
+      imageLoadScheduler.pauseOwner('grid');
+      imageLoadScheduler.pauseOwner('month-navigation');
+    } else {
+      imageLoadScheduler.resumeOwner('grid');
+      imageLoadScheduler.resumeOwner('month-navigation');
+    }
+    return () => {
+      imageLoadScheduler.resumeOwner('grid');
+      imageLoadScheduler.resumeOwner('month-navigation');
+    };
+  }, [fullscreenIndex, viewMode]);
+
+  const resolveMonthTarget = useCallback((item: MonthJumpItem) => {
     const fallbackIndex = monthIndexItems.findIndex(month => month.key === item.key);
     const fallbackOffset = fallbackIndex >= 0
       ? monthIndexItems.slice(0, fallbackIndex).reduce((total, month) => total + month.count, 0)
@@ -410,79 +473,356 @@ export const App: React.FC = () => {
       ? item.offset ?? 0
       : fallbackOffset;
 
-    return Math.floor(targetOffset / itemsPerPage) + 1;
+    return {
+      offset: targetOffset,
+      ...getTargetPageAndLocalIndex(targetOffset, itemsPerPage),
+    };
   }, [itemsPerPage, monthIndexItems]);
 
-  const preloadThumbnail = useCallback((item: ImageItem) => {
+  const cancelSpeculativePageRequests = useCallback((preserveCacheKey?: string) => {
+    if (scrubSettleRef.current.timer !== null) {
+      window.clearTimeout(scrubSettleRef.current.timer);
+      scrubSettleRef.current.timer = null;
+    }
+    scrubSettleRef.current.cacheKey = null;
+    for (const [url, preload] of thumbnailPreloadRequestsRef.current) {
+      preload.cancel();
+      thumbnailPreloadRequestsRef.current.delete(url);
+    }
+    for (const [cacheKey, request] of imagePageRequestsRef.current) {
+      if (cacheKey === preserveCacheKey) {
+        request.kind = 'navigation';
+        continue;
+      }
+      if (request.kind !== 'navigation') {
+        request.controller.abort();
+        imagePageRequestsRef.current.delete(cacheKey);
+      }
+    }
+  }, []);
+
+  const supersedeNavigationPageRequests = useCallback((preserveCacheKey: string) => {
+    for (const [cacheKey, request] of imagePageRequestsRef.current) {
+      if (cacheKey === preserveCacheKey || request.kind !== 'navigation') continue;
+      request.controller.abort();
+      imagePageRequestsRef.current.delete(cacheKey);
+    }
+  }, []);
+
+  const preloadThumbnail = useCallback((item: ImageItem, priority: 0 | 1 | 2 | 3 = 3) => {
     if (item.media_status) return;
 
     const url = buildThumbnailUrl(item, thumbnailSize);
     if (thumbnailPreloadRequestsRef.current.has(url)) return;
 
-    const request = new Promise<void>(resolve => {
-      const image = new Image();
-      image.decoding = 'async';
-      image.fetchPriority = 'low';
-      const finish = () => {
-        image.onload = null;
-        image.onerror = null;
-        resolve();
-      };
-      image.onload = finish;
-      image.onerror = finish;
-      image.src = url;
+    const request = imageLoadScheduler.preload({
+      url,
+      priority,
+      kind: 'thumbnail',
+      owner: 'month-navigation',
     });
 
     thumbnailPreloadRequestsRef.current.set(url, request);
-    void request.finally(() => {
+    void request.promise.finally(() => {
       if (thumbnailPreloadRequestsRef.current.get(url) === request) {
         thumbnailPreloadRequestsRef.current.delete(url);
       }
     });
   }, [thumbnailSize]);
 
+  const prefetchCurrentPageWindow = useCallback((target: ReturnType<typeof resolveMonthTarget>) => {
+    if (target.page !== currentPage || images.length === 0) return;
+
+    // Warm the target month before the gallery follows the pointer. Include a
+    // small look-behind because the interpolated scrub position can still be
+    // between the previous and target month when the request starts.
+    const count = getDynamicThumbnailPrefetchCount(thumbnailSize);
+    const lookBehind = Math.max(1, count);
+    const start = Math.max(0, target.localIndex - lookBehind);
+    const end = Math.min(images.length, target.localIndex + count);
+    const windowImages = images.slice(start, end).filter(image => !image.media_status);
+    const keepUrls = new Set(windowImages.map(image => buildThumbnailUrl(image, thumbnailSize)));
+
+    // A long scrub can cross many months in one page. Drop speculative
+    // requests that no longer belong to the current target window so the
+    // pending queue follows the pointer instead of growing with its path.
+    for (const [url, preload] of thumbnailPreloadRequestsRef.current) {
+      if (keepUrls.has(url)) continue;
+      preload.cancel();
+      thumbnailPreloadRequestsRef.current.delete(url);
+    }
+
+    windowImages.forEach(image => preloadThumbnail(image, 1));
+  }, [buildThumbnailUrl, currentPage, images, preloadThumbnail, resolveMonthTarget, thumbnailSize]);
+
+  const applyScrubPreviewPage = useCallback((item: MonthJumpItem, target: ReturnType<typeof resolveMonthTarget>) => {
+    const scrub = scrubSettleRef.current;
+    if (!scrub.active || scrub.targetKey !== item.key || scrub.targetPage !== target.page) return;
+
+    pendingMonthScrollBehaviorRef.current = 'auto';
+    setPendingMonthKey(item.key);
+    setDestinationMonthKey(item.key);
+    setDestinationGlobalIndex(target.localIndex);
+    setNavigationMode('scrubbing-preview');
+    setCurrentPage(target.page);
+  }, [resolveMonthTarget]);
+
   const prefetchMonthPage = useCallback((item: MonthJumpItem) => {
-    const targetPage = resolveMonthTargetPage(item);
-    if (targetPage === currentPage) return;
+    if (scrubSettleRef.current.timer !== null) {
+      window.clearTimeout(scrubSettleRef.current.timer);
+    }
 
-    const params = buildImageRequestParams(targetPage);
-    const cacheKey = params.toString();
-    if (imagePageCacheRef.current.has(cacheKey) || imagePageRequestsRef.current.has(cacheKey)) return;
+    const target = resolveMonthTarget(item);
+    if (scrubSettleRef.current.active) {
+      scrubSettleRef.current.targetKey = item.key;
+      scrubSettleRef.current.targetPage = target.page;
+    }
+    if (target.page === currentPage) {
+      prefetchCurrentPageWindow(target);
+      return;
+    }
+    scrubSettleRef.current.timer = window.setTimeout(() => {
+      scrubSettleRef.current.timer = null;
+      if (navigationMode === 'scrubbing-preview') setNavigationMode('scrubbing-settle');
+      cancelSpeculativePageRequests();
 
-    void loadImagePage(params)
-      .then(page => {
-        // Only warm the first viewport. Prefetching every thumbnail would move
-        // the bottleneck from navigation to a burst of image decoding.
-        page.images.slice(0, GRID_THUMBNAIL_PREFETCH_COUNT).forEach(preloadThumbnail);
-      })
-      .catch(() => undefined);
-  }, [buildImageRequestParams, currentPage, loadImagePage, preloadThumbnail, resolveMonthTargetPage]);
+      const params = buildImageRequestParams(target.page);
+      const cacheKey = params.toString();
+      scrubSettleRef.current.cacheKey = cacheKey;
+      if (imagePageCacheRef.current.has(cacheKey)) {
+        applyScrubPreviewPage(item, target);
+        return;
+      }
+
+      void loadImagePage(params, navigationMode === 'scrubbing-preview' ? 'scrub-settle' : 'hover-prefetch')
+        .then(page => {
+          if (scrubSettleRef.current.cacheKey !== cacheKey) return;
+          const count = getDynamicThumbnailPrefetchCount(thumbnailSize);
+          page.images.slice(target.localIndex, target.localIndex + count).forEach(image => preloadThumbnail(image, 1));
+          applyScrubPreviewPage(item, target);
+        })
+        .catch(error => {
+          if (error instanceof DOMException && error.name === 'AbortError') return;
+        });
+    }, 100);
+  }, [applyScrubPreviewPage, buildImageRequestParams, cancelSpeculativePageRequests, currentPage, loadImagePage, navigationMode, preloadThumbnail, prefetchCurrentPageWindow, resolveMonthTarget, thumbnailSize]);
 
   const handleJumpToMonth = useCallback((item: MonthJumpItem, options: MonthJumpNavigationOptions = {}) => {
+    scrubSettleRef.current.active = false;
+    scrubSettleRef.current.targetKey = null;
+    scrubSettleRef.current.targetPage = null;
+    const target = resolveMonthTarget(item);
+    const preserveCacheKey = buildImageRequestParams(target.page).toString();
+    supersedeNavigationPageRequests(preserveCacheKey);
+    cancelSpeculativePageRequests(preserveCacheKey);
     pendingMonthScrollBehaviorRef.current = options.behavior ?? 'smooth';
     setPendingMonthKey(item.key);
+    setDestinationMonthKey(item.key);
+    setDestinationGlobalIndex(target.localIndex);
+    setNavigationMode(options.scrubbing ? 'scrubbing-commit' : 'click-scrolling');
 
     // The month ruler is navigation, not another filter. The API calculates
     // each month's first offset after applying the current artist/search/month
     // filters and sort mode, so changing page keeps those filters intact.
-    setCurrentPage(resolveMonthTargetPage(item));
-  }, [resolveMonthTargetPage]);
+    setCurrentPage(target.page);
+  }, [buildImageRequestParams, cancelSpeculativePageRequests, resolveMonthTarget, supersedeNavigationPageRequests]);
 
-  useEffect(() => {
-    if (!pendingMonthKey || images.length === 0) return;
+  const handleMonthNavigationChange = useCallback((phase: MonthNavigationPhase, item?: MonthJumpItem) => {
+    if (phase === 'click-start') {
+      scrubSettleRef.current.active = false;
+      scrubSettleRef.current.targetKey = null;
+      scrubSettleRef.current.targetPage = null;
+      const target = item ? resolveMonthTarget(item) : null;
+      setNavigationMode('click-scrolling');
+      setDestinationMonthKey(item?.key ?? null);
+      setDestinationGlobalIndex(target?.localIndex ?? null);
+      return;
+    }
 
-    const frame = window.requestAnimationFrame(() => {
-      const target = document.getElementById(`month-section-${pendingMonthKey}`);
-      if (!target) return;
+    if (phase === 'scrub-start') {
+      cancelSpeculativePageRequests();
+      scrubSettleRef.current.active = true;
+      scrubSettleRef.current.targetKey = item?.key ?? null;
+      scrubSettleRef.current.targetPage = item ? resolveMonthTarget(item).page : null;
+      setNavigationMode('scrubbing-preview');
+      setDestinationMonthKey(item?.key ?? null);
+      setDestinationGlobalIndex(item ? resolveMonthTarget(item).localIndex : null);
+      return;
+    }
 
-      const prefersReducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-      const behavior = prefersReducedMotion ? 'auto' : pendingMonthScrollBehaviorRef.current;
-      target.scrollIntoView({ behavior, block: 'start' });
-      setPendingMonthKey(null);
+    if (phase === 'preview' || phase === 'settle') {
+      setNavigationMode(phase === 'settle' ? 'scrubbing-settle' : 'scrubbing-preview');
+      if (item) {
+        const target = resolveMonthTarget(item);
+        scrubSettleRef.current.targetKey = item.key;
+        scrubSettleRef.current.targetPage = target.page;
+        setDestinationMonthKey(item.key);
+        setDestinationGlobalIndex(target.localIndex);
+      }
+      return;
+    }
+
+    if (phase === 'commit') {
+      scrubSettleRef.current.active = false;
+      scrubSettleRef.current.targetKey = null;
+      scrubSettleRef.current.targetPage = null;
+      setNavigationMode('scrubbing-commit');
+      if (item) {
+        const target = resolveMonthTarget(item);
+        const preserveCacheKey = buildImageRequestParams(target.page).toString();
+        supersedeNavigationPageRequests(preserveCacheKey);
+        cancelSpeculativePageRequests(preserveCacheKey);
+        pendingMonthScrollBehaviorRef.current = 'auto';
+        setDestinationMonthKey(item.key);
+        setDestinationGlobalIndex(target.localIndex);
+        setPendingMonthKey(item.key);
+        setCurrentPage(target.page);
+      }
+      else cancelSpeculativePageRequests();
+      return;
+    }
+
+    if (phase === 'cancel' || phase === 'end') {
+      cancelSpeculativePageRequests();
+      scrubSettleRef.current.active = false;
+      scrubSettleRef.current.targetKey = null;
+      scrubSettleRef.current.targetPage = null;
+      setNavigationMode('idle');
+      setDestinationMonthKey(null);
+      setDestinationGlobalIndex(null);
+    }
+  }, [buildImageRequestParams, cancelSpeculativePageRequests, resolveMonthTarget, supersedeNavigationPageRequests]);
+
+  const handlePageChange = useCallback((page: number) => {
+    const preserveCacheKey = buildImageRequestParams(page).toString();
+    supersedeNavigationPageRequests(preserveCacheKey);
+    cancelSpeculativePageRequests(preserveCacheKey);
+    paginationScrollResetRef.current = page;
+    pendingMonthScrollBehaviorRef.current = 'smooth';
+    setPendingMonthKey(null);
+    setDestinationMonthKey(null);
+    setDestinationGlobalIndex(null);
+    setNavigationMode('idle');
+    getGalleryScrollContainer()?.scrollTo({ top: 0, behavior: 'auto' });
+    setCurrentPage(page);
+  }, [buildImageRequestParams, cancelSpeculativePageRequests, getGalleryScrollContainer, supersedeNavigationPageRequests]);
+
+  React.useLayoutEffect(() => {
+    if (paginationScrollResetRef.current !== currentPage || pendingMonthKey) return undefined;
+
+    const container = getGalleryScrollContainer();
+    if (!container) return undefined;
+
+    let frameId: number | null = null;
+    let secondFrameId: number | null = null;
+    let settleTimer: number | null = null;
+    const reset = () => container.scrollTo({ top: 0, behavior: 'auto' });
+
+    frameId = window.requestAnimationFrame(() => {
+      reset();
+      secondFrameId = window.requestAnimationFrame(() => {
+        reset();
+        settleTimer = window.setTimeout(() => {
+          reset();
+          if (paginationScrollResetRef.current === currentPage) paginationScrollResetRef.current = null;
+        }, 80);
+      });
     });
 
-    return () => window.cancelAnimationFrame(frame);
-  }, [images, pendingMonthKey]);
+    return () => {
+      if (frameId !== null) window.cancelAnimationFrame(frameId);
+      if (secondFrameId !== null) window.cancelAnimationFrame(secondFrameId);
+      if (settleTimer !== null) window.clearTimeout(settleTimer);
+    };
+  }, [currentPage, getGalleryScrollContainer, images, pendingMonthKey]);
+
+  useEffect(() => {
+    if (navigationMode === 'idle' || pendingMonthKey) return undefined;
+    const container = mainScrollRef.current?.querySelector<HTMLElement>('[data-gallery-scroll-container="true"]')
+      ?? mainScrollRef.current;
+    if (!container) return undefined;
+
+    let settleTimer: number | null = null;
+    const finish = () => {
+      if (settleTimer !== null) window.clearTimeout(settleTimer);
+      setNavigationMode('idle');
+      setDestinationMonthKey(null);
+      setDestinationGlobalIndex(null);
+    };
+    const scheduleFinish = () => {
+      if (settleTimer !== null) window.clearTimeout(settleTimer);
+      settleTimer = window.setTimeout(finish, navigationMode === 'click-scrolling' ? 140 : 90);
+    };
+    container.addEventListener('scroll', scheduleFinish, { passive: true });
+    container.addEventListener('scrollend', finish as EventListener);
+    const fallbackTimer = window.setTimeout(finish, navigationMode === 'click-scrolling' ? 1600 : 500);
+
+    return () => {
+      container.removeEventListener('scroll', scheduleFinish);
+      container.removeEventListener('scrollend', finish as EventListener);
+      window.clearTimeout(fallbackTimer);
+      if (settleTimer !== null) window.clearTimeout(settleTimer);
+    };
+  }, [navigationMode, pendingMonthKey]);
+
+  React.useLayoutEffect(() => {
+    if (!pendingMonthKey || images.length === 0) return;
+
+    let frameId: number | null = null;
+    let frameCount = 0;
+    let stableFrames = 0;
+    let previousTargetTop: number | null = null;
+    let previousScrollTop: number | null = null;
+    const prefersReducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    const behavior = prefersReducedMotion ? 'auto' : pendingMonthScrollBehaviorRef.current;
+
+    const alignTarget = () => {
+      const container = getGalleryScrollContainer();
+      const target = document.getElementById(`month-section-${pendingMonthKey}`);
+      if (!container || !target) {
+        frameId = window.requestAnimationFrame(alignTarget);
+        return;
+      }
+
+      const containerRect = container.getBoundingClientRect();
+      const targetRect = target.getBoundingClientRect();
+      const targetTop = targetRect.top - containerRect.top;
+      const requestedTop = getScrollTopForElement(container, target);
+      const shouldAlign = Math.abs(container.scrollTop - requestedTop) > 0.5;
+      const shouldPreserveInitialMotion = behavior === 'smooth' && frameCount < 8;
+
+      if (shouldAlign && (frameCount === 0 || !shouldPreserveInitialMotion || frameCount >= 8)) {
+        container.scrollTo({
+          top: requestedTop,
+          behavior: frameCount === 0 ? behavior : 'auto',
+        });
+      }
+
+      const currentScrollTop = container.scrollTop;
+      const layoutStable = previousTargetTop !== null
+        && Math.abs(targetTop - previousTargetTop) <= 1
+        && previousScrollTop !== null
+        && Math.abs(currentScrollTop - previousScrollTop) <= 1;
+      if (Math.abs(targetTop) <= 1 && layoutStable) stableFrames += 1;
+      else stableFrames = 0;
+      previousTargetTop = targetTop;
+      previousScrollTop = currentScrollTop;
+      frameCount += 1;
+
+      if (stableFrames >= 4 || frameCount >= 45) {
+        scrollElementToContainerStart(container, target, 'auto');
+        setPendingMonthKey(null);
+        return;
+      }
+
+      frameId = window.requestAnimationFrame(alignTarget);
+    };
+
+    frameId = window.requestAnimationFrame(alignTarget);
+    return () => {
+      if (frameId !== null) window.cancelAnimationFrame(frameId);
+    };
+  }, [getGalleryScrollContainer, images, pendingMonthKey]);
 
   const applyWebConfig = useCallback((data: Partial<WebConfig>) => {
     const config = normalizeWebConfig(data);
@@ -923,7 +1263,7 @@ export const App: React.FC = () => {
             currentPage={currentPage}
             itemsPerPage={itemsPerPage}
             thumbnailSize={thumbnailSize}
-            onPageChange={(p) => setCurrentPage(p)}
+            onPageChange={handlePageChange}
             onItemsPerPageChange={(num) => setItemsPerPage(num)}
             sortMode={sortMode}
             onSortModeChange={(mode) => setSortMode(mode)}
@@ -945,10 +1285,14 @@ export const App: React.FC = () => {
             groupMangaPosts={groupMangaPosts}
             onOpenWorkGroup={handleOpenWorkGroupModal}
             artists={artists}
-            monthIndexItems={monthIndexItems}
-            onJumpToMonth={handleJumpToMonth}
-            onPrefetchMonth={prefetchMonthPage}
-            isLoading={isLoadingImages}
+             monthIndexItems={monthIndexItems}
+             onJumpToMonth={handleJumpToMonth}
+             onPrefetchMonth={prefetchMonthPage}
+             onNavigationChange={handleMonthNavigationChange}
+             navigationMode={navigationMode}
+             destinationMonthKey={destinationMonthKey}
+             destinationGlobalIndex={destinationGlobalIndex}
+             isLoading={isLoadingImages}
             blurEnabled={blurEnabled}
           />
           )}

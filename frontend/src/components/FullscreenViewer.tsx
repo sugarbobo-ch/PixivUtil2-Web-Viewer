@@ -5,11 +5,60 @@ import { buildThumbnailUrl } from '../utils/webConfig';
 import { fetchSourceLink } from '../utils/sourceLinks';
 import { LocalOpenTarget, openLocalMedia } from '../utils/localFileActions';
 import { MediaIssuePlaceholder } from './MediaIssuePlaceholder';
+import { imageLoadScheduler, useImageLoadPermission } from '../utils/imageLoadScheduler';
 import { ChevronLeft, ChevronRight, X, Download, Trash2, Info, ExternalLink, FolderOpen, Image as ImageIcon } from 'lucide-react';
 
 const buildMediaUrl = (item: ImageItem): string => (
   `/api/file?path=${encodeURIComponent(item.save_name || '')}&image_id=${item.image_id}`
 );
+
+interface FilmstripThumbnailProps {
+  item: ImageItem;
+  index: number;
+  currentIndex: number;
+  isVisible: boolean;
+  thumbnailSize: number;
+  blurEnabled: boolean;
+}
+
+const FilmstripThumbnail: React.FC<FilmstripThumbnailProps> = ({
+  item,
+  index,
+  currentIndex,
+  isVisible,
+  thumbnailSize,
+  blurEnabled,
+}) => {
+  const url = buildThumbnailUrl(item, thumbnailSize);
+  const isNearCurrent = Math.abs(index - currentIndex) <= 3;
+  const loadEnabled = isNearCurrent || isVisible;
+  const admitted = useImageLoadPermission({
+    url,
+    priority: 2,
+    kind: 'thumbnail',
+    owner: 'filmstrip',
+    enabled: loadEnabled,
+  });
+
+  return (
+    <span className="fullscreen-viewer__thumbnail-slot">
+      {admitted ? (
+        <img
+          src={url}
+          alt={item.title || `P${index + 1}`}
+          loading="lazy"
+          decoding="async"
+          {...{ fetchpriority: 'low' }}
+          onLoad={() => imageLoadScheduler.markLoaded(url)}
+          onError={() => imageLoadScheduler.markFinished(url, false)}
+          className={`fullscreen-viewer__thumbnail-image ${blurEnabled ? 'blur-media blur-media--filmstrip' : ''}`}
+        />
+      ) : (
+        <span className="fullscreen-viewer__thumbnail-placeholder" aria-hidden="true" />
+      )}
+    </span>
+  );
+};
 
 interface FullscreenViewerProps {
   images: ImageItem[];
@@ -60,8 +109,11 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
   const activeThumbnailRef = useRef<HTMLButtonElement | null>(null);
   const hasPositionedFilmstrip = useRef(false);
   const preloadedImagesRef = useRef(new Map<string, HTMLImageElement>());
+  const preloadHandlesRef = useRef(new Map<string, { cancel: () => void }>());
+  const navigationDirectionRef = useRef<1 | -1>(1);
   const displayedImageUrlRef = useRef(displayedImageUrl);
   const [isFilmstripPositioned, setIsFilmstripPositioned] = useState(false);
+  const [visibleFilmstripIndexes, setVisibleFilmstripIndexes] = useState<Set<number>>(() => new Set());
   const previouslyFocusedElement = useRef<HTMLElement | null>(null);
 
   const canOpenLocalMedia = Boolean(
@@ -113,6 +165,20 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
     }
   }, [canOpenLocalMedia, currentItem]);
 
+  // Reserve the highest-priority original-image slot for the image currently
+  // shown in the stage before directional neighbors are scheduled.
+  useEffect(() => {
+    if (!currentItem || currentItemIsVideo || currentItem.media_status || !currentMediaUrl) return undefined;
+
+    const handle = imageLoadScheduler.request({
+      url: currentMediaUrl,
+      priority: 0,
+      kind: 'original',
+      owner: 'fullscreen',
+    });
+    return () => handle.cancel();
+  }, [currentItem, currentItemIsVideo, currentMediaUrl]);
+
   // Lock the page behind the previewer and move focus into the dialog.
   useEffect(() => {
     previouslyFocusedElement.current = document.activeElement instanceof HTMLElement
@@ -157,16 +223,43 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
     }
   }, [currentIndex, images.length]);
 
+  // Observe the entire filmstrip with one root observer. The grid virtualizer
+  // deliberately owns the expensive viewport work; the filmstrip only needs
+  // to reveal thumbnails that are actually in or near its horizontal viewport.
+  useEffect(() => {
+    const root = filmstripScrollRef.current;
+    setVisibleFilmstripIndexes(new Set());
+    if (!root || typeof IntersectionObserver === 'undefined') {
+      return undefined;
+    }
+
+    const observer = new IntersectionObserver(entries => {
+      setVisibleFilmstripIndexes(previous => {
+        const next = new Set(previous);
+        entries.forEach(entry => {
+          const index = Number((entry.target as HTMLElement).dataset.filmstripIndex);
+          if (!Number.isInteger(index)) return;
+          if (entry.isIntersecting) next.add(index);
+          else next.delete(index);
+        });
+        if (next.size === previous.size && Array.from(next).every(index => previous.has(index))) return previous;
+        return next;
+      });
+    }, { root, rootMargin: '96px' });
+
+    root.querySelectorAll<HTMLElement>('[data-filmstrip-index]').forEach(element => observer.observe(element));
+    return () => observer.disconnect();
+  }, [currentIndex, images.length]);
+
   // Dynamic configurable image preloader. Keep the query string identical to
   // the visible image URL so the browser can reuse the fetched response.
   useEffect(() => {
     if (!images.length || preloadCount <= 0) return;
 
     const preloadIndexes = new Set<number>();
-    for (let i = 1; i <= preloadCount; i++) {
-      preloadIndexes.add(currentIndex + i);
-      preloadIndexes.add(currentIndex - i);
-    }
+    const direction = navigationDirectionRef.current;
+    for (let i = 1; i <= preloadCount; i++) preloadIndexes.add(currentIndex + direction * i);
+    if (preloadCount > 1) preloadIndexes.add(currentIndex - direction);
 
     const activePreloadUrls = new Set<string>(
       currentItem && !currentItemIsVideo && currentMediaUrl ? [currentMediaUrl] : [],
@@ -181,21 +274,35 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
 
           const img = new Image();
           img.decoding = 'async';
-          img.fetchPriority = Math.abs(idx - currentIndex) === 1 ? 'high' : 'low';
-          img.src = url;
+          img.addEventListener('load', () => imageLoadScheduler.markLoaded(url), { once: true });
+          img.addEventListener('error', () => imageLoadScheduler.markFinished(url, false), { once: true });
+          const priority = Math.abs(idx - currentIndex) === 1 ? 1 : 2;
+          img.fetchPriority = priority === 1 ? 'high' : 'low';
           preloadedImagesRef.current.set(url, img);
-
-          if (Math.abs(idx - currentIndex) === 1) {
-            void img.decode().catch(() => undefined);
-          }
+          const handle = imageLoadScheduler.request({
+            url,
+            priority,
+            kind: 'original',
+            owner: 'fullscreen',
+          });
+          preloadHandlesRef.current.set(url, handle);
+          void handle.admitted.then(() => {
+            if (preloadedImagesRef.current.get(url) !== img) return;
+            img.src = url;
+            if (Math.abs(idx - currentIndex) === 1) void img.decode().catch(() => undefined);
+          });
         }
       }
     });
 
     for (const url of preloadedImagesRef.current.keys()) {
-      if (!activePreloadUrls.has(url)) preloadedImagesRef.current.delete(url);
+      if (!activePreloadUrls.has(url)) {
+        preloadedImagesRef.current.delete(url);
+        preloadHandlesRef.current.get(url)?.cancel();
+        preloadHandlesRef.current.delete(url);
+      }
     }
-  }, [currentIndex, images, preloadCount]);
+  }, [currentIndex, currentItem, currentItemIsVideo, currentMediaUrl, images, preloadCount]);
 
   // Keep the previous image on screen until the next one has loaded and
   // decoded. Replacing the visible <img> with an unfinished request exposes a
@@ -223,6 +330,7 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
       revealFrame = window.requestAnimationFrame(() => {
         revealFrame = null;
         if (cancelled) return;
+        imageLoadScheduler.markLoaded(currentMediaUrl);
         displayedImageUrlRef.current = currentMediaUrl;
         setDisplayedImageUrl(currentMediaUrl);
       });
@@ -249,6 +357,7 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
   }, [currentItemIsVideo, currentMediaUrl]);
 
   const handleNext = useCallback(() => {
+    navigationDirectionRef.current = 1;
     if (currentIndex < images.length - 1) {
       onNavigate(currentIndex + 1);
     } else if (onNavigateNextWork) {
@@ -257,6 +366,7 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
   }, [currentIndex, images.length, onNavigate, onNavigateNextWork]);
 
   const handlePrev = useCallback(() => {
+    navigationDirectionRef.current = -1;
     if (currentIndex > 0) {
       onNavigate(currentIndex - 1);
     } else if (onNavigatePrevWork) {
@@ -474,10 +584,12 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
           <img
               src={displayedImageUrl ?? mediaUrl}
               alt={currentItem.title}
-              loading="eager"
-              decoding="async"
-              {...{ fetchpriority: 'high' }}
-              className={`fullscreen-viewer__media ${blurEnabled ? 'blur-media blur-media--viewer' : ''}`}
+               loading="eager"
+               decoding="async"
+               {...{ fetchpriority: 'high' }}
+               onLoad={event => imageLoadScheduler.markLoaded(event.currentTarget.currentSrc || mediaUrl)}
+               onError={event => imageLoadScheduler.markFinished(event.currentTarget.currentSrc || mediaUrl, false)}
+               className={`fullscreen-viewer__media ${blurEnabled ? 'blur-media blur-media--viewer' : ''}`}
             />
         )}
 
@@ -561,7 +673,6 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
             {images.map((item, idx) => {
               const isActive = idx === currentIndex;
               const isWorkBoundary = idx > 0 && getItemGroupKey(images[idx]) !== getItemGroupKey(images[idx - 1]);
-              const isNearCurrent = Math.abs(idx - currentIndex) <= 25;
 
               return (
                 <React.Fragment key={item.image_id || idx}>
@@ -577,6 +688,7 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
                     ref={(el) => {
                       if (isActive) activeThumbnailRef.current = el;
                     }}
+                    data-filmstrip-index={idx}
                     onClick={() => onNavigate(idx)}
                     aria-label={`Preview image ${idx + 1}`}
                     aria-current={isActive ? 'true' : undefined}
@@ -585,12 +697,13 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
                     {item.media_status ? (
                       <MediaIssuePlaceholder message={item.media_error} compact />
                     ) : (
-                      <img
-                        src={buildThumbnailUrl(item, thumbnailSize)}
-                        alt={item.title || `P${idx + 1}`}
-                        loading={isNearCurrent ? 'eager' : 'lazy'}
-                        decoding="async"
-                        className={`fullscreen-viewer__thumbnail-image ${blurEnabled ? 'blur-media blur-media--filmstrip' : ''}`}
+                      <FilmstripThumbnail
+                        item={item}
+                        index={idx}
+                        currentIndex={currentIndex}
+                        isVisible={visibleFilmstripIndexes.has(idx)}
+                        thumbnailSize={thumbnailSize}
+                        blurEnabled={blurEnabled}
                       />
                     )}
                     <span className="fullscreen-viewer__thumbnail-index">
