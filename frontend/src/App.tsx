@@ -1573,6 +1573,7 @@ export const App: React.FC = () => {
         message="更新只會讀取目前繪師的資料夾，並寫入 Web Viewer 自己的索引。既有索引會先維持顯示，你可以繼續瀏覽；完成後列表會自動更新。"
         confirmLabel="開始背景更新"
         cancelLabel="稍後再做"
+        variant="primary"
         onConfirm={() => void handleStartArtistUpdate()}
         onCancel={() => setIsArtistUpdateNoticeOpen(false)}
       />

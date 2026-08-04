@@ -616,6 +616,11 @@
   color: var(--settings-danger);
 }
 
+.settings-modal__primary-icon {
+  background: color-mix(in oklch, var(--settings-primary) 12%, var(--settings-surface-soft));
+  color: var(--settings-primary);
+}
+
 .settings-modal__danger-note {
   border: 1px solid color-mix(in oklch, var(--settings-danger) 28%, var(--settings-border-soft));
   background: color-mix(in oklch, var(--settings-danger) 8%, var(--settings-surface-soft));
