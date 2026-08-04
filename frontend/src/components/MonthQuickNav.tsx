@@ -232,14 +232,16 @@ export const MonthQuickNav: React.FC<MonthQuickNavProps> = ({ items, sectionKeys
 
     const main = railRef.current?.closest('main') as HTMLElement | null;
     const scrollRoot = main?.querySelector<HTMLElement>('[data-gallery-scroll-container="true"]') ?? main;
+    // The gallery sections are stable for this page. Resolve them once when
+    // the page/filter changes instead of querying every section again on each
+    // scroll frame.
+    const sectionElements = items
+      .map(item => document.getElementById(`month-section-${item.key}`))
+      .filter((element): element is HTMLElement => element !== null);
     let frameId: number | null = null;
 
     const updateActiveMonth = () => {
       frameId = null;
-      const sectionElements = items
-        .map(item => document.getElementById(`month-section-${item.key}`))
-        .filter((element): element is HTMLElement => element !== null);
-
       if (sectionElements.length === 0) return;
 
       const activationLine = (scrollRoot?.getBoundingClientRect().top ?? 0) + 96;

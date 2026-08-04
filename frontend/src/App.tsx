@@ -878,10 +878,16 @@ export const App: React.FC = () => {
   }, [navigationMode, pendingMonthKey]);
 
   React.useLayoutEffect(() => {
-    if (!pendingMonthKey || images.length === 0) return;
+    // Do not poll the DOM while a cross-page request is in flight. The old
+    // page remains mounted during that interval, so a requestAnimationFrame
+    // loop would spin once per frame waiting for a section that cannot exist
+    // yet and compete with the navigation response.
+    if (!pendingMonthKey || isLoadingImages || images.length === 0) return undefined;
 
     let frameId: number | null = null;
+    let retryTimer: number | null = null;
     let frameCount = 0;
+    let missingTargetAttempts = 0;
     let stableFrames = 0;
     let previousTargetTop: number | null = null;
     let previousScrollTop: number | null = null;
@@ -892,9 +898,18 @@ export const App: React.FC = () => {
       const container = getGalleryScrollContainer();
       const target = document.getElementById(`month-section-${pendingMonthKey}`);
       if (!container || !target) {
-        frameId = window.requestAnimationFrame(alignTarget);
+        if (missingTargetAttempts >= 40) {
+          setPendingMonthKey(null);
+          return;
+        }
+        missingTargetAttempts += 1;
+        retryTimer = window.setTimeout(() => {
+          retryTimer = null;
+          alignTarget();
+        }, 50);
         return;
       }
+      missingTargetAttempts = 0;
 
       const containerRect = container.getBoundingClientRect();
       const targetRect = target.getBoundingClientRect();
@@ -933,8 +948,9 @@ export const App: React.FC = () => {
     frameId = window.requestAnimationFrame(alignTarget);
     return () => {
       if (frameId !== null) window.cancelAnimationFrame(frameId);
+      if (retryTimer !== null) window.clearTimeout(retryTimer);
     };
-  }, [getGalleryScrollContainer, images, pendingMonthKey]);
+  }, [getGalleryScrollContainer, images, isLoadingImages, pendingMonthKey]);
 
   const applyWebConfig = useCallback((data: Partial<WebConfig>) => {
     const config = normalizeWebConfig(data);

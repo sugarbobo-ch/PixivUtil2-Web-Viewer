@@ -1,6 +1,6 @@
 @echo off
 echo =========================================
-echo  Starting PixivUtil2 Web Viewer & API...
+echo  Starting PixivUtil2 Web Viewer ^& API...
 echo =========================================
 
 cd /d "%~dp0backend"

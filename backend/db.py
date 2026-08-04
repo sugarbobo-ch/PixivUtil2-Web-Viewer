@@ -204,10 +204,6 @@ def _ensure_viewer_schema(cursor: sqlite3.Cursor) -> None:
         CREATE INDEX IF NOT EXISTS idx_viewer_media_metadata_image_id
         ON viewer_media_metadata (image_id)
     """)
-    cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_viewer_media_metadata_scope_present
-        ON viewer_media_metadata (scope_key, is_present, normalized_path)
-    """)
     media_metadata_columns = {
         row["name"]
         for row in cursor.execute("PRAGMA table_info(viewer_media_metadata)").fetchall()
@@ -220,6 +216,14 @@ def _ensure_viewer_schema(cursor: sqlite3.Cursor) -> None:
         )
     if "scope_key" not in media_metadata_columns:
         cursor.execute("ALTER TABLE viewer_media_metadata ADD COLUMN scope_key TEXT")
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_viewer_media_metadata_scope_present
+        ON viewer_media_metadata (scope_key, is_present, normalized_path)
+    """)
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_viewer_media_metadata_path_nocase
+        ON viewer_media_metadata (normalized_path COLLATE NOCASE)
+    """)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS viewer_dominant_color (
             normalized_path TEXT PRIMARY KEY,
