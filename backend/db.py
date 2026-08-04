@@ -6,11 +6,19 @@ import time
 import uuid
 import hashlib
 import threading
+import json
+from pathlib import Path
+from urllib.parse import quote
 from typing import Callable, List, Dict, Any, Optional, Tuple
 
 import config_paths
 
-DB_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "db.sqlite"))
+# ``PIXIV_DB_PATH`` is strictly read-only.  ``DB_PATH`` is retained as a
+# compatibility alias for tests and existing Viewer callers, but now points to
+# the Web Viewer-owned database instead of PixivUtil2's database.
+PIXIV_DB_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "db.sqlite"))
+VIEWER_DB_PATH = config_paths.VIEWER_DB_PATH
+DB_PATH = VIEWER_DB_PATH
 MEDIA_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".mp4"}
 MEDIA_SIGNATURES = {
     ".jpg": (b"\xff\xd8\xff",),
@@ -126,6 +134,8 @@ def get_media_status(file_path: Optional[str]) -> Tuple[Optional[str], Optional[
 
 
 def get_db_connection() -> sqlite3.Connection:
+    if os.path.normcase(os.path.abspath(DB_PATH)) == os.path.normcase(os.path.abspath(PIXIV_DB_PATH)):
+        raise RuntimeError("Refusing to write Web Viewer data into PixivUtil2's database")
     conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL;")
@@ -133,7 +143,27 @@ def get_db_connection() -> sqlite3.Connection:
     return conn
 
 
-VIEWER_SCHEMA_VERSION = 4
+def get_pixiv_db_connection() -> Optional[sqlite3.Connection]:
+    """Open PixivUtil2's database in SQLite read-only mode only."""
+    if not os.path.isfile(PIXIV_DB_PATH):
+        return None
+
+    uri_path = os.path.abspath(PIXIV_DB_PATH).replace("\\", "/")
+    try:
+        connection = sqlite3.connect(
+            f"file:{quote(uri_path, safe='/:')}?mode=ro",
+            uri=True,
+            timeout=30,
+        )
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA query_only=ON;")
+        connection.execute("PRAGMA busy_timeout=30000;")
+        return connection
+    except (OSError, sqlite3.Error):
+        return None
+
+
+VIEWER_SCHEMA_VERSION = 5
 DOMINANT_COLOR_ALGORITHM_VERSION = "rgb-bucket-v1"
 LIBRARY_JOB_ACTIVE_STATUSES = ("queued", "running", "cancelling")
 LIBRARY_JOB_TERMINAL_STATUSES = ("completed", "cancelled", "failed", "interrupted")
@@ -164,13 +194,32 @@ def _ensure_viewer_schema(cursor: sqlite3.Cursor) -> None:
             file_size INTEGER NOT NULL,
             mtime_ns INTEGER NOT NULL,
             fingerprint TEXT NOT NULL,
-            updated_at TEXT NOT NULL
+            updated_at TEXT NOT NULL,
+            last_seen_at TEXT,
+            is_present INTEGER NOT NULL DEFAULT 1,
+            scope_key TEXT
         )
     """)
     cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_viewer_media_metadata_image_id
         ON viewer_media_metadata (image_id)
     """)
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_viewer_media_metadata_scope_present
+        ON viewer_media_metadata (scope_key, is_present, normalized_path)
+    """)
+    media_metadata_columns = {
+        row["name"]
+        for row in cursor.execute("PRAGMA table_info(viewer_media_metadata)").fetchall()
+    }
+    if "last_seen_at" not in media_metadata_columns:
+        cursor.execute("ALTER TABLE viewer_media_metadata ADD COLUMN last_seen_at TEXT")
+    if "is_present" not in media_metadata_columns:
+        cursor.execute(
+            "ALTER TABLE viewer_media_metadata ADD COLUMN is_present INTEGER NOT NULL DEFAULT 1"
+        )
+    if "scope_key" not in media_metadata_columns:
+        cursor.execute("ALTER TABLE viewer_media_metadata ADD COLUMN scope_key TEXT")
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS viewer_dominant_color (
             normalized_path TEXT PRIMARY KEY,
@@ -225,6 +274,9 @@ def _ensure_viewer_schema(cursor: sqlite3.Cursor) -> None:
             colors_created INTEGER NOT NULL DEFAULT 0,
             colors_reused INTEGER NOT NULL DEFAULT 0,
             cache_moved INTEGER NOT NULL DEFAULT 0,
+            scope_json TEXT NOT NULL DEFAULT '[]',
+            priority INTEGER NOT NULL DEFAULT 50,
+            automatic INTEGER NOT NULL DEFAULT 0,
             current_file TEXT,
             error_message TEXT,
             cancel_requested INTEGER NOT NULL DEFAULT 0,
@@ -232,6 +284,41 @@ def _ensure_viewer_schema(cursor: sqlite3.Cursor) -> None:
             started_at TEXT,
             finished_at TEXT,
             updated_at TEXT NOT NULL
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS viewer_index_scope (
+            scope_key TEXT PRIMARY KEY,
+            scope_type TEXT NOT NULL,
+            member_id INTEGER,
+            directory TEXT NOT NULL,
+            directory_mtime_ns INTEGER,
+            directory_signature TEXT,
+            probe_signature TEXT,
+            dirty INTEGER NOT NULL DEFAULT 1,
+            status TEXT NOT NULL DEFAULT 'never-indexed',
+            last_probe_at TEXT,
+            last_indexed_at TEXT,
+            last_error TEXT
+        )
+    """)
+    scope_columns = {
+        row["name"]
+        for row in cursor.execute("PRAGMA table_info(viewer_index_scope)").fetchall()
+    }
+    if "probe_signature" not in scope_columns:
+        cursor.execute("ALTER TABLE viewer_index_scope ADD COLUMN probe_signature TEXT")
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_viewer_index_scope_status
+        ON viewer_index_scope (dirty, status, last_indexed_at)
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS viewer_source_snapshot (
+            source_name TEXT PRIMARY KEY,
+            source_path TEXT NOT NULL,
+            source_size INTEGER NOT NULL,
+            source_mtime_ns INTEGER NOT NULL,
+            synced_at TEXT NOT NULL
         )
     """)
     cursor.execute("""
@@ -270,6 +357,18 @@ def _ensure_viewer_schema(cursor: sqlite3.Cursor) -> None:
         cursor.execute(
             "ALTER TABLE viewer_library_job ADD COLUMN cache_moved INTEGER NOT NULL DEFAULT 0"
         )
+    if "scope_json" not in job_columns:
+        cursor.execute(
+            "ALTER TABLE viewer_library_job ADD COLUMN scope_json TEXT NOT NULL DEFAULT '[]'"
+        )
+    if "priority" not in job_columns:
+        cursor.execute(
+            "ALTER TABLE viewer_library_job ADD COLUMN priority INTEGER NOT NULL DEFAULT 50"
+        )
+    if "automatic" not in job_columns:
+        cursor.execute(
+            "ALTER TABLE viewer_library_job ADD COLUMN automatic INTEGER NOT NULL DEFAULT 0"
+        )
     cursor.execute("""
         INSERT INTO viewer_schema_version (schema_name, version, updated_at)
         VALUES ('viewer', ?, ?)
@@ -280,6 +379,12 @@ def _ensure_viewer_schema(cursor: sqlite3.Cursor) -> None:
 
 
 def init_db_schema():
+    """Initialize only Web Viewer-owned SQLite schema and snapshot metadata.
+
+    PixivUtil2's database is deliberately never initialized, migrated, or
+    written here.  Its existing rows are copied into the separate Viewer DB
+    through a read-only connection below.
+    """
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("""
@@ -302,6 +407,14 @@ def init_db_schema():
             )
         """)
         cursor.execute("""
+            CREATE TABLE IF NOT EXISTS pixiv_manga_image (
+                image_id INTEGER NOT NULL,
+                save_name TEXT NOT NULL,
+                created_date DATE,
+                last_update_date DATE
+            )
+        """)
+        cursor.execute("""
             CREATE TABLE IF NOT EXISTS pixivutil2_trash_image (
                 trash_id INTEGER PRIMARY KEY AUTOINCREMENT,
                 image_id INTEGER NOT NULL,
@@ -311,20 +424,193 @@ def init_db_schema():
                 sent_to_system_recycle_at TEXT
             )
         """)
-        trash_columns = {
-            row["name"]
-            for row in cursor.execute("PRAGMA table_info(pixivutil2_trash_image)").fetchall()
-        }
-        if "sent_to_system_recycle_at" not in trash_columns:
-            cursor.execute(
-                "ALTER TABLE pixivutil2_trash_image ADD COLUMN sent_to_system_recycle_at TEXT"
-            )
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_pixivutil2_trash_image_id
             ON pixivutil2_trash_image (image_id)
         """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_viewer_master_image_member_date
+            ON pixiv_master_image (member_id, created_date, image_id)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_viewer_manga_image_image
+            ON pixiv_manga_image (image_id, created_date)
+        """)
         _ensure_viewer_schema(cursor)
         conn.commit()
+
+
+
+def sync_pixiv_snapshot() -> None:
+    """Import the read-only PixivUtil2 snapshot from a background worker."""
+    init_db_schema()
+    _sync_pixiv_snapshot()
+
+
+def _source_table_exists(connection: sqlite3.Connection, table_name: str) -> bool:
+    row = connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1",
+        (table_name,),
+    ).fetchone()
+    return row is not None
+
+
+def _source_table_columns(connection: sqlite3.Connection, table_name: str) -> set[str]:
+    return {
+        str(row["name"])
+        for row in connection.execute(f"PRAGMA table_info({table_name})").fetchall()
+    }
+
+
+def _sync_pixiv_snapshot() -> None:
+    """Copy existing PixivUtil2 rows into the Viewer DB without writing source.
+
+    This is a one-way import.  Subsequent file indexing updates the Viewer
+    copy only, so PixivUtil2 remains an immutable source of legacy metadata.
+    """
+    try:
+        source_stat = os.stat(PIXIV_DB_PATH)
+    except OSError:
+        return
+
+    try:
+        with get_db_connection() as viewer_conn:
+            snapshot = viewer_conn.execute(
+                """
+                SELECT source_size, source_mtime_ns
+                FROM viewer_source_snapshot
+                WHERE source_name = 'pixivutil2'
+                """
+            ).fetchone()
+            if snapshot and (
+                int(snapshot["source_size"]) == int(source_stat.st_size)
+                and int(snapshot["source_mtime_ns"]) == int(source_stat.st_mtime_ns)
+            ):
+                return
+    except sqlite3.Error:
+        return
+
+    source_conn = get_pixiv_db_connection()
+    if source_conn is None:
+        return
+
+    try:
+        members = []
+        images = []
+        manga_images = []
+        trash_entries = []
+        manga_table_present = False
+        if _source_table_exists(source_conn, "pixiv_master_member"):
+            members = source_conn.execute(
+                """
+                SELECT member_id, name, save_folder, created_date, last_update_date
+                FROM pixiv_master_member
+                """
+            ).fetchall()
+        if _source_table_exists(source_conn, "pixiv_master_image"):
+            images = source_conn.execute(
+                """
+                SELECT image_id, member_id, title, save_name, created_date, last_update_date
+                FROM pixiv_master_image
+                """
+            ).fetchall()
+        if _source_table_exists(source_conn, "pixiv_manga_image"):
+            manga_table_present = True
+            manga_images = source_conn.execute(
+                """
+                SELECT image_id, save_name, created_date, last_update_date
+                FROM pixiv_manga_image
+                """
+            ).fetchall()
+        if _source_table_exists(source_conn, "pixivutil2_trash_image"):
+            trash_columns = _source_table_columns(source_conn, "pixivutil2_trash_image")
+            sent_column = "sent_to_system_recycle_at" if "sent_to_system_recycle_at" in trash_columns else "NULL"
+            trash_entries = source_conn.execute(
+                f"""
+                SELECT trash_id, image_id, original_path, trash_path,
+                       trashed_at, {sent_column} AS sent_to_system_recycle_at
+                FROM pixivutil2_trash_image
+                """
+            ).fetchall()
+
+        with get_db_connection() as viewer_conn:
+            if members:
+                viewer_conn.executemany(
+                    """
+                    INSERT INTO pixiv_master_member
+                    (member_id, name, save_folder, created_date, last_update_date)
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(member_id) DO UPDATE SET
+                        name = excluded.name,
+                        save_folder = excluded.save_folder,
+                        created_date = excluded.created_date,
+                        last_update_date = excluded.last_update_date
+                    """,
+                    [tuple(row) for row in members],
+                )
+            if images:
+                viewer_conn.executemany(
+                    """
+                    INSERT INTO pixiv_master_image
+                    (image_id, member_id, title, save_name, created_date, last_update_date)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(image_id) DO UPDATE SET
+                        member_id = excluded.member_id,
+                        title = excluded.title,
+                        save_name = excluded.save_name,
+                        created_date = excluded.created_date,
+                        last_update_date = excluded.last_update_date
+                    """,
+                    [tuple(row) for row in images],
+                )
+            if manga_table_present:
+                # The legacy manga table has no guaranteed single-column key;
+                # replace the Viewer copy to avoid duplicating pages whenever
+                # the read-only source snapshot changes.
+                viewer_conn.execute("DELETE FROM pixiv_manga_image")
+            if manga_images:
+                viewer_conn.executemany(
+                    """
+                    INSERT INTO pixiv_manga_image
+                    (image_id, save_name, created_date, last_update_date)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    [tuple(row) for row in manga_images],
+                )
+            if trash_entries:
+                viewer_conn.executemany(
+                    """
+                    INSERT INTO pixivutil2_trash_image
+                        (trash_id, image_id, original_path, trash_path, trashed_at,
+                         sent_to_system_recycle_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(trash_id) DO UPDATE SET
+                        image_id = excluded.image_id,
+                        original_path = excluded.original_path,
+                        trash_path = excluded.trash_path,
+                        trashed_at = excluded.trashed_at,
+                        sent_to_system_recycle_at = excluded.sent_to_system_recycle_at
+                    """,
+                    [tuple(row) for row in trash_entries],
+                )
+            viewer_conn.execute(
+                """
+                INSERT INTO viewer_source_snapshot
+                (source_name, source_path, source_size, source_mtime_ns, synced_at)
+                VALUES ('pixivutil2', ?, ?, ?, ?)
+                ON CONFLICT(source_name) DO UPDATE SET
+                    source_path = excluded.source_path,
+                    source_size = excluded.source_size,
+                    source_mtime_ns = excluded.source_mtime_ns,
+                    synced_at = excluded.synced_at
+                """,
+                (PIXIV_DB_PATH, int(source_stat.st_size), int(source_stat.st_mtime_ns), _utc_timestamp()),
+            )
+            viewer_conn.commit()
+    except (OSError, sqlite3.Error) as error:
+        print(f"PixivUtil2 read-only snapshot import failed: {error}")
+    finally:
+        source_conn.close()
 
 
 def _normalise_media_path(file_path: str) -> str:
@@ -503,11 +789,367 @@ def _member_for_media_path(
     return get_folder_member_id(folder_path, existing_member_id), folder_name
 
 
+def get_index_scope_key(
+    directory: str,
+    member_id: Optional[int] = None,
+) -> str:
+    """Return a stable Viewer-owned scope identifier."""
+    if member_id is not None:
+        return f"artist:{int(member_id)}"
+    return f"directory:{_normalise_media_path(directory)}"
+
+
+def _scope_signature(candidates: List[Dict[str, Any]]) -> str:
+    digest = hashlib.sha1()
+    for candidate in sorted(candidates, key=lambda item: item["normalized_path"]):
+        digest.update(
+            f"{candidate['normalized_path']}:{candidate['file_size']}:{candidate['mtime_ns']}\n".encode(
+                "utf-8"
+            )
+        )
+    return digest.hexdigest()
+
+
+def _directory_probe_signature(directory: str) -> Optional[str]:
+    """Fingerprint one directory level for cheap change detection.
+
+    This is only a hint. Exact recursive truth still comes from an indexed
+    scope scan, while a future OS watcher can mark the same scope dirty.
+    """
+    if not os.path.isdir(directory):
+        return None
+    digest = hashlib.sha1()
+    try:
+        entries = sorted(os.scandir(directory), key=lambda entry: natural_sort_key(entry.name))
+        for entry in entries:
+            if entry.name.startswith(".") or is_internal_directory_name(entry.name):
+                continue
+            try:
+                stat = entry.stat(follow_symlinks=False)
+            except OSError:
+                continue
+            if entry.is_dir(follow_symlinks=False):
+                digest.update(f"d:{entry.name}:{stat.st_mtime_ns}\n".encode("utf-8"))
+            elif entry.is_file(follow_symlinks=False):
+                extension = os.path.splitext(entry.name)[1].lower()
+                if extension in MEDIA_EXTENSIONS:
+                    digest.update(
+                        f"f:{entry.name}:{stat.st_size}:{stat.st_mtime_ns}\n".encode("utf-8")
+                    )
+    except OSError:
+        return None
+    return digest.hexdigest()
+
+
+def _set_index_scope_state(
+    scope_key: str,
+    scope_type: str,
+    directory: str,
+    member_id: Optional[int],
+    *,
+    status: str,
+    dirty: bool,
+    candidates: Optional[List[Dict[str, Any]]] = None,
+    error: Optional[str] = None,
+) -> None:
+    try:
+        directory_mtime_ns = int(os.stat(directory).st_mtime_ns)
+    except OSError:
+        directory_mtime_ns = None
+    now = _utc_timestamp()
+    signature = _scope_signature(candidates or []) if candidates is not None else None
+    probe_signature = _directory_probe_signature(directory)
+    indexed_at = now if status == "indexed" else None
+    with get_db_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO viewer_index_scope
+                (scope_key, scope_type, member_id, directory, directory_mtime_ns,
+                 directory_signature, probe_signature, dirty, status, last_probe_at,
+                 last_indexed_at, last_error)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(scope_key) DO UPDATE SET
+                scope_type = excluded.scope_type,
+                member_id = excluded.member_id,
+                directory = excluded.directory,
+                directory_mtime_ns = excluded.directory_mtime_ns,
+                directory_signature = COALESCE(excluded.directory_signature, viewer_index_scope.directory_signature),
+                probe_signature = COALESCE(excluded.probe_signature, viewer_index_scope.probe_signature),
+                dirty = excluded.dirty,
+                status = excluded.status,
+                last_probe_at = excluded.last_probe_at,
+                last_indexed_at = COALESCE(excluded.last_indexed_at, viewer_index_scope.last_indexed_at),
+                last_error = excluded.last_error
+            """,
+            (
+                scope_key,
+                scope_type,
+                int(member_id) if member_id is not None else None,
+                os.path.abspath(directory),
+                directory_mtime_ns,
+                signature,
+                probe_signature,
+                int(bool(dirty)),
+                status,
+                now,
+                indexed_at,
+                error,
+            ),
+        )
+        conn.commit()
+
+
+def _ensure_index_scope_row(
+    scope_key: str,
+    scope_type: str,
+    directory: str,
+    member_id: Optional[int] = None,
+) -> None:
+    """Register a scope without scanning it."""
+    init_db_schema()
+    with get_db_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO viewer_index_scope
+                (scope_key, scope_type, member_id, directory, dirty, status)
+            VALUES (?, ?, ?, ?, 1, 'never-indexed')
+            ON CONFLICT(scope_key) DO UPDATE SET
+                scope_type = excluded.scope_type,
+                member_id = excluded.member_id,
+                directory = excluded.directory
+            """,
+            (
+                scope_key,
+                scope_type,
+                int(member_id) if member_id is not None else None,
+                os.path.abspath(directory),
+            ),
+        )
+        conn.commit()
+
+
+def get_root_scope_key(directory: str) -> str:
+    return f"root:{_normalise_media_path(directory)}"
+
+
+def discover_root_scopes(root_directory: str) -> List[Dict[str, Any]]:
+    """Discover only immediate artist folders and register their scopes.
+
+    This is intentionally a shallow ``scandir``. It makes newly-created artist
+    folders discoverable without making gallery navigation perform a recursive
+    HDD walk; exact content discovery remains a background job.
+    """
+    root = os.path.abspath(root_directory)
+    init_db_schema()
+    if not os.path.isdir(root):
+        return []
+
+    try:
+        folders = [
+            entry
+            for entry in os.scandir(root)
+            if entry.is_dir(follow_symlinks=False)
+            and not entry.name.startswith(".")
+            and not is_internal_directory_name(entry.name)
+        ]
+    except OSError:
+        return []
+    folders.sort(key=lambda entry: natural_sort_key(entry.name))
+
+    with get_db_connection() as conn:
+        existing_rows = conn.execute(
+            "SELECT member_id, name, save_folder FROM pixiv_master_member"
+        ).fetchall()
+        members_by_name: Dict[str, int] = {}
+        for row in existing_rows:
+            for value in (row["name"], row["save_folder"]):
+                if value:
+                    members_by_name[os.path.normcase(str(value))] = int(row["member_id"])
+
+        now = _utc_timestamp()
+        scopes: List[Dict[str, Any]] = []
+        root_scope_key = get_root_scope_key(root)
+        conn.execute(
+            """
+            INSERT INTO viewer_index_scope (scope_key, scope_type, directory, dirty, status)
+            VALUES (?, 'root', ?, 1, 'never-indexed')
+            ON CONFLICT(scope_key) DO UPDATE SET directory = excluded.directory
+            """,
+            (root_scope_key, root),
+        )
+        for entry in folders:
+            member_id = get_folder_member_id(
+                entry.path,
+                members_by_name.get(os.path.normcase(entry.name)),
+            )
+            conn.execute(
+                """
+                INSERT INTO pixiv_master_member
+                    (member_id, name, save_folder, created_date, last_update_date)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(member_id) DO UPDATE SET
+                    name = COALESCE(NULLIF(pixiv_master_member.name, ''), excluded.name),
+                    save_folder = COALESCE(NULLIF(pixiv_master_member.save_folder, ''), excluded.save_folder)
+                """,
+                (member_id, entry.name, entry.name, now, now),
+            )
+            scope_key = get_index_scope_key(entry.path, member_id)
+            conn.execute(
+                """
+                INSERT INTO viewer_index_scope
+                    (scope_key, scope_type, member_id, directory, dirty, status)
+                VALUES (?, 'artist', ?, ?, 1, 'never-indexed')
+                ON CONFLICT(scope_key) DO UPDATE SET
+                    member_id = excluded.member_id,
+                    directory = excluded.directory
+                """,
+                (scope_key, member_id, os.path.abspath(entry.path)),
+            )
+            scopes.append({
+                "scope_key": scope_key,
+                "scope_type": "artist",
+                "member_id": member_id,
+                "directory": os.path.abspath(entry.path),
+            })
+        conn.commit()
+    return scopes
+
+
+def get_index_scopes(
+    *,
+    dirty_only: bool = False,
+    scope_type: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    init_db_schema()
+    conditions: List[str] = []
+    params: List[Any] = []
+    if dirty_only:
+        conditions.append("dirty = 1")
+    if scope_type:
+        conditions.append("scope_type = ?")
+        params.append(scope_type)
+    where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
+    with get_db_connection() as conn:
+        rows = conn.execute(
+            f"SELECT * FROM viewer_index_scope{where_clause} ORDER BY scope_type, directory",
+            params,
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def get_artist_scope(member_id: int) -> Optional[Dict[str, Any]]:
+    init_db_schema()
+    with get_db_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT * FROM viewer_index_scope
+            WHERE member_id = ? AND scope_type = 'artist'
+            ORDER BY last_indexed_at DESC, directory
+            LIMIT 1
+            """,
+            (int(member_id),),
+        ).fetchone()
+        member_row = conn.execute(
+            "SELECT name, save_folder FROM pixiv_master_member WHERE member_id = ? LIMIT 1",
+            (int(member_id),),
+        ).fetchone()
+    if row:
+        return dict(row)
+    if not member_row:
+        return None
+
+    folder_name = str(member_row["save_folder"] or member_row["name"] or "").strip()
+    if not folder_name:
+        return None
+    root_directory = get_configured_root_directory()
+    directory = os.path.abspath(os.path.join(root_directory, folder_name))
+    if not _is_path_within(directory, root_directory):
+        return None
+    scope = {
+        "scope_key": get_index_scope_key(directory, int(member_id)),
+        "scope_type": "artist",
+        "member_id": int(member_id),
+        "directory": directory,
+        "dirty": 1,
+        "status": "never-indexed",
+    }
+    _ensure_index_scope_row(
+        scope["scope_key"],
+        "artist",
+        directory,
+        int(member_id),
+    )
+    return scope
+
+
+def probe_index_scope(scope_key: str) -> Optional[Dict[str, Any]]:
+    """Run a cheap one-level probe and mark a scope dirty when it changed."""
+    init_db_schema()
+    with get_db_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM viewer_index_scope WHERE scope_key = ?",
+            (scope_key,),
+        ).fetchone()
+    if row is None:
+        return None
+    scope = dict(row)
+    directory = scope["directory"]
+    signature = _directory_probe_signature(directory)
+    dirty = signature is None or signature != scope.get("probe_signature")
+    status = scope.get("status") or "never-indexed"
+    if dirty and status not in {"running", "paused"}:
+        status = "dirty"
+    with get_db_connection() as conn:
+        conn.execute(
+            """
+            UPDATE viewer_index_scope
+            SET probe_signature = ?, last_probe_at = ?, dirty = ?, status = ?
+            WHERE scope_key = ?
+            """,
+            (signature, _utc_timestamp(), int(dirty), status, scope_key),
+        )
+        conn.commit()
+        updated = conn.execute(
+            "SELECT * FROM viewer_index_scope WHERE scope_key = ?",
+            (scope_key,),
+        ).fetchone()
+    return dict(updated) if updated else None
+
+
+def mark_index_scopes_dirty_for_path(file_path: str) -> int:
+    """Mark affected scopes dirty after an OS directory-change notification."""
+    normalized_path = os.path.abspath(file_path)
+    init_db_schema()
+    marked = 0
+    with get_db_connection() as conn:
+        rows = conn.execute(
+            "SELECT scope_key, directory, status FROM viewer_index_scope"
+        ).fetchall()
+        for row in rows:
+            if not _is_path_within(normalized_path, row["directory"]):
+                continue
+            if row["status"] == "running":
+                continue
+            cursor = conn.execute(
+                """
+                UPDATE viewer_index_scope
+                SET dirty = 1, status = 'dirty', last_error = NULL
+                WHERE scope_key = ?
+                """,
+                (row["scope_key"],),
+            )
+            marked += max(0, int(cursor.rowcount))
+        conn.commit()
+    return marked
+
+
 def scan_and_index_directory(
     target_dir: str,
     cancel_event: Any = None,
     progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
     interactive_wait_callback: Optional[Callable[[Any], None]] = None,
+    scope_key: Optional[str] = None,
+    scope_member_id: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Discover and index media without replacing unrelated artwork rows.
 
@@ -517,7 +1159,32 @@ def scan_and_index_directory(
     """
     init_db_schema()
     abs_dir = os.path.abspath(target_dir)
+    scope_key = scope_key or get_index_scope_key(abs_dir, scope_member_id)
+    scope_type = (
+        "artist"
+        if scope_member_id is not None
+        else "root"
+        if scope_key.startswith("root:")
+        else "directory"
+    )
+    _set_index_scope_state(
+        scope_key,
+        scope_type,
+        abs_dir,
+        scope_member_id,
+        status="running",
+        dirty=False,
+    )
     if not os.path.isdir(abs_dir):
+        _set_index_scope_state(
+            scope_key,
+            scope_type,
+            abs_dir,
+            scope_member_id,
+            status="error",
+            dirty=True,
+            error=f"Directory does not exist: {abs_dir}",
+        )
         return {
             "scanned": 0,
             "indexed": 0,
@@ -562,6 +1229,15 @@ def scan_and_index_directory(
             "processed": 0,
             "errors": result["errors"],
         })
+        _set_index_scope_state(
+            scope_key,
+            scope_type,
+            abs_dir,
+            scope_member_id,
+            status="paused",
+            dirty=True,
+            error="Scan cancelled during discovery",
+        )
         return result
 
     _emit_scan_progress(progress_callback, {
@@ -594,7 +1270,8 @@ def scan_and_index_directory(
             if row["save_name"]
         }
         metadata_rows = cursor.execute("""
-            SELECT normalized_path, image_id, file_size, mtime_ns, fingerprint
+            SELECT normalized_path, image_id, file_size, mtime_ns, fingerprint,
+                   is_present, scope_key
             FROM viewer_media_metadata
         """).fetchall()
         metadata_by_path = {row["normalized_path"]: row for row in metadata_rows}
@@ -618,11 +1295,15 @@ def scan_and_index_directory(
             full_path = candidate["path"]
             file_date = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(candidate["mtime_ns"] / 1_000_000_000))
             title = os.path.splitext(file_name)[0]
-            member_id, folder_name = _member_for_media_path(
-                abs_dir,
-                candidate["root"],
-                existing_members_by_name,
-            )
+            if scope_member_id is not None:
+                member_id = int(scope_member_id)
+                folder_name = os.path.basename(os.path.normpath(abs_dir))
+            else:
+                member_id, folder_name = _member_for_media_path(
+                    abs_dir,
+                    candidate["root"],
+                    existing_members_by_name,
+                )
 
             try:
                 existing = existing_by_path.get(path_key)
@@ -673,14 +1354,18 @@ def scan_and_index_directory(
 
                 cursor.execute("""
                     INSERT INTO viewer_media_metadata
-                    (normalized_path, image_id, file_size, mtime_ns, fingerprint, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    (normalized_path, image_id, file_size, mtime_ns, fingerprint,
+                     updated_at, last_seen_at, is_present, scope_key)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)
                     ON CONFLICT(normalized_path) DO UPDATE SET
                         image_id = excluded.image_id,
                         file_size = excluded.file_size,
                         mtime_ns = excluded.mtime_ns,
                         fingerprint = excluded.fingerprint,
-                        updated_at = excluded.updated_at
+                        updated_at = excluded.updated_at,
+                        last_seen_at = excluded.last_seen_at,
+                        is_present = 1,
+                        scope_key = excluded.scope_key
                 """, (
                     path_key,
                     image_id,
@@ -688,6 +1373,8 @@ def scan_and_index_directory(
                     candidate["mtime_ns"],
                     candidate["fingerprint"],
                     _utc_timestamp(),
+                    _utc_timestamp(),
+                    scope_key,
                 ))
                 if metadata and metadata["fingerprint"] != candidate["fingerprint"]:
                     cursor.execute("""
@@ -712,6 +1399,8 @@ def scan_and_index_directory(
                     "file_size": candidate["file_size"],
                     "mtime_ns": candidate["mtime_ns"],
                     "fingerprint": candidate["fingerprint"],
+                    "is_present": 1,
+                    "scope_key": scope_key,
                 }
             except Exception as error:
                 result["errors"] += 1
@@ -738,10 +1427,86 @@ def scan_and_index_directory(
 
         conn.commit()
 
+    if not result["cancelled"]:
+        # Only a complete scope scan can establish that an old indexed path is
+        # gone. A cancelled scan leaves the previous snapshot untouched.
+        with get_db_connection() as conn:
+            conn.execute(
+                """
+                UPDATE viewer_media_metadata
+                SET is_present = 0, last_seen_at = ?
+                WHERE scope_key = ?
+                """,
+                (_utc_timestamp(), scope_key),
+            )
+            for candidate in candidates:
+                conn.execute(
+                    """
+                    UPDATE viewer_media_metadata
+                    SET is_present = 1, last_seen_at = ?
+                    WHERE normalized_path = ? AND scope_key = ?
+                    """,
+                    (_utc_timestamp(), candidate["normalized_path"], scope_key),
+                )
+            conn.commit()
+
     # A rescan may add/remove files, so the next gallery request must rebuild
     # the cached path list for this directory tree.
     invalidate_scan_cache(abs_dir)
     result["indexed"] = result["added"] + result["updated"]
+    if result["cancelled"]:
+        _set_index_scope_state(
+            scope_key,
+            scope_type,
+            abs_dir,
+            scope_member_id,
+            status="paused",
+            dirty=True,
+            error="Scan cancelled",
+        )
+    else:
+        _set_index_scope_state(
+            scope_key,
+            scope_type,
+            abs_dir,
+            scope_member_id,
+            status="indexed" if not result["errors"] else "indexed-with-errors",
+            dirty=bool(result["errors"]),
+            candidates=candidates,
+            error="; ".join(result["error_details"][:3]) if result["errors"] else None,
+        )
+        if scope_type == "root" and not result["errors"]:
+            # The recursive root scan also established the current shallow
+            # state of every artist folder it visited. This prevents startup
+            # from immediately rescanning the same tree once per artist.
+            now = _utc_timestamp()
+            with get_db_connection() as conn:
+                artist_scopes = conn.execute(
+                    "SELECT scope_key, directory FROM viewer_index_scope WHERE scope_type = 'artist'"
+                ).fetchall()
+                for artist_scope in artist_scopes:
+                    if not _is_path_within(artist_scope["directory"], abs_dir):
+                        continue
+                    try:
+                        child_mtime_ns = int(os.stat(artist_scope["directory"]).st_mtime_ns)
+                    except OSError:
+                        child_mtime_ns = None
+                    conn.execute(
+                        """
+                        UPDATE viewer_index_scope
+                        SET directory_mtime_ns = ?, probe_signature = ?, dirty = 0,
+                            status = 'indexed', last_probe_at = ?, last_indexed_at = ?, last_error = NULL
+                        WHERE scope_key = ?
+                        """,
+                        (
+                            child_mtime_ns,
+                            _directory_probe_signature(artist_scope["directory"]),
+                            now,
+                            now,
+                            artist_scope["scope_key"],
+                        ),
+                    )
+                conn.commit()
     return result
 
 
@@ -751,6 +1516,15 @@ def _job_row_to_dict(row: Optional[sqlite3.Row]) -> Optional[Dict[str, Any]]:
     result = dict(row)
     result["analyze_colors"] = bool(result.get("analyze_colors"))
     result["cancel_requested"] = bool(result.get("cancel_requested"))
+    result["automatic"] = bool(result.get("automatic"))
+    raw_scopes = result.get("scope_json") or "[]"
+    try:
+        scopes = json.loads(raw_scopes)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        scopes = []
+    if not isinstance(scopes, list):
+        scopes = []
+    result["scopes"] = scopes
     return result
 
 
@@ -763,7 +1537,8 @@ def get_media_metadata_for_directory(directory: str) -> List[Dict[str, Any]]:
             """
                 SELECT normalized_path, image_id, file_size, mtime_ns, fingerprint
                 FROM viewer_media_metadata
-                WHERE normalized_path = ? OR normalized_path LIKE ?
+                WHERE is_present = 1
+                  AND (normalized_path = ? OR normalized_path LIKE ?)
                 ORDER BY normalized_path
             """,
             (normalized_directory, prefix + "%"),
@@ -937,14 +1712,39 @@ def delete_thumbnail_cache_entries(cache_names: List[str]) -> int:
     return deleted
 
 
-def create_library_job(job_id: str, job_type: str, directory: str, analyze_colors: bool) -> Dict[str, Any]:
+def create_library_job(
+    job_id: str,
+    job_type: str,
+    directory: str,
+    analyze_colors: bool,
+    scopes: Optional[List[Dict[str, Any]]] = None,
+    priority: int = 50,
+    automatic: bool = False,
+) -> Dict[str, Any]:
     now = _utc_timestamp()
+    normalized_scopes = scopes or [{
+        "scope_key": get_index_scope_key(directory),
+        "scope_type": "directory",
+        "directory": os.path.abspath(directory),
+        "member_id": None,
+    }]
     with get_db_connection() as conn:
         conn.execute("""
             INSERT INTO viewer_library_job
-            (job_id, job_type, status, phase, directory, analyze_colors, created_at, updated_at)
-            VALUES (?, ?, 'queued', 'queued', ?, ?, ?, ?)
-        """, (job_id, job_type, directory, int(analyze_colors), now, now))
+            (job_id, job_type, status, phase, directory, analyze_colors,
+             scope_json, priority, automatic, created_at, updated_at)
+            VALUES (?, ?, 'queued', 'queued', ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            job_id,
+            job_type,
+            os.path.abspath(directory),
+            int(analyze_colors),
+            json.dumps(normalized_scopes, ensure_ascii=False),
+            int(priority),
+            int(bool(automatic)),
+            now,
+            now,
+        ))
         conn.commit()
         row = conn.execute("SELECT * FROM viewer_library_job WHERE job_id = ?", (job_id,)).fetchone()
     return _job_row_to_dict(row) or {}
@@ -1409,7 +2209,92 @@ def mark_trash_entries_sent_to_system_recycle(trash_ids: List[int]) -> int:
     return int(cursor.rowcount)
 
 
+def _get_all_artists_from_viewer_snapshot() -> List[Dict[str, Any]]:
+    """Build the artist navigator from Viewer SQLite without listing the root."""
+    init_db_schema()
+    hidden_artist_ids = get_hidden_artist_ids()
+    counts: Dict[int, int] = {}
+    with get_db_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT image.member_id, image.save_name
+            FROM pixiv_master_image image
+            WHERE NOT EXISTS (
+                SELECT 1 FROM pixivutil2_trash_image trash
+                WHERE trash.image_id = image.image_id
+            )
+            """
+        ).fetchall()
+        for row in rows:
+            if not should_keep_database_media(row["save_name"]):
+                continue
+            member_id = row["member_id"]
+            if member_id is None:
+                continue
+            counts[int(member_id)] = counts.get(int(member_id), 0) + 1
+
+        member_rows = conn.execute(
+            """
+            SELECT member_id, name, save_folder
+            FROM pixiv_master_member
+            WHERE member_id IS NOT NULL AND member_id != -1
+            ORDER BY name COLLATE NOCASE, member_id
+            """
+        ).fetchall()
+
+    result: List[Dict[str, Any]] = []
+    seen_ids: set[int] = set()
+    for row in member_rows:
+        member_id = int(row["member_id"])
+        if member_id in seen_ids or member_id in hidden_artist_ids:
+            continue
+        name = str(row["name"] or row["save_folder"] or member_id)
+        seen_ids.add(member_id)
+        result.append({
+            "member_id": member_id,
+            "name": name,
+            "folder_name": name,
+            "artwork_count": counts.get(member_id, 0),
+        })
+
+    # A scanned file may have a member id without a corresponding member row
+    # (for example, an interrupted import). Keep it navigable in the snapshot.
+    for member_id in sorted(set(counts) - seen_ids - hidden_artist_ids):
+        result.append({
+            "member_id": member_id,
+            "name": str(member_id),
+            "folder_name": str(member_id),
+            "artwork_count": counts[member_id],
+        })
+    result.sort(key=lambda item: natural_sort_key(item.get("name") or ""))
+
+    direct_root_count = 0
+    with get_db_connection() as conn:
+        direct_root_count = int(conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM pixiv_master_image image
+            WHERE image.member_id IS NULL
+              AND NOT EXISTS (
+                  SELECT 1 FROM pixivutil2_trash_image trash
+                  WHERE trash.image_id = image.image_id
+              )
+            """
+        ).fetchone()[0])
+    if direct_root_count:
+        result.insert(0, {
+            "member_id": -1,
+            "name": "Uncategorized",
+            "artwork_count": direct_root_count,
+        })
+    return result
+
+
 def get_all_artists() -> List[Dict[str, Any]]:
+    return _get_all_artists_from_viewer_snapshot()
+
+    # Legacy disk-derived implementation retained below until all callers have
+    # moved to the persistent scope model.
     import configparser
     init_db_schema()
     config_path = config_paths.get_pixiv_config_path()
@@ -1575,6 +2460,200 @@ def matches_month_filter(date_val: Optional[str], month_list: List[str]) -> bool
     )
 
 
+def _sort_gallery_items(items: List[Dict[str, Any]], sort_mode: str) -> List[Dict[str, Any]]:
+    """Sort a snapshot result without consulting the source filesystem."""
+    if sort_mode == "oldest":
+        items.sort(key=lambda item: (
+            item.get("created_date") or "",
+            natural_sort_key(item.get("save_name") or ""),
+        ))
+        return items
+    if sort_mode == "natural_name":
+        items.sort(key=lambda item: natural_sort_key(item.get("save_name") or ""))
+        return items
+
+    month_groups: Dict[str, List[Dict[str, Any]]] = {}
+    for item in items:
+        month_key = (item.get("created_date") or "")[:7] or "?"
+        month_groups.setdefault(month_key, []).append(item)
+
+    descending_months = sort_mode not in {"oldest_month"}
+    sorted_months = sorted(month_groups.keys(), reverse=descending_months)
+    result: List[Dict[str, Any]] = []
+    for month_key in sorted_months:
+        group = month_groups[month_key]
+        if sort_mode == "oldest_month":
+            date_groups: Dict[str, List[Dict[str, Any]]] = {}
+            for item in group:
+                date_groups.setdefault((item.get("created_date") or "")[:10], []).append(item)
+            for date_key in sorted(date_groups.keys(), reverse=True):
+                date_group = date_groups[date_key]
+                date_group.sort(key=lambda item: natural_sort_key(item.get("save_name") or ""))
+                result.extend(date_group)
+        elif sort_mode == "newest_month_oldest_works":
+            group.sort(key=lambda item: (
+                item.get("created_date") or "",
+                natural_sort_key(item.get("save_name") or ""),
+            ))
+            result.extend(group)
+        else:
+            date_groups = {}
+            for item in group:
+                date_groups.setdefault((item.get("created_date") or "")[:10], []).append(item)
+            for date_key in sorted(date_groups.keys(), reverse=True):
+                date_group = date_groups[date_key]
+                date_group.sort(key=lambda item: natural_sort_key(item.get("save_name") or ""))
+                result.extend(date_group)
+    return result
+
+
+def _get_images_from_viewer_snapshot(
+    month: Optional[str],
+    artist_id: Optional[int],
+    search: Optional[str],
+    limit: int,
+    offset: int,
+    sort_mode: str,
+) -> Tuple[List[Dict[str, Any]], int, List[Dict[str, Any]]]:
+    """Read gallery data from Viewer SQLite only.
+
+    This function is deliberately independent of ``os.walk``, ``scandir`` and
+    per-file stat calls. An index job may be reconciling the source tree while
+    this query is running; the last committed Viewer snapshot remains usable.
+    """
+    init_db_schema()
+    month_list = [value.strip() for value in month.split(",") if value.strip()] if month else []
+    hidden_artist_ids = get_hidden_artist_ids()
+    items: List[Dict[str, Any]] = []
+
+    with get_db_connection() as conn:
+        conditions = [
+            "NOT EXISTS (SELECT 1 FROM pixivutil2_trash_image trash WHERE trash.image_id = i.image_id)",
+        ]
+        params: List[Any] = []
+        if month_list:
+            month_conditions = []
+            for value in month_list:
+                month_conditions.append(
+                    "strftime('%Y', i.created_date) = ?"
+                    if len(value) == 4
+                    else "strftime('%Y-%m', i.created_date) = ?"
+                )
+                params.append(value)
+            conditions.append("(" + " OR ".join(month_conditions) + ")")
+        if artist_id is not None:
+            conditions.append("i.member_id IS NULL" if artist_id == -1 else "i.member_id = ?")
+            if artist_id != -1:
+                params.append(int(artist_id))
+        if search:
+            conditions.append(
+                "(i.title LIKE ? OR m.name LIKE ? OR i.save_name LIKE ? OR CAST(i.image_id AS TEXT) LIKE ?)"
+            )
+            params.extend([f"%{search}%"] * 4)
+
+        rows = conn.execute(
+            f"""
+            SELECT i.image_id, i.member_id, i.title, i.save_name,
+                   i.created_date, i.last_update_date, m.name AS artist_name,
+                   CASE WHEN metadata.is_present = 0 THEN 'missing' END AS media_status
+            FROM pixiv_master_image i
+            LEFT JOIN pixiv_master_member m ON i.member_id = m.member_id
+            LEFT JOIN viewer_media_metadata metadata
+              ON metadata.normalized_path = i.save_name COLLATE NOCASE
+            WHERE {' AND '.join(conditions)}
+            """,
+            params,
+        ).fetchall()
+        items.extend(dict(row) for row in rows)
+
+        manga_conditions = [
+            "NOT EXISTS (SELECT 1 FROM pixivutil2_trash_image trash WHERE trash.image_id = mg.image_id)",
+        ]
+        manga_params: List[Any] = []
+        if month_list:
+            month_conditions = []
+            for value in month_list:
+                month_conditions.append(
+                    "strftime('%Y', mg.created_date) = ?"
+                    if len(value) == 4
+                    else "strftime('%Y-%m', mg.created_date) = ?"
+                )
+                manga_params.append(value)
+            manga_conditions.append("(" + " OR ".join(month_conditions) + ")")
+        if artist_id is not None:
+            manga_conditions.append("i.member_id IS NULL" if artist_id == -1 else "i.member_id = ?")
+            if artist_id != -1:
+                manga_params.append(int(artist_id))
+        if search:
+            manga_conditions.append(
+                "(i.title LIKE ? OR m.name LIKE ? OR mg.save_name LIKE ? OR CAST(mg.image_id AS TEXT) LIKE ?)"
+            )
+            manga_params.extend([f"%{search}%"] * 4)
+
+        try:
+            manga_rows = conn.execute(
+                f"""
+                SELECT mg.image_id, i.member_id, i.title, mg.save_name,
+                       mg.created_date, mg.last_update_date, m.name AS artist_name,
+                       CASE WHEN metadata.is_present = 0 THEN 'missing' END AS media_status
+                FROM pixiv_manga_image mg
+                LEFT JOIN pixiv_master_image i ON mg.image_id = i.image_id
+                LEFT JOIN pixiv_master_member m ON i.member_id = m.member_id
+                LEFT JOIN viewer_media_metadata metadata
+                  ON metadata.normalized_path = mg.save_name COLLATE NOCASE
+                WHERE {' AND '.join(manga_conditions)}
+                """,
+                manga_params,
+            ).fetchall()
+        except sqlite3.OperationalError:
+            manga_rows = []
+        items.extend(dict(row) for row in manga_rows)
+
+    # Keep the old behavior of hiding internal-tool state and hidden artists,
+    # but do it against the stored paths rather than touching those paths.
+    visible_items = [
+        item for item in items
+        if should_keep_database_media(item.get("save_name"))
+        and not (artist_id is None and item.get("member_id") in hidden_artist_ids)
+    ]
+    deduplicated: Dict[str, Dict[str, Any]] = {}
+    for item in visible_items:
+        path = item.get("save_name") or ""
+        key = _normalise_media_path(path) if path else f"id:{item.get('image_id')}"
+        deduplicated.setdefault(key, item)
+    all_items = _sort_gallery_items(list(deduplicated.values()), sort_mode)
+
+    available_month_counts: Dict[str, int] = {}
+    available_month_offsets: Dict[str, int] = {}
+    for item_offset, item in enumerate(all_items):
+        month_key = (item.get("created_date") or "")[:7]
+        if len(month_key) == 7 and month_key[4] == "-":
+            available_month_counts[month_key] = available_month_counts.get(month_key, 0) + 1
+            available_month_offsets.setdefault(month_key, item_offset)
+    available_months = [
+        {
+            "month": month_key,
+            "count": count,
+            "offset": available_month_offsets[month_key],
+        }
+        for month_key, count in sorted(available_month_counts.items(), reverse=True)
+        if count > 0
+    ]
+
+    page_items = all_items[offset:offset + limit]
+    if page_items:
+        dominant_colors = get_dominant_colors([
+            _normalise_media_path(item.get("save_name", ""))
+            for item in page_items
+            if item.get("save_name")
+        ])
+        for item in page_items:
+            color = dominant_colors.get(_normalise_media_path(item.get("save_name", "")))
+            if color:
+                item["dominant_color"] = color
+    return page_items, len(all_items), available_months
+
+
 def get_images(
     month: Optional[str] = None,
     artist_id: Optional[int] = None,
@@ -1584,6 +2663,19 @@ def get_images(
     only_show_db_files: bool = False,
     sort_mode: str = "newest"
 ) -> Tuple[List[Dict[str, Any]], int, List[Dict[str, Any]]]:
+    # Gallery reads must never synchronously reconcile the source directory.
+    # ``only_show_db_files`` remains in the signature for API compatibility;
+    # both modes now use the last committed Viewer snapshot.
+    return _get_images_from_viewer_snapshot(
+        month,
+        artist_id,
+        search,
+        limit,
+        offset,
+        sort_mode,
+    )
+
+    # Legacy fallback retained below until the snapshot migration is complete.
     db_items = []
     hidden_artist_ids = get_hidden_artist_ids() if os.path.exists(DB_PATH) else set()
     month_list = [m.strip() for m in month.split(',') if m.strip()] if month else []

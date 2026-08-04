@@ -1281,7 +1281,10 @@ export const App: React.FC = () => {
     [artists, selectedArtist],
   );
 
-  const isArtistUpdating = isLibraryJobActive(libraryJob) && libraryJob?.job_type === 'update-library';
+  const isArtistUpdating = isLibraryJobActive(libraryJob)
+    && libraryJob?.job_type === 'update-library'
+    && (currentArtist?.member_id === undefined
+      || libraryJob.scopes?.some(scope => scope.member_id === currentArtist.member_id));
 
   const handleRequestArtistUpdate = useCallback(() => {
     if (isArtistUpdating) return;
@@ -1289,7 +1292,7 @@ export const App: React.FC = () => {
   }, [isArtistUpdating]);
 
   const handleStartArtistUpdate = useCallback(async () => {
-    if (isLibraryJobActive(libraryJob)) {
+    if (!currentArtist || currentArtist.member_id <= 0) {
       setIsArtistUpdateNoticeOpen(false);
       return;
     }
@@ -1299,17 +1302,22 @@ export const App: React.FC = () => {
       const response = await fetch('/api/library/jobs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ type: 'update-library', analyze_colors: false }),
+        body: JSON.stringify({
+          type: 'update-library',
+          member_id: currentArtist.member_id,
+          analyze_colors: true,
+          priority: 0,
+        }),
       });
       const data = await response.json().catch(() => ({})) as { job?: LibraryJob; detail?: string };
       if (!response.ok || !data.job) throw new Error(data.detail || `背景更新啟動失敗（${response.status}）`);
       setLibraryJob(data.job);
-      setLibraryAnnouncement('繪師作品資料已開始在背景更新，瀏覽期間可能會有短暫卡頓。');
+      setLibraryAnnouncement('已開始在背景更新目前繪師；既有索引可繼續瀏覽，完成後列表會自動更新。');
       window.dispatchEvent(new Event('web-viewer-library-job-changed'));
     } catch (error) {
       setLibraryAnnouncement(error instanceof Error ? error.message : '背景更新啟動失敗');
     }
-  }, [libraryJob]);
+  }, [currentArtist]);
 
   const handleArtistChanged = useCallback(() => {
     imagePageCacheRef.current.clear();
@@ -1540,7 +1548,7 @@ export const App: React.FC = () => {
       <ConfirmModal
         isOpen={isArtistUpdateNoticeOpen}
         title="在背景更新繪師作品？"
-        message="更新會在背景掃描圖片資料夾並同步資料庫。掃描 HDD 期間可能造成檔案讀取聲、介面短暫卡頓；你仍可繼續瀏覽，完成後列表會自動更新。"
+        message="更新只會讀取目前繪師的資料夾，並寫入 Web Viewer 自己的索引。既有索引會先維持顯示，你可以繼續瀏覽；完成後列表會自動更新。"
         confirmLabel="開始背景更新"
         cancelLabel="稍後再做"
         onConfirm={() => void handleStartArtistUpdate()}
@@ -1553,6 +1561,7 @@ export const App: React.FC = () => {
         onClose={() => setIsSettingsOpen(false)}
         onSettingsSaved={handleSettingsSaved}
         onOpenRecycleBin={handleOpenRecycleBin}
+        artists={artists}
       />
 
       <ArtistSettingsModal

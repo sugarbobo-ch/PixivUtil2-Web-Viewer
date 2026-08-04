@@ -15,13 +15,16 @@ import threading
 import time
 import traceback
 import uuid
+import ctypes
 from collections import Counter
+from ctypes import wintypes
 from typing import Any, Dict, Optional
 
 from PIL import Image
 
 import db
 import config_paths
+import recycle_bin
 
 
 INTERACTIVE_QUIET_WINDOW_SECONDS = 0.15
@@ -33,6 +36,24 @@ _LAST_INTERACTIVE_MEDIA_AT = 0.0
 _CACHE_ACCESS_LOCK = threading.Lock()
 _CACHE_ACCESS_LAST_TOUCH: Dict[str, float] = {}
 _CACHE_ACCESS_THROTTLE_SECONDS = 30.0
+
+
+def _configured_root_directory() -> str:
+    """Resolve rootDirectory without changing PixivUtil2 configuration."""
+    import configparser
+
+    root_directory = config_paths.WORKSPACE_ROOT
+    config_path = config_paths.get_pixiv_config_path()
+    if os.path.isfile(config_path):
+        try:
+            config = configparser.ConfigParser(interpolation=None)
+            config.read(config_path, encoding="utf-8")
+            configured = config.get("Settings", "rootDirectory", fallback=".")
+            if configured and configured != ".":
+                root_directory = os.path.abspath(configured)
+        except (OSError, configparser.Error):
+            pass
+    return os.path.abspath(root_directory)
 
 
 def note_interactive_media_activity() -> None:
@@ -374,7 +395,12 @@ def get_thumbnail_cache_recovery_path(job_id: str, recovery_name: str) -> str:
 
 
 def permanently_delete_thumbnail_cache(job_id: str) -> Dict[str, Any]:
-    """Permanently remove only the recovered files belonging to one job."""
+    """Send recovered cache files to the system Recycle Bin.
+
+    The endpoint name is retained for API compatibility, but Web Viewer never
+    permanently deletes recovered files. The Windows shell owns the reversible
+    move and the Viewer only removes its own metadata afterward.
+    """
     job_directory, manifest = _load_recovery_manifest(job_id)
     remaining_entries: list[Dict[str, Any]] = []
     cache_names_to_remove: list[str] = []
@@ -401,8 +427,8 @@ def permanently_delete_thumbnail_cache(job_id: str) -> Dict[str, Any]:
             continue
 
         try:
-            os.remove(recovery_path)
-        except OSError as error:
+            recycle_bin.send_path_to_system_recycle_bin(recovery_path)
+        except (OSError, FileNotFoundError) as error:
             remaining_entries.append(item)
             errors.append(f"{recovery_name}: {error}")
             continue
@@ -797,6 +823,175 @@ class LibraryJobAlreadyRunning(Exception):
         super().__init__(f"Library job {job.get('job_id')} is already running")
 
 
+class _WindowsDirectoryWatcher:
+    """Watch source changes without reading image contents or writing source data."""
+
+    FILE_LIST_DIRECTORY = 0x0001
+    FILE_SHARE_READ = 0x00000001
+    FILE_SHARE_WRITE = 0x00000002
+    FILE_SHARE_DELETE = 0x00000004
+    OPEN_EXISTING = 3
+    FILE_FLAG_BACKUP_SEMANTICS = 0x02000000
+    FILE_NOTIFY_CHANGE_FILE_NAME = 0x00000001
+    FILE_NOTIFY_CHANGE_DIR_NAME = 0x00000002
+    FILE_NOTIFY_CHANGE_SIZE = 0x00000008
+    FILE_NOTIFY_CHANGE_LAST_WRITE = 0x00000010
+    FILE_NOTIFY_CHANGE_CREATION = 0x00000040
+
+    def __init__(self) -> None:
+        self._stop_event = threading.Event()
+        self._handle_lock = threading.Lock()
+        self._handle = None
+        self._thread: Optional[threading.Thread] = None
+        self._root_directory = ""
+        self._kernel32 = None
+        if os.name == "nt":
+            try:
+                self._kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+                self._kernel32.CreateFileW.restype = wintypes.HANDLE
+                self._kernel32.CreateFileW.argtypes = [
+                    wintypes.LPCWSTR,
+                    wintypes.DWORD,
+                    wintypes.DWORD,
+                    wintypes.LPVOID,
+                    wintypes.DWORD,
+                    wintypes.DWORD,
+                    wintypes.HANDLE,
+                ]
+                self._kernel32.ReadDirectoryChangesW.restype = wintypes.BOOL
+                self._kernel32.ReadDirectoryChangesW.argtypes = [
+                    wintypes.HANDLE,
+                    wintypes.LPVOID,
+                    wintypes.DWORD,
+                    wintypes.BOOL,
+                    wintypes.DWORD,
+                    ctypes.POINTER(wintypes.DWORD),
+                    wintypes.LPVOID,
+                    wintypes.LPVOID,
+                ]
+                self._kernel32.CancelIoEx.argtypes = [wintypes.HANDLE, wintypes.LPVOID]
+                self._kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+            except (AttributeError, OSError):
+                self._kernel32 = None
+
+    def start(self, root_directory: str) -> None:
+        if os.name != "nt" or self._thread is not None:
+            return
+        self._root_directory = os.path.abspath(root_directory)
+        self._thread = threading.Thread(
+            target=self._run,
+            name="media-library-source-watcher",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def close(self, timeout: float = 2.0) -> None:
+        self._stop_event.set()
+        with self._handle_lock:
+            handle = self._handle
+        if handle not in (None, wintypes.HANDLE(-1).value):
+            try:
+                if self._kernel32 is not None:
+                    self._kernel32.CancelIoEx(handle, None)
+            except (AttributeError, OSError):
+                pass
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=timeout)
+
+    def _open_root(self):
+        if not os.path.isdir(self._root_directory):
+            return None
+        if self._kernel32 is None:
+            return None
+        try:
+            handle = self._kernel32.CreateFileW(
+                self._root_directory,
+                self.FILE_LIST_DIRECTORY,
+                self.FILE_SHARE_READ | self.FILE_SHARE_WRITE | self.FILE_SHARE_DELETE,
+                None,
+                self.OPEN_EXISTING,
+                self.FILE_FLAG_BACKUP_SEMANTICS,
+                None,
+            )
+        except (AttributeError, OSError):
+            return None
+        if handle in (None, wintypes.HANDLE(-1).value):
+            return None
+        return handle
+
+    def _run(self) -> None:
+        if os.name != "nt":
+            return
+        while not self._stop_event.is_set():
+            handle = self._open_root()
+            if handle is None:
+                self._stop_event.wait(5.0)
+                continue
+            with self._handle_lock:
+                self._handle = handle
+            try:
+                self._read_changes(handle)
+            finally:
+                with self._handle_lock:
+                    self._handle = None
+                try:
+                    if self._kernel32 is not None:
+                        self._kernel32.CloseHandle(handle)
+                except (AttributeError, OSError):
+                    pass
+
+    def _read_changes(self, handle) -> None:
+        buffer = ctypes.create_string_buffer(64 * 1024)
+        bytes_returned = wintypes.DWORD()
+        notify_filter = (
+            self.FILE_NOTIFY_CHANGE_FILE_NAME
+            | self.FILE_NOTIFY_CHANGE_DIR_NAME
+            | self.FILE_NOTIFY_CHANGE_SIZE
+            | self.FILE_NOTIFY_CHANGE_LAST_WRITE
+            | self.FILE_NOTIFY_CHANGE_CREATION
+        )
+        while not self._stop_event.is_set():
+            try:
+                if self._kernel32 is None:
+                    return
+                success = self._kernel32.ReadDirectoryChangesW(
+                    handle,
+                    ctypes.byref(buffer),
+                    ctypes.sizeof(buffer),
+                    True,
+                    notify_filter,
+                    ctypes.byref(bytes_returned),
+                    None,
+                    None,
+                )
+            except (AttributeError, OSError):
+                db.mark_index_scopes_dirty_for_path(self._root_directory)
+                return
+            if not success:
+                db.mark_index_scopes_dirty_for_path(self._root_directory)
+                return
+            payload_size = int(bytes_returned.value)
+            if payload_size <= 0:
+                continue
+            offset = 0
+            while offset + 12 <= payload_size:
+                next_offset = int.from_bytes(buffer.raw[offset:offset + 4], "little")
+                name_length = int.from_bytes(buffer.raw[offset + 8:offset + 12], "little")
+                name_start = offset + 12
+                name_end = min(payload_size, name_start + name_length)
+                try:
+                    relative_path = buffer.raw[name_start:name_end].decode("utf-16-le")
+                except UnicodeDecodeError:
+                    relative_path = ""
+                if relative_path:
+                    db.mark_index_scopes_dirty_for_path(
+                        os.path.join(self._root_directory, relative_path)
+                    )
+                if next_offset == 0:
+                    break
+                offset += next_offset
+
+
 class LibraryJobManager:
     """Run one persistent media-library job at a time in a daemon thread."""
 
@@ -807,7 +1002,7 @@ class LibraryJobManager:
         "organize-thumbnail-cache",
     }
 
-    def __init__(self, auto_start: bool = True):
+    def __init__(self, auto_start: bool = True, auto_reconcile: bool = False):
         db.init_db_schema()
         db.recover_interrupted_library_jobs()
         self._queue: queue.Queue[Optional[str]] = queue.Queue()
@@ -817,6 +1012,12 @@ class LibraryJobManager:
         self._lock = threading.RLock()
         self._stop_event = threading.Event()
         self._worker: Optional[threading.Thread] = None
+        self._monitor: Optional[threading.Thread] = None
+        self._active_job_id: Optional[str] = None
+        self._active_priority = 100
+        self._auto_reconcile = bool(auto_reconcile)
+        self._auto_reconcile_interval = 20.0
+        self._source_watcher = _WindowsDirectoryWatcher()
 
         if auto_start:
             self._worker = threading.Thread(
@@ -825,12 +1026,23 @@ class LibraryJobManager:
                 daemon=True,
             )
             self._worker.start()
+            if self._auto_reconcile:
+                self._source_watcher.start(_configured_root_directory())
+                self._monitor = threading.Thread(
+                    target=self._reconciliation_loop,
+                    name="media-library-reconciliation",
+                    daemon=True,
+                )
+                self._monitor.start()
 
     def start(
         self,
         job_type: str,
         directory: str,
         analyze_colors: bool = False,
+        scopes: Optional[list[Dict[str, Any]]] = None,
+        priority: int = 50,
+        automatic: bool = False,
     ) -> Dict[str, Any]:
         if job_type not in self.SUPPORTED_JOB_TYPES:
             raise ValueError(f"Unsupported library job type: {job_type}")
@@ -838,10 +1050,27 @@ class LibraryJobManager:
         with self._lock:
             active_job = db.get_current_library_job()
             if active_job and active_job.get("status") in db.LIBRARY_JOB_ACTIVE_STATUSES:
-                raise LibraryJobAlreadyRunning(active_job)
+                active_priority = int(active_job.get("priority") or self._active_priority)
+                # An explicitly requested current-artist update can pause a
+                # lower-priority root reconciliation at its next file boundary.
+                if int(priority) < active_priority and not automatic:
+                    active_event = self._cancel_events.get(active_job.get("job_id"))
+                    if active_event is not None:
+                        active_event.set()
+                    db.request_library_job_cancel(active_job["job_id"])
+                else:
+                    raise LibraryJobAlreadyRunning(active_job)
 
             job_id = str(uuid.uuid4())
-            job = db.create_library_job(job_id, job_type, directory, analyze_colors)
+            job = db.create_library_job(
+                job_id,
+                job_type,
+                directory,
+                analyze_colors,
+                scopes=scopes,
+                priority=priority,
+                automatic=automatic,
+            )
             self._cancel_events[job_id] = threading.Event()
             self._last_progress_at[job_id] = 0.0
             self._last_progress_phase[job_id] = None
@@ -868,9 +1097,70 @@ class LibraryJobManager:
     def close(self, timeout: float = 2.0) -> None:
         """Stop the worker for tests or controlled application shutdown."""
         self._stop_event.set()
+        self._source_watcher.close(timeout=timeout)
         self._queue.put(None)
         if self._worker and self._worker.is_alive():
             self._worker.join(timeout=timeout)
+        if self._monitor and self._monitor.is_alive():
+            self._monitor.join(timeout=timeout)
+
+    def _reconciliation_loop(self) -> None:
+        """Shallow-probe scopes and enqueue low-priority background updates."""
+        while not self._stop_event.is_set():
+            try:
+                # Source metadata import is deliberately outside request
+                # handlers. Gallery navigation can keep using the previous
+                # Viewer snapshot while this read-only reconciliation runs.
+                db.sync_pixiv_snapshot()
+                root_directory = _configured_root_directory()
+                discovered_scopes = db.discover_root_scopes(root_directory)
+                root_scope_key = db.get_root_scope_key(root_directory)
+                db.probe_index_scope(root_scope_key)
+                for scope in discovered_scopes:
+                    db.probe_index_scope(scope["scope_key"])
+
+                with self._lock:
+                    active = db.get_current_library_job()
+                    has_active = bool(active and active.get("status") in db.LIBRARY_JOB_ACTIVE_STATUSES)
+                if not has_active:
+                    dirty_scopes = [
+                        scope for scope in db.get_index_scopes(dirty_only=True)
+                        if scope.get("scope_type") in {"root", "artist", "directory"}
+                    ]
+                    dirty_root_scopes = [
+                        scope for scope in dirty_scopes
+                        if scope.get("scope_type") == "root"
+                    ]
+                    # A root reconciliation already covers every nested
+                    # artist. Avoid scheduling the same HDD walk once per
+                    # artist on startup; artist scopes become useful again
+                    # when their shallow probe turns dirty.
+                    if dirty_root_scopes:
+                        dirty_scopes = dirty_root_scopes
+                    if dirty_scopes:
+                        scopes = [
+                            {
+                                "scope_key": scope["scope_key"],
+                                "scope_type": scope["scope_type"],
+                                "member_id": scope.get("member_id"),
+                                "directory": scope["directory"],
+                            }
+                            for scope in dirty_scopes
+                        ]
+                        try:
+                            self.start(
+                                "update-library",
+                                root_directory,
+                                analyze_colors=True,
+                                scopes=scopes,
+                                priority=90,
+                                automatic=True,
+                            )
+                        except LibraryJobAlreadyRunning:
+                            pass
+            except Exception as error:
+                print(f"library reconciliation probe failed: {error}")
+            self._stop_event.wait(self._auto_reconcile_interval)
 
     def _worker_loop(self) -> None:
         while not self._stop_event.is_set():
@@ -888,6 +1178,7 @@ class LibraryJobManager:
     def _run_job(self, job_id: str) -> None:
         with self._lock:
             cancel_event = self._cancel_events.get(job_id)
+            self._active_job_id = job_id
         if cancel_event is None:
             return
 
@@ -895,6 +1186,8 @@ class LibraryJobManager:
         if job is None:
             self._forget_job(job_id)
             return
+        with self._lock:
+            self._active_priority = int(job.get("priority") or 50)
 
         try:
             if cancel_event.is_set() or job.get("cancel_requested"):
@@ -916,12 +1209,51 @@ class LibraryJobManager:
             )
 
             if job["job_type"] == "update-library":
-                result = db.scan_and_index_directory(
-                    job["directory"],
-                    cancel_event=cancel_event,
-                    progress_callback=self._progress_callback(job_id),
-                    interactive_wait_callback=wait_for_interactive_quiet,
-                )
+                scopes = job.get("scopes") or [{
+                    "scope_key": db.get_index_scope_key(job["directory"]),
+                    "scope_type": "directory",
+                    "member_id": None,
+                    "directory": job["directory"],
+                }]
+                result = {
+                    "scanned": 0,
+                    "indexed": 0,
+                    "added": 0,
+                    "updated": 0,
+                    "unchanged": 0,
+                    "conflicts": 0,
+                    "errors": 0,
+                    "error_details": [],
+                    "directory": job["directory"],
+                    "cancelled": False,
+                    "processed": 0,
+                    "total": 0,
+                }
+                for scope in scopes:
+                    if cancel_event.is_set():
+                        result["cancelled"] = True
+                        break
+                    scope_result = db.scan_and_index_directory(
+                        scope.get("directory") or job["directory"],
+                        cancel_event=cancel_event,
+                        progress_callback=self._progress_callback(job_id),
+                        interactive_wait_callback=wait_for_interactive_quiet,
+                        scope_key=scope.get("scope_key"),
+                        scope_member_id=scope.get("member_id"),
+                    )
+                    for field in (
+                        "scanned", "indexed", "added", "updated", "unchanged",
+                        "conflicts", "errors", "processed",
+                    ):
+                        result[field] += int(scope_result.get(field) or 0)
+                    if scope_result.get("total") is not None:
+                        result["total"] += int(scope_result.get("total") or 0)
+                    result["error_details"].extend(scope_result.get("error_details") or [])
+                    result["error_details"] = result["error_details"][:20]
+                    result["cancelled"] = result["cancelled"] or bool(scope_result.get("cancelled"))
+                    if scope_result.get("error") and not result.get("error"):
+                        result["error"] = scope_result["error"]
+
                 auto_cache = _automatic_cache_management_enabled()
                 if result.get("cancelled") or result.get("error") or (
                     not job.get("analyze_colors") and not auto_cache
@@ -930,15 +1262,31 @@ class LibraryJobManager:
                 else:
                     color_result = None
                     if job.get("analyze_colors"):
-                        color_result = self._run_color_analysis(
-                            job_id,
-                            job["directory"],
-                            cancel_event,
-                            finalize=False,
-                        )
+                        color_result = {
+                            "cancelled": False,
+                            "errors": 0,
+                            "colors_created": 0,
+                            "colors_reused": 0,
+                        }
+                        for scope in scopes:
+                            if cancel_event.is_set():
+                                color_result["cancelled"] = True
+                                break
+                            current_color_result = self._run_color_analysis(
+                                job_id,
+                                scope.get("directory") or job["directory"],
+                                cancel_event,
+                                finalize=False,
+                            )
+                            for field in ("errors", "colors_created", "colors_reused"):
+                                color_result[field] += int(current_color_result.get(field) or 0)
+                            color_result["cancelled"] = color_result["cancelled"] or bool(
+                                current_color_result.get("cancelled")
+                            )
                     if (
                         not cancel_event.is_set()
                         and not (color_result or {}).get("cancelled")
+                        and not job.get("automatic")
                         and _automatic_cache_management_enabled()
                     ):
                         self._run_cache_organization(job_id, cancel_event, finalize=False)
@@ -963,6 +1311,10 @@ class LibraryJobManager:
                 current_file=None,
             )
         finally:
+            with self._lock:
+                if self._active_job_id == job_id:
+                    self._active_job_id = None
+                    self._active_priority = 100
             self._forget_job(job_id)
 
     def _finish_scan(self, job_id: str, result: Dict[str, Any]) -> None:

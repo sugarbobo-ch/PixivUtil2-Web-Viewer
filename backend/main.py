@@ -66,7 +66,7 @@ THUMB_GENERATION_LOCK = threading.Lock()
 THUMB_GENERATION_INFLIGHT: dict[str, threading.Event] = {}
 
 WEB_CONFIG_PATH = config_paths.WEB_CONFIG_PATH
-LIBRARY_JOB_MANAGER = library_jobs.LibraryJobManager()
+LIBRARY_JOB_MANAGER = library_jobs.LibraryJobManager(auto_reconcile=True)
 
 
 def generate_thumbnail_once(thumb_path: str, generator) -> bool:
@@ -206,21 +206,9 @@ def resolve_image_path(image_id: Optional[int], save_name: Optional[str]) -> Opt
         if not db.is_internal_media_path(candidate2) and os.path.isfile(candidate2):
             return candidate2
 
-    # Attempt 2: Dynamic filename search by image_id in rootDirectory & WORKSPACE_ROOT
-    if image_id:
-        target_str = str(image_id)
-        valid_exts = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".mp4"}
-        for search_base in [root_dir, WORKSPACE_ROOT]:
-            if not os.path.exists(search_base):
-                continue
-            for root, dirs, files in os.walk(search_base):
-                dirs[:] = [directory for directory in dirs if not db.is_internal_directory_name(directory)]
-                for f in files:
-                    ext = os.path.splitext(f)[1].lower()
-                    candidate = os.path.abspath(os.path.join(root, f))
-                    if ext in valid_exts and f.startswith(target_str) and not db.is_internal_media_path(candidate):
-                        return candidate
-
+    # Do not fall back to a recursive source-tree search. Gallery snapshots
+    # already carry the canonical path; a missing path should be reported as
+    # missing and repaired by a scoped index job, not by an interactive request.
     return None
 
 
@@ -251,7 +239,12 @@ class RescanRequest(BaseModel):
 class LibraryJobRequest(BaseModel):
     type: Literal["update-library", "analyze-missing-colors", "organize-thumbnail-cache"] = "update-library"
     directory: Optional[str] = None
-    analyze_colors: bool = False
+    directories: List[str] = Field(default_factory=list)
+    member_id: Optional[int] = None
+    member_ids: List[int] = Field(default_factory=list)
+    all_artists: bool = False
+    analyze_colors: bool = True
+    priority: Optional[int] = None
 
 
 class PixivConfigItemUpdate(BaseModel):
@@ -483,17 +476,34 @@ def restore_settings():
         raise HTTPException(status_code=500, detail=f"Failed to restore config.ini: {err}")
 
 
-@app.post("/api/rescan")
+@app.post("/api/rescan", status_code=status.HTTP_202_ACCEPTED)
 def rescan_directory(req: RescanRequest):
-    active_job = LIBRARY_JOB_MANAGER.current()
-    if active_job and active_job.get("status") in db.LIBRARY_JOB_ACTIVE_STATUSES:
+    target_dir = req.directory or get_root_directory()
+    target_dir = os.path.abspath(target_dir)
+    if not os.path.isdir(target_dir):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Directory does not exist: {target_dir}",
+        )
+    try:
+        job = LIBRARY_JOB_MANAGER.start(
+            "update-library",
+            target_dir,
+            analyze_colors=True,
+            scopes=[{
+                "scope_key": db.get_root_scope_key(target_dir),
+                "scope_type": "root",
+                "member_id": None,
+                "directory": target_dir,
+            }],
+            priority=20,
+        )
+    except library_jobs.LibraryJobAlreadyRunning as error:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail={"message": "A media library job is already running.", "job": active_job},
-        )
-    target_dir = req.directory or get_root_directory()
-    result = db.scan_and_index_directory(target_dir)
-    return result
+            detail={"message": "A media library job is already running.", "job": error.job},
+        ) from error
+    return {"job": job}
 
 
 @app.post("/api/library/jobs", status_code=status.HTTP_202_ACCEPTED)
@@ -505,11 +515,68 @@ def start_library_job(req: LibraryJobRequest):
             detail=f"Directory does not exist: {target_dir}",
         )
 
+    scopes: List[Dict[str, Any]] = []
+    if req.type == "update-library":
+        requested_member_ids = list(dict.fromkeys([
+            *([req.member_id] if req.member_id is not None else []),
+            *[int(member_id) for member_id in req.member_ids],
+        ]))
+        if req.all_artists:
+            requested_member_ids.extend(
+                int(scope["member_id"])
+                for scope in db.get_index_scopes(scope_type="artist")
+                if scope.get("member_id") is not None
+            )
+            requested_member_ids = list(dict.fromkeys(requested_member_ids))
+
+        for member_id in requested_member_ids:
+            scope = db.get_artist_scope(member_id)
+            if scope is None:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=f"Artist scope not discovered: {member_id}",
+                )
+            scopes.append({
+                "scope_key": scope["scope_key"],
+                "scope_type": "artist",
+                "member_id": int(member_id),
+                "directory": scope["directory"],
+            })
+
+        for directory in req.directories:
+            resolved_directory = os.path.abspath(directory)
+            if not os.path.isdir(resolved_directory):
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=f"Directory does not exist: {resolved_directory}",
+                )
+            scopes.append({
+                "scope_key": db.get_index_scope_key(resolved_directory),
+                "scope_type": "directory",
+                "member_id": None,
+                "directory": resolved_directory,
+            })
+
+        if not scopes:
+            scopes = [{
+                "scope_key": db.get_root_scope_key(target_dir),
+                "scope_type": "root",
+                "member_id": None,
+                "directory": target_dir,
+            }]
+
+    priority = req.priority
+    if priority is None:
+        priority = 0 if req.member_id is not None else 20 if req.member_ids else 50
+    priority = max(0, min(100, int(priority)))
+
     try:
         job = LIBRARY_JOB_MANAGER.start(
             req.type,
             target_dir,
             analyze_colors=req.analyze_colors,
+            scopes=scopes or None,
+            priority=priority,
         )
     except library_jobs.LibraryJobAlreadyRunning as error:
         raise HTTPException(

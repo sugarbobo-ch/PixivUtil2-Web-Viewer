@@ -9,6 +9,9 @@ from typing import Any, Dict, Optional
 WORKSPACE_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 WEB_CONFIG_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "web_config.json"))
 DEFAULT_CONFIG_INI_PATH = os.path.join(WORKSPACE_ROOT, "config.ini")
+# The Web Viewer owns this database.  PixivUtil2's database remains a
+# separate read-only source and is never used for Viewer writes.
+VIEWER_DB_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "viewer.sqlite"))
 
 
 def read_web_config() -> Dict[str, Any]:

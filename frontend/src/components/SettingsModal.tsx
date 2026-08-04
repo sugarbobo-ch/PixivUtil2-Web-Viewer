@@ -32,6 +32,7 @@ import {
   ThumbnailCacheRecoveryJob,
   ThumbnailCacheStats,
   HiddenArtist,
+  Artist,
   WebConfig,
 } from '../types';
 import { normalizeWebConfig } from '../utils/webConfig';
@@ -41,6 +42,7 @@ interface SettingsModalProps {
   onClose: () => void;
   onSettingsSaved: () => void;
   onOpenRecycleBin?: () => void;
+  artists?: Artist[];
 }
 
 type MainTab = 'web' | 'library' | 'pixiv' | 'backup';
@@ -169,6 +171,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onClose,
   onSettingsSaved,
   onOpenRecycleBin,
+  artists = [],
 }) => {
   const [mainTab, setMainTab] = useState<MainTab>('web');
   const [webConfig, setWebConfig] = useState<WebViewerConfig>(defaultWebConfig);
@@ -196,6 +199,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [message, setMessage] = useState<FeedbackMessage | null>(null);
   const [showSaveConfirm, setShowSaveConfirm] = useState(false);
   const [hiddenArtists, setHiddenArtists] = useState<HiddenArtist[]>([]);
+  const [selectedArtistIds, setSelectedArtistIds] = useState<number[]>([]);
   const libraryPollTimerRef = useRef<number | null>(null);
 
   const sectionKeys = Object.keys(pixivSections);
@@ -203,6 +207,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const rootDirectory = pixivSections.Settings?.rootdirectory
     || pixivSections.Settings?.rootDirectory
     || '.';
+
+  useEffect(() => {
+    const availableIds = new Set(artists.map(artist => artist.member_id));
+    setSelectedArtistIds(current => current.filter(memberId => availableIds.has(memberId)));
+  }, [artists]);
 
   const readJsonResponse = async <T,>(response: Response): Promise<T> => {
     const data = await response.json().catch(() => ({}));
@@ -617,6 +626,35 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
   };
 
+  const handleUpdateSelectedArtists = async () => {
+    if (libraryJobIsBusy || selectedArtistIds.length === 0) return;
+    setScanning(true);
+    setMessage(null);
+    try {
+      const response = await fetch('/api/library/jobs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'update-library',
+          member_ids: selectedArtistIds,
+          analyze_colors: webConfig.analyzeColorsAfterLibraryUpdate,
+          priority: 20,
+        }),
+      });
+      const data = await readJsonResponse<LibraryJobResponse>(response);
+      if (!data.job) throw new Error('無法建立繪師更新工作。');
+      setLibraryJob(data.job);
+      setMessage({ type: 'success', text: `已排程 ${selectedArtistIds.length} 位繪師的背景更新。` });
+      window.dispatchEvent(new Event('web-viewer-library-job-changed'));
+      stopLibraryPolling();
+      void pollLibraryJob(data.job.job_id);
+    } catch (error) {
+      setMessage({ type: 'error', text: `無法排程繪師更新：${getErrorMessage(error)}` });
+    } finally {
+      setScanning(false);
+    }
+  };
+
   const handleAnalyzeMissingColors = async () => {
     if (libraryJobIsBusy) return;
     setScanning(true);
@@ -707,16 +745,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       if (data.errors.length > 0) {
         setMessage({
           type: 'error',
-          text: `已永久刪除 ${data.deleted} 個縮圖、釋放 ${formatBytes(data.bytes_freed)}；仍有 ${data.remaining} 個檔案未能刪除。`,
+          text: `已將 ${data.deleted} 個縮圖送到資源回收筒、釋放 ${formatBytes(data.bytes_freed)}；仍有 ${data.remaining} 個檔案未完成。`,
         });
       } else {
         setMessage({
           type: 'success',
-          text: `已永久刪除 ${data.deleted} 個縮圖，釋放 ${formatBytes(data.bytes_freed)}。原始圖片不受影響。`,
+          text: `已將 ${data.deleted} 個縮圖送到資源回收筒，釋放 ${formatBytes(data.bytes_freed)}。原始圖片不受影響。`,
         });
       }
     } catch (error) {
-      setMessage({ type: 'error', text: `無法永久刪除縮圖：${getErrorMessage(error)}` });
+      setMessage({ type: 'error', text: `無法將縮圖送到資源回收筒：${getErrorMessage(error)}` });
     } finally {
       setHardDeleteLoading(false);
     }
@@ -1169,6 +1207,69 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 </div>
 
                 <div className="settings-modal__library-options space-y-3 rounded-xl p-4" aria-label="圖片色彩分析功能">
+                  <div className="space-y-3" role="group" aria-labelledby="selected-artists-title" aria-describedby="selected-artists-help">
+                    <div>
+                      <h5 id="selected-artists-title" className="settings-modal__heading text-sm font-semibold">更新選取的繪師</h5>
+                      <p id="selected-artists-help" className="settings-modal__description mt-1 text-xs leading-5">
+                        選取一位或多位繪師；更新會在背景執行，既有索引可繼續瀏覽。
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        className="settings-modal__secondary-button min-h-10 rounded-lg px-3 py-2 text-xs font-semibold"
+                        onClick={() => setSelectedArtistIds(artists.filter(artist => artist.member_id > 0).map(artist => artist.member_id))}
+                        disabled={libraryJobIsBusy || artists.length === 0}
+                      >
+                        選取全部繪師
+                      </button>
+                      <button
+                        type="button"
+                        className="settings-modal__secondary-button min-h-10 rounded-lg px-3 py-2 text-xs font-semibold"
+                        onClick={() => setSelectedArtistIds([])}
+                        disabled={libraryJobIsBusy || selectedArtistIds.length === 0}
+                      >
+                        清除選取
+                      </button>
+                    </div>
+                    {artists.length > 0 ? (
+                      <div className="max-h-56 overflow-y-auto overscroll-contain space-y-1 pr-1">
+                        {artists.filter(artist => artist.member_id > 0).map(artist => {
+                          const checked = selectedArtistIds.includes(artist.member_id);
+                          const inputId = `library-artist-${artist.member_id}`;
+                          return (
+                            <label key={artist.member_id} htmlFor={inputId} className="settings-modal__check-row flex min-h-11 cursor-pointer items-center gap-3 rounded-lg px-3 py-2 text-sm">
+                              <input
+                                id={inputId}
+                                type="checkbox"
+                                checked={checked}
+                                onChange={() => setSelectedArtistIds(current => checked
+                                  ? current.filter(memberId => memberId !== artist.member_id)
+                                  : [...current, artist.member_id])}
+                                disabled={libraryJobIsBusy}
+                                className="settings-modal__checkbox h-4 w-4 shrink-0 rounded"
+                              />
+                              <span className="min-w-0 flex-1 truncate">{artist.name || `繪師 ${artist.member_id}`}</span>
+                              <span className="settings-modal__text-subtle shrink-0 text-xs">{artist.artwork_count.toLocaleString()}</span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <p className="settings-modal__text-subtle text-xs">目前沒有可更新的繪師。</p>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => void handleUpdateSelectedArtists()}
+                      disabled={libraryJobIsBusy || selectedArtistIds.length === 0}
+                      aria-describedby="selected-artists-help"
+                      className="settings-modal__secondary-button inline-flex min-h-11 items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold"
+                    >
+                      <RefreshCw className={`h-4 w-4 ${scanning && selectedArtistIds.length > 0 ? 'is-active' : ''}`} aria-hidden="true" />
+                      更新選取的繪師（{selectedArtistIds.length}）
+                    </button>
+                  </div>
+
                   <label htmlFor="analyze-colors-after-update" className="settings-modal__check-row flex min-h-11 cursor-pointer items-start gap-3 rounded-lg px-3 py-2 text-sm">
                     <input
                       id="analyze-colors-after-update"
@@ -1327,7 +1428,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                               </button>
                               <button type="button" onClick={() => setHardDeleteTarget(job)} disabled={thumbnailCacheLoading || libraryJobIsBusy} className="settings-modal__danger-button inline-flex min-h-10 items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold transition-[background-color,transform] active:scale-[0.96] focus-visible:outline-2 focus-visible:outline-offset-2">
                                 <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
-                                永久刪除
+                                送到資源回收筒
                               </button>
                             </div>
                           </div>
@@ -1598,8 +1699,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 <Trash2 className="h-5 w-5" aria-hidden="true" />
               </span>
               <div className="min-w-0">
-                <h3 id="thumbnail-hard-delete-title" className="settings-modal__confirm-title text-base font-bold">永久刪除這批縮圖？</h3>
-                <p className="settings-modal__confirm-text mt-1 text-sm leading-6">這會永久刪除可復原位置中的 {hardDeleteTarget.recoverable_files.toLocaleString()} 個縮圖，釋放約 {formatBytes(hardDeleteTarget.recoverable_bytes)}。刪除後無法從 Web Viewer 還原。</p>
+                <h3 id="thumbnail-hard-delete-title" className="settings-modal__confirm-title text-base font-bold">將這批縮圖送到資源回收筒？</h3>
+                <p className="settings-modal__confirm-text mt-1 text-sm leading-6">這會將可復原位置中的 {hardDeleteTarget.recoverable_files.toLocaleString()} 個縮圖送到 Windows 資源回收筒，釋放約 {formatBytes(hardDeleteTarget.recoverable_bytes)}。之後可由 Windows 還原。</p>
               </div>
             </div>
             <p className="settings-modal__danger-note rounded-lg px-3 py-2 text-xs leading-5">只會刪除縮圖快取，不會刪除原始圖片。</p>
@@ -1609,7 +1710,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               </button>
               <button type="button" onClick={handleHardDeleteThumbnailCache} disabled={hardDeleteLoading} className="settings-modal__danger-button inline-flex min-h-11 items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition-[background-color,transform] active:scale-[0.96] disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2">
                 <Trash2 className="h-4 w-4" aria-hidden="true" />
-                {hardDeleteLoading ? '刪除中…' : '永久刪除縮圖'}
+                {hardDeleteLoading ? '移動中…' : '送到資源回收筒'}
               </button>
             </div>
           </div>

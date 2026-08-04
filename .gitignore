@@ -2,6 +2,8 @@
 backend/.venv/
 backend/__pycache__/
 backend/cache_thumbs/
+backend/viewer.sqlite*
+.pnpm-store/
 *.pyc
 
 # Node modules & build outputs

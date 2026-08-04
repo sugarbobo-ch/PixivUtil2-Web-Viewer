@@ -38,12 +38,12 @@ def _normalise_path(path: Optional[str]) -> str:
 
 
 def _read_only_connection() -> Optional[sqlite3.Connection]:
-    if not os.path.isfile(db.DB_PATH):
+    if not os.path.isfile(db.PIXIV_DB_PATH):
         return None
 
     # SQLite's read-only URI prevents this feature from creating journals or
     # making accidental schema/data changes while PixivUtil2 owns the DB.
-    uri_path = os.path.abspath(db.DB_PATH).replace("\\", "/")
+    uri_path = os.path.abspath(db.PIXIV_DB_PATH).replace("\\", "/")
     try:
         connection = sqlite3.connect(
             f"file:{quote(uri_path, safe='/:')}?mode=ro",

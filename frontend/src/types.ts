@@ -128,6 +128,14 @@ export interface LibraryJob {
   status: LibraryJobStatus;
   phase: LibraryJobPhase;
   directory: string;
+  scopes?: Array<{
+    scope_key: string;
+    scope_type: 'root' | 'artist' | 'directory';
+    member_id: number | null;
+    directory: string;
+  }>;
+  priority?: number;
+  automatic?: boolean;
   analyze_colors: boolean;
   discovered: number;
   total: number | null;

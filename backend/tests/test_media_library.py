@@ -1,5 +1,6 @@
 import os
 import gc
+import sqlite3
 import sys
 import tempfile
 import threading
@@ -19,6 +20,7 @@ from PIL import Image
 class MediaLibraryTests(unittest.TestCase):
     def setUp(self):
         self.original_db_path = db.DB_PATH
+        self.original_pixiv_db_path = db.PIXIV_DB_PATH
         self.temp_dir = tempfile.TemporaryDirectory()
         self.root = Path(self.temp_dir.name) / "media"
         self.root.mkdir()
@@ -28,6 +30,8 @@ class MediaLibraryTests(unittest.TestCase):
         library_jobs.THUMB_CACHE_RECOVERY_DIR = str(Path(library_jobs.THUMB_CACHE_DIR) / ".viewer-trash")
         library_jobs._CACHE_ACCESS_LAST_TOUCH.clear()
         db.DB_PATH = str(Path(self.temp_dir.name) / "viewer.sqlite")
+        # Tests must never import or inspect the real PixivUtil2 database.
+        db.PIXIV_DB_PATH = str(Path(self.temp_dir.name) / "missing-pixiv.sqlite")
         db.invalidate_scan_cache()
         db.init_db_schema()
         self.manager = None
@@ -37,6 +41,7 @@ class MediaLibraryTests(unittest.TestCase):
             self.manager.close()
         db.invalidate_scan_cache()
         db.DB_PATH = self.original_db_path
+        db.PIXIV_DB_PATH = self.original_pixiv_db_path
         library_jobs.THUMB_CACHE_DIR = self.original_thumb_cache_dir
         library_jobs.THUMB_CACHE_RECOVERY_DIR = self.original_thumb_recovery_dir
         library_jobs._CACHE_ACCESS_LAST_TOUCH.clear()
@@ -67,6 +72,48 @@ class MediaLibraryTests(unittest.TestCase):
         self.assertEqual({row["save_name"] for row in rows}, {str(first), str(second)})
         self.assertEqual(len({row["image_id"] for row in rows}), 2)
 
+    def test_pixiv_database_is_read_only_during_snapshot_import(self):
+        source_path = Path(self.temp_dir.name) / "pixiv-source.sqlite"
+        with sqlite3.connect(source_path) as source_conn:
+            source_conn.executescript(
+                """
+                CREATE TABLE pixiv_master_member (
+                    member_id INTEGER PRIMARY KEY,
+                    name TEXT,
+                    save_folder TEXT,
+                    created_date DATE,
+                    last_update_date DATE
+                );
+                CREATE TABLE pixiv_master_image (
+                    image_id INTEGER PRIMARY KEY,
+                    member_id INTEGER,
+                    title TEXT,
+                    save_name TEXT,
+                    created_date DATE,
+                    last_update_date DATE
+                );
+                INSERT INTO pixiv_master_member
+                    (member_id, name, save_folder)
+                VALUES (4252792, 'Read-only Artist', 'Read-only Artist');
+                INSERT INTO pixiv_master_image
+                    (image_id, member_id, title, save_name)
+                VALUES (12345678, 4252792, 'Existing', 'F:/Pixiv/Read-only Artist/12345678.jpg');
+                """
+            )
+
+        before = source_path.read_bytes()
+        db.PIXIV_DB_PATH = str(source_path)
+        db.sync_pixiv_snapshot()
+        after = source_path.read_bytes()
+
+        self.assertEqual(before, after)
+        with db.get_db_connection() as viewer_conn:
+            row = viewer_conn.execute(
+                "SELECT title FROM pixiv_master_image WHERE image_id = ?",
+                (12345678,),
+            ).fetchone()
+        self.assertEqual(row["title"], "Existing")
+
     def test_scan_classifies_unchanged_and_updated_files(self):
         path = self._write_media("87654321.jpg", b"original")
 
@@ -79,6 +126,14 @@ class MediaLibraryTests(unittest.TestCase):
         self.assertEqual(first["added"], 1)
         self.assertEqual(second["unchanged"], 1)
         self.assertEqual(third["updated"], 1)
+
+    def test_indexing_does_not_modify_source_media_bytes(self):
+        path = self._write_media("65432109.jpg", b"source-bytes")
+        before = path.read_bytes()
+
+        db.scan_and_index_directory(str(self.root))
+
+        self.assertEqual(path.read_bytes(), before)
 
     def test_nested_media_uses_stable_top_level_folder_identity(self):
         archive = self.root / "Discord FANBOX Archive comodox [4252792]"
@@ -159,6 +214,7 @@ class MediaLibraryTests(unittest.TestCase):
 
     def test_artist_counts_are_derived_from_shared_root_snapshot(self):
         self._write_media("Artist folder/123.jpg", b"image")
+        db.scan_and_index_directory(str(self.root))
         original_workspace_root = config_paths.WORKSPACE_ROOT
         original_config_path_reader = config_paths.get_pixiv_config_path
         config_paths.WORKSPACE_ROOT = str(self.root)
@@ -171,6 +227,52 @@ class MediaLibraryTests(unittest.TestCase):
 
         artist = next(item for item in artists if item.get("name") == "Artist folder")
         self.assertEqual(artist["artwork_count"], 1)
+
+    def test_gallery_navigation_uses_viewer_snapshot_without_hdd_walk(self):
+        self._write_media("Snapshot Artist/123.jpg", b"image")
+        db.scan_and_index_directory(str(self.root))
+        original_walk = db.os.walk
+
+        def fail_walk(*_args, **_kwargs):
+            raise AssertionError("gallery navigation must not walk the source tree")
+
+        db.os.walk = fail_walk
+        try:
+            artists = db.get_all_artists()
+            images, total, _months = db.get_images(artist_id=next(
+                artist["member_id"]
+                for artist in artists
+                if artist.get("name") == "Snapshot Artist"
+            ))
+        finally:
+            db.os.walk = original_walk
+
+        self.assertEqual(total, 1)
+        self.assertEqual(images[0]["save_name"], str(self.root / "Snapshot Artist" / "123.jpg"))
+
+    def test_multiple_artist_scopes_share_one_cancellable_job(self):
+        first = self._write_media("First Artist/10000001.jpg", b"first")
+        second = self._write_media("Second Artist/10000002.jpg", b"second")
+        scopes = db.discover_root_scopes(str(self.root))
+        self.assertEqual(len(scopes), 2)
+
+        self.manager = LibraryJobManager()
+        created = self.manager.start(
+            "update-library",
+            str(self.root),
+            scopes=scopes,
+            analyze_colors=False,
+            priority=20,
+        )
+        self.assertEqual(len(created["scopes"]), 2)
+        final = self._wait_for_terminal(created["job_id"])
+
+        self.assertEqual(final["status"], "completed")
+        self.assertEqual(final["added"], 2)
+        self.assertEqual(
+            {row["save_name"] for row in db.get_images()[0]},
+            {str(first), str(second)},
+        )
 
     def test_hidden_artist_and_recycle_metadata_are_reversible(self):
         artist_id = 4252792
@@ -380,7 +482,14 @@ class MediaLibraryTests(unittest.TestCase):
         recovery_path = Path(library_jobs.THUMB_CACHE_RECOVERY_DIR) / created["job_id"] / details["entries"][0]["recovery_name"]
         self.assertTrue(recovery_path.exists())
 
-        deleted = library_jobs.permanently_delete_thumbnail_cache(created["job_id"])
+        original_send_to_recycle_bin = library_jobs.recycle_bin.send_path_to_system_recycle_bin
+        library_jobs.recycle_bin.send_path_to_system_recycle_bin = lambda path: Path(path).rename(
+            Path(path).with_suffix(".recycled")
+        )
+        try:
+            deleted = library_jobs.permanently_delete_thumbnail_cache(created["job_id"])
+        finally:
+            library_jobs.recycle_bin.send_path_to_system_recycle_bin = original_send_to_recycle_bin
         self.assertEqual(deleted["deleted"], 1)
         self.assertEqual(deleted["errors"], [])
         self.assertFalse(recovery_path.exists())
