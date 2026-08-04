@@ -41,6 +41,7 @@ interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSettingsSaved: () => void;
+  onArtistVisibilityChanged?: () => void;
   onOpenRecycleBin?: () => void;
   artists?: Artist[];
 }
@@ -170,6 +171,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   isOpen,
   onClose,
   onSettingsSaved,
+  onArtistVisibilityChanged,
   onOpenRecycleBin,
   artists = [],
 }) => {
@@ -316,6 +318,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       const response = await fetch(`/api/artists/${encodeURIComponent(artist.member_id)}/unhide`, { method: 'POST' });
       await readJsonResponse(response);
       await loadHiddenArtists();
+      onArtistVisibilityChanged?.();
       setMessage({ type: 'success', text: `已恢復顯示「${artist.folder_name || artist.member_id}」。` });
     } catch (error) {
       setMessage({ type: 'error', text: `無法恢復繪師：${getErrorMessage(error)}` });

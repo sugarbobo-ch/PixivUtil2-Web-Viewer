@@ -1341,6 +1341,12 @@ export const App: React.FC = () => {
     void refreshDirectoryMetadata().catch(err => console.error('Failed to refresh after artist action:', err));
   }, [refreshDirectoryMetadata]);
 
+  const handleArtistVisibilityChanged = useCallback(() => {
+    imagePageCacheRef.current.clear();
+    void refreshDirectoryMetadata().catch(err => console.error('Failed to refresh artist list after visibility action:', err));
+    fetchImages();
+  }, [fetchImages, refreshDirectoryMetadata]);
+
   const handleOpenRecycleBin = useCallback(() => {
     setIsSettingsOpen(false);
     setIsArtistSettingsOpen(false);
@@ -1576,6 +1582,7 @@ export const App: React.FC = () => {
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
         onSettingsSaved={handleSettingsSaved}
+        onArtistVisibilityChanged={handleArtistVisibilityChanged}
         onOpenRecycleBin={handleOpenRecycleBin}
         artists={artists}
       />
