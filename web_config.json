@@ -6,7 +6,7 @@
   "autoOpenBrowser": true,
   "pixivConfigPath": "",
   "groupMangaPosts": false,
-  "blurEnabled": true,
+  "blurEnabled": false,
   "preloadImageCount": 10,
   "analyzeColorsAfterLibraryUpdate": true,
   "manageThumbnailCache": true,
