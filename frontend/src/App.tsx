@@ -1592,9 +1592,6 @@ export const App: React.FC = () => {
         artist={currentArtist}
         onClose={() => setIsArtistSettingsOpen(false)}
         onArtistChanged={handleArtistChanged}
-        onOpenRecycleBin={handleOpenRecycleBin}
-        isUpdating={isArtistUpdating}
-        onRequestUpdate={handleRequestArtistUpdate}
       />
 
       <RecycleBinModal

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Eye, RefreshCw, Settings2, Trash2, X } from 'lucide-react';
+import { Eye, Settings2, Trash2, X } from 'lucide-react';
 import { Artist } from '../types';
 import { ConfirmModal } from './ConfirmModal';
 
@@ -8,9 +8,6 @@ interface ArtistSettingsModalProps {
   artist: Artist | null;
   onClose: () => void;
   onArtistChanged?: () => void;
-  onOpenRecycleBin?: () => void;
-  isUpdating?: boolean;
-  onRequestUpdate?: () => void;
 }
 
 type ArtistAction = 'hide' | 'trash';
@@ -24,9 +21,6 @@ export const ArtistSettingsModal: React.FC<ArtistSettingsModalProps> = ({
   artist,
   onClose,
   onArtistChanged,
-  onOpenRecycleBin,
-  isUpdating = false,
-  onRequestUpdate,
 }) => {
   const [action, setAction] = useState<ArtistAction | null>(null);
   const [loading, setLoading] = useState(false);
@@ -139,17 +133,6 @@ export const ArtistSettingsModal: React.FC<ArtistSettingsModalProps> = ({
             </div>
 
             <div className="grid gap-3 sm:grid-cols-2">
-              {onRequestUpdate && (
-                <button
-                  type="button"
-                  onClick={onRequestUpdate}
-                  disabled={loading || isUpdating}
-                  className="settings-modal__secondary-button inline-flex min-h-11 items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold sm:col-span-2"
-                >
-                  <RefreshCw className={`settings-modal__library-status-icon h-4 w-4 ${isUpdating ? 'is-active' : ''}`} aria-hidden="true" />
-                  {isUpdating ? '背景更新中…' : '更新作品資料'}
-                </button>
-              )}
               <button
                 type="button"
                 onClick={() => setAction('hide')}
@@ -169,17 +152,6 @@ export const ArtistSettingsModal: React.FC<ArtistSettingsModalProps> = ({
                 刪除全部作品（移到回收區）
               </button>
             </div>
-
-            {onOpenRecycleBin && (
-              <button
-                type="button"
-                onClick={onOpenRecycleBin}
-                className="settings-modal__secondary-button inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold"
-              >
-                <Trash2 className="h-4 w-4" aria-hidden="true" />
-                查看回收區
-              </button>
-            )}
           </div>
 
           <footer className="settings-modal__footer flex justify-end px-6 py-4">
