@@ -163,7 +163,7 @@ def get_pixiv_db_connection() -> Optional[sqlite3.Connection]:
         return None
 
 
-VIEWER_SCHEMA_VERSION = 5
+VIEWER_SCHEMA_VERSION = 6
 DOMINANT_COLOR_ALGORITHM_VERSION = "rgb-bucket-v1"
 LIBRARY_JOB_ACTIVE_STATUSES = ("queued", "running", "cancelling")
 LIBRARY_JOB_TERMINAL_STATUSES = ("completed", "cancelled", "failed", "interrupted")
@@ -303,7 +303,9 @@ def _ensure_viewer_schema(cursor: sqlite3.Cursor) -> None:
             status TEXT NOT NULL DEFAULT 'never-indexed',
             last_probe_at TEXT,
             last_indexed_at TEXT,
-            last_error TEXT
+            last_error TEXT,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            last_discovered_at TEXT
         )
     """)
     scope_columns = {
@@ -312,9 +314,21 @@ def _ensure_viewer_schema(cursor: sqlite3.Cursor) -> None:
     }
     if "probe_signature" not in scope_columns:
         cursor.execute("ALTER TABLE viewer_index_scope ADD COLUMN probe_signature TEXT")
+    if "is_active" not in scope_columns:
+        cursor.execute(
+            "ALTER TABLE viewer_index_scope ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1"
+        )
+    if "last_discovered_at" not in scope_columns:
+        cursor.execute(
+            "ALTER TABLE viewer_index_scope ADD COLUMN last_discovered_at TEXT"
+        )
     cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_viewer_index_scope_status
         ON viewer_index_scope (dirty, status, last_indexed_at)
+    """)
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_viewer_index_scope_artist_active
+        ON viewer_index_scope (scope_type, is_active, directory)
     """)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS viewer_source_snapshot (
@@ -619,6 +633,30 @@ def _sync_pixiv_snapshot() -> None:
 
 def _normalise_media_path(file_path: str) -> str:
     return os.path.normcase(os.path.normpath(os.path.abspath(file_path)))
+
+
+def _sql_path_prefix_like(directory: str) -> str:
+    """Return an escaped SQLite LIKE prefix for one stored directory tree."""
+    prefix = _normalise_media_path(directory).rstrip("\\/") + os.sep
+    escaped = prefix.replace("!", "!!").replace("%", "!%").replace("_", "!_")
+    return f"{escaped}%"
+
+
+def _stored_media_path_is_within(file_path: Optional[str], directory: str) -> bool:
+    if not file_path or is_internal_media_path(file_path):
+        return False
+    return _is_path_within(str(file_path), directory)
+
+
+def _stored_media_path_is_direct_child(file_path: Optional[str], directory: str) -> bool:
+    if not file_path or is_internal_media_path(file_path):
+        return False
+    try:
+        normalized_file = _normalise_media_path(str(file_path))
+        normalized_directory = _normalise_media_path(directory)
+        return os.path.dirname(normalized_file) == normalized_directory
+    except (OSError, TypeError, ValueError):
+        return False
 
 
 def _media_fingerprint(file_size: int, mtime_ns: int) -> str:
@@ -975,12 +1013,51 @@ def discover_root_scopes(root_directory: str) -> List[Dict[str, Any]]:
         root_scope_key = get_root_scope_key(root)
         conn.execute(
             """
-            INSERT INTO viewer_index_scope (scope_key, scope_type, directory, dirty, status)
-            VALUES (?, 'root', ?, 1, 'never-indexed')
-            ON CONFLICT(scope_key) DO UPDATE SET directory = excluded.directory
+            INSERT INTO viewer_index_scope
+                (scope_key, scope_type, directory, dirty, status, is_active, last_discovered_at)
+            VALUES (?, 'root', ?, 1, 'never-indexed', 1, ?)
+            ON CONFLICT(scope_key) DO UPDATE SET
+                directory = excluded.directory,
+                is_active = 1,
+                last_discovered_at = excluded.last_discovered_at
             """,
-            (root_scope_key, root),
+            (root_scope_key, root, now),
         )
+
+        discovered_directories = {
+            os.path.normcase(os.path.abspath(entry.path))
+            for entry in folders
+        }
+        existing_artist_scopes = conn.execute(
+            """
+            SELECT scope_key, directory
+            FROM viewer_index_scope
+            WHERE scope_type = 'artist'
+            """
+        ).fetchall()
+        for existing_scope in existing_artist_scopes:
+            existing_directory = os.path.normcase(
+                os.path.abspath(existing_scope["directory"])
+            )
+            if os.path.normcase(os.path.dirname(existing_directory)) != os.path.normcase(root):
+                continue
+            if existing_directory in discovered_directories:
+                continue
+            # Keep the historical scope and its Viewer rows for diagnostics,
+            # but make it impossible for a stale member row to recreate the
+            # artist in the navigator or as a selectable update target.
+            conn.execute(
+                """
+                UPDATE viewer_index_scope
+                SET is_active = 0,
+                    dirty = 0,
+                    status = 'stale',
+                    last_error = NULL
+                WHERE scope_key = ?
+                """,
+                (existing_scope["scope_key"],),
+            )
+
         for entry in folders:
             member_id = get_folder_member_id(
                 entry.path,
@@ -1001,13 +1078,24 @@ def discover_root_scopes(root_directory: str) -> List[Dict[str, Any]]:
             conn.execute(
                 """
                 INSERT INTO viewer_index_scope
-                    (scope_key, scope_type, member_id, directory, dirty, status)
-                VALUES (?, 'artist', ?, ?, 1, 'never-indexed')
+                    (scope_key, scope_type, member_id, directory, dirty, status,
+                     is_active, last_discovered_at)
+                VALUES (?, 'artist', ?, ?, 1, 'never-indexed', 1, ?)
                 ON CONFLICT(scope_key) DO UPDATE SET
                     member_id = excluded.member_id,
-                    directory = excluded.directory
+                    directory = excluded.directory,
+                    is_active = 1,
+                    last_discovered_at = excluded.last_discovered_at,
+                    dirty = CASE
+                        WHEN viewer_index_scope.is_active = 0 THEN 1
+                        ELSE viewer_index_scope.dirty
+                    END,
+                    status = CASE
+                        WHEN viewer_index_scope.is_active = 0 THEN 'dirty'
+                        ELSE viewer_index_scope.status
+                    END
                 """,
-                (scope_key, member_id, os.path.abspath(entry.path)),
+                (scope_key, member_id, os.path.abspath(entry.path), now),
             )
             scopes.append({
                 "scope_key": scope_key,
@@ -1032,6 +1120,8 @@ def get_index_scopes(
     if scope_type:
         conditions.append("scope_type = ?")
         params.append(scope_type)
+        if scope_type == "artist":
+            conditions.extend(["is_active = 1", "last_discovered_at IS NOT NULL"])
     where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
     with get_db_connection() as conn:
         rows = conn.execute(
@@ -1048,42 +1138,15 @@ def get_artist_scope(member_id: int) -> Optional[Dict[str, Any]]:
             """
             SELECT * FROM viewer_index_scope
             WHERE member_id = ? AND scope_type = 'artist'
+              AND is_active = 1 AND last_discovered_at IS NOT NULL
             ORDER BY last_indexed_at DESC, directory
             LIMIT 1
             """,
             (int(member_id),),
         ).fetchone()
-        member_row = conn.execute(
-            "SELECT name, save_folder FROM pixiv_master_member WHERE member_id = ? LIMIT 1",
-            (int(member_id),),
-        ).fetchone()
     if row:
         return dict(row)
-    if not member_row:
-        return None
-
-    folder_name = str(member_row["save_folder"] or member_row["name"] or "").strip()
-    if not folder_name:
-        return None
-    root_directory = get_configured_root_directory()
-    directory = os.path.abspath(os.path.join(root_directory, folder_name))
-    if not _is_path_within(directory, root_directory):
-        return None
-    scope = {
-        "scope_key": get_index_scope_key(directory, int(member_id)),
-        "scope_type": "artist",
-        "member_id": int(member_id),
-        "directory": directory,
-        "dirty": 1,
-        "status": "never-indexed",
-    }
-    _ensure_index_scope_row(
-        scope["scope_key"],
-        "artist",
-        directory,
-        int(member_id),
-    )
-    return scope
+    return None
 
 
 def probe_index_scope(scope_key: str) -> Optional[Dict[str, Any]]:
@@ -1163,7 +1226,12 @@ def scan_and_index_directory(
     """
     init_db_schema()
     abs_dir = os.path.abspath(target_dir)
-    scope_key = scope_key or get_index_scope_key(abs_dir, scope_member_id)
+    if scope_key is None:
+        scope_key = (
+            get_root_scope_key(abs_dir)
+            if scope_member_id is None
+            else get_index_scope_key(abs_dir, scope_member_id)
+        )
     scope_type = (
         "artist"
         if scope_member_id is not None
@@ -1171,6 +1239,11 @@ def scan_and_index_directory(
         if scope_key.startswith("root:")
         else "directory"
     )
+    if scope_type == "root":
+        # Register only the immediate child folders before the recursive scan
+        # starts. Navigation still never calls this function; root discovery
+        # belongs to an explicit/background indexing job.
+        discover_root_scopes(abs_dir)
     _set_index_scope_state(
         scope_key,
         scope_type,
@@ -1486,7 +1559,12 @@ def scan_and_index_directory(
             now = _utc_timestamp()
             with get_db_connection() as conn:
                 artist_scopes = conn.execute(
-                    "SELECT scope_key, directory FROM viewer_index_scope WHERE scope_type = 'artist'"
+                    """
+                    SELECT scope_key, directory
+                    FROM viewer_index_scope
+                    WHERE scope_type = 'artist'
+                      AND is_active = 1 AND last_discovered_at IS NOT NULL
+                    """
                 ).fetchall()
                 for artist_scope in artist_scopes:
                     if not _is_path_within(artist_scope["directory"], abs_dir):
@@ -2214,12 +2292,28 @@ def mark_trash_entries_sent_to_system_recycle(trash_ids: List[int]) -> int:
 
 
 def _get_all_artists_from_viewer_snapshot() -> List[Dict[str, Any]]:
-    """Build the artist navigator from Viewer SQLite without listing the root."""
+    """Build the artist navigator from active root-first-level scopes only.
+
+    ``pixiv_master_member`` also contains the read-only PixivUtil2 snapshot,
+    so it is intentionally not used as the set of artists. Stored media paths
+    are used for counts as well: the first directory below root is the source
+    of truth even when an imported row has a stale or unrelated member_id.
+    """
     init_db_schema()
     hidden_artist_ids = get_hidden_artist_ids()
-    counts: Dict[int, int] = {}
+    root_directory = os.path.abspath(get_configured_root_directory())
+
     with get_db_connection() as conn:
-        rows = conn.execute(
+        scope_rows = conn.execute(
+            """
+            SELECT scope_key, member_id, directory
+            FROM viewer_index_scope
+            WHERE scope_type = 'artist'
+              AND is_active = 1 AND last_discovered_at IS NOT NULL
+            ORDER BY directory COLLATE NOCASE
+            """
+        ).fetchall()
+        media_rows = conn.execute(
             """
             SELECT image.member_id, image.save_name
             FROM pixiv_master_image image
@@ -2229,62 +2323,58 @@ def _get_all_artists_from_viewer_snapshot() -> List[Dict[str, Any]]:
             )
             """
         ).fetchall()
-        for row in rows:
-            if not should_keep_database_media(row["save_name"]):
-                continue
-            member_id = row["member_id"]
-            if member_id is None:
-                continue
-            counts[int(member_id)] = counts.get(int(member_id), 0) + 1
 
-        member_rows = conn.execute(
-            """
-            SELECT member_id, name, save_folder
-            FROM pixiv_master_member
-            WHERE member_id IS NOT NULL AND member_id != -1
-            ORDER BY name COLLATE NOCASE, member_id
-            """
-        ).fetchall()
-
-    result: List[Dict[str, Any]] = []
-    seen_ids: set[int] = set()
-    for row in member_rows:
-        member_id = int(row["member_id"])
-        if member_id in seen_ids or member_id in hidden_artist_ids:
+    active_scopes: List[Dict[str, Any]] = []
+    for row in scope_rows:
+        directory = os.path.abspath(str(row["directory"] or ""))
+        # A historical scope from another root may still exist in Viewer DB;
+        # it must not leak into the currently configured root's navigator.
+        if os.path.normcase(os.path.dirname(os.path.normpath(directory))) != os.path.normcase(root_directory):
             continue
-        name = str(row["name"] or row["save_folder"] or member_id)
-        seen_ids.add(member_id)
-        result.append({
+        member_id = row["member_id"]
+        if member_id is None:
+            continue
+        member_id = int(member_id)
+        if member_id in hidden_artist_ids:
+            continue
+        active_scopes.append({
             "member_id": member_id,
-            "name": name,
-            "folder_name": name,
-            "artwork_count": counts.get(member_id, 0),
+            "directory": directory,
+            "folder_name": os.path.basename(os.path.normpath(directory)),
+            "artwork_count": 0,
         })
-
-    # A scanned file may have a member id without a corresponding member row
-    # (for example, an interrupted import). Keep it navigable in the snapshot.
-    for member_id in sorted(set(counts) - seen_ids - hidden_artist_ids):
-        result.append({
-            "member_id": member_id,
-            "name": str(member_id),
-            "folder_name": str(member_id),
-            "artwork_count": counts[member_id],
-        })
-    result.sort(key=lambda item: natural_sort_key(item.get("name") or ""))
 
     direct_root_count = 0
-    with get_db_connection() as conn:
-        direct_root_count = int(conn.execute(
-            """
-            SELECT COUNT(*)
-            FROM pixiv_master_image image
-            WHERE image.member_id IS NULL
-              AND NOT EXISTS (
-                  SELECT 1 FROM pixivutil2_trash_image trash
-                  WHERE trash.image_id = image.image_id
-              )
-            """
-        ).fetchone()[0])
+    for row in media_rows:
+        media_path = row["save_name"]
+        if not should_keep_database_media(media_path):
+            continue
+        if not media_path:
+            continue
+
+        normalized_media_path = os.path.normcase(os.path.abspath(str(media_path)))
+        for scope in active_scopes:
+            normalized_scope = os.path.normcase(
+                os.path.abspath(scope["directory"])
+            )
+            if normalized_media_path == normalized_scope or normalized_media_path.startswith(
+                normalized_scope + os.sep
+            ):
+                scope["artwork_count"] += 1
+                break
+        if os.path.normcase(os.path.dirname(normalized_media_path)) == os.path.normcase(root_directory):
+            direct_root_count += 1
+
+    result: List[Dict[str, Any]] = [
+        {
+            "member_id": int(scope["member_id"]),
+            "name": scope["folder_name"],
+            "folder_name": scope["folder_name"],
+            "artwork_count": int(scope["artwork_count"]),
+        }
+        for scope in active_scopes
+    ]
+    result.sort(key=lambda item: natural_sort_key(item.get("name") or ""))
     if direct_root_count:
         result.insert(0, {
             "member_id": -1,
@@ -2528,6 +2618,15 @@ def _get_images_from_viewer_snapshot(
     init_db_schema()
     month_list = [value.strip() for value in month.split(",") if value.strip()] if month else []
     hidden_artist_ids = get_hidden_artist_ids()
+    artist_scope_directory: Optional[str] = None
+    root_directory: Optional[str] = None
+    if artist_id is not None and artist_id != -1:
+        artist_scope = get_artist_scope(int(artist_id))
+        if artist_scope is None:
+            return [], 0, []
+        artist_scope_directory = str(artist_scope["directory"])
+    elif artist_id == -1:
+        root_directory = get_configured_root_directory()
     items: List[Dict[str, Any]] = []
 
     with get_db_connection() as conn:
@@ -2546,9 +2645,19 @@ def _get_images_from_viewer_snapshot(
                 params.append(value)
             conditions.append("(" + " OR ".join(month_conditions) + ")")
         if artist_id is not None:
-            conditions.append("i.member_id IS NULL" if artist_id == -1 else "i.member_id = ?")
-            if artist_id != -1:
-                params.append(int(artist_id))
+            if artist_id == -1:
+                conditions.append(
+                    "(i.member_id IS NULL OR i.save_name LIKE ? COLLATE NOCASE ESCAPE '!')"
+                )
+                params.append(_sql_path_prefix_like(root_directory or get_configured_root_directory()))
+            else:
+                conditions.append(
+                    "(i.member_id = ? OR i.save_name LIKE ? COLLATE NOCASE ESCAPE '!')"
+                )
+                params.extend([
+                    int(artist_id),
+                    _sql_path_prefix_like(artist_scope_directory or ""),
+                ])
         if search:
             conditions.append(
                 "(i.title LIKE ? OR m.name LIKE ? OR i.save_name LIKE ? OR CAST(i.image_id AS TEXT) LIKE ?)"
@@ -2585,9 +2694,19 @@ def _get_images_from_viewer_snapshot(
                 manga_params.append(value)
             manga_conditions.append("(" + " OR ".join(month_conditions) + ")")
         if artist_id is not None:
-            manga_conditions.append("i.member_id IS NULL" if artist_id == -1 else "i.member_id = ?")
-            if artist_id != -1:
-                manga_params.append(int(artist_id))
+            if artist_id == -1:
+                manga_conditions.append(
+                    "(i.member_id IS NULL OR mg.save_name LIKE ? COLLATE NOCASE ESCAPE '!')"
+                )
+                manga_params.append(_sql_path_prefix_like(root_directory or get_configured_root_directory()))
+            else:
+                manga_conditions.append(
+                    "(i.member_id = ? OR mg.save_name LIKE ? COLLATE NOCASE ESCAPE '!')"
+                )
+                manga_params.extend([
+                    int(artist_id),
+                    _sql_path_prefix_like(artist_scope_directory or ""),
+                ])
         if search:
             manga_conditions.append(
                 "(i.title LIKE ? OR m.name LIKE ? OR mg.save_name LIKE ? OR CAST(mg.image_id AS TEXT) LIKE ?)"
@@ -2620,6 +2739,19 @@ def _get_images_from_viewer_snapshot(
         if should_keep_database_media(item.get("save_name"))
         and not (artist_id is None and item.get("member_id") in hidden_artist_ids)
     ]
+    if artist_scope_directory:
+        # The first root path segment is authoritative. The SQL member_id
+        # predicate above is only a narrowing hint for old imported rows; it
+        # must not allow a row outside the selected artist directory through.
+        visible_items = [
+            item for item in visible_items
+            if _stored_media_path_is_within(item.get("save_name"), artist_scope_directory)
+        ]
+    elif artist_id == -1 and root_directory:
+        visible_items = [
+            item for item in visible_items
+            if _stored_media_path_is_direct_child(item.get("save_name"), root_directory)
+        ]
     deduplicated: Dict[str, Dict[str, Any]] = {}
     for item in visible_items:
         path = item.get("save_name") or ""

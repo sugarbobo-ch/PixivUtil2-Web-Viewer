@@ -1,6 +1,6 @@
 # Web Viewer 繪師列表、Indexing、快取與 Gallery Grid 設計規格
 
-狀態：規格與現況差異紀錄
+狀態：規格、現況差異與修正紀錄
 
 日期：2026-08-04
 
@@ -112,6 +112,14 @@ active artist scopes
 | `backend/db.py:viewer_index_scope` | 目前沒有明確的 active／last-seen 欄位 | 已消失的第一層資料夾難以在不碰硬碟的 API request 中被排除 |
 
 因此，修正順序必須是先讓 Viewer-owned root scope 成為列表來源，再處理 scope 的新增、移除與 cache invalidation；不能只修改顯示名稱或對 member row 做去重。
+
+### 4.3 本輪已完成的修正
+
+- `viewer_index_scope` 已增加 active／last-discovered lifecycle；列表只接受已由 root discovery 確認的第一層 artist scope。
+- `/api/artists` 已改由 active first-level scopes 建立，不再以 `pixiv_master_member` 全表建立繪師。
+- `get_artist_scope()` 已移除從任意 member row 猜測資料夾的 fallback。
+- artist gallery filter 會用儲存路徑再次驗證第一層資料夾歸屬，避免 stale 或錯誤 `member_id` 把其他路徑帶入。
+- 已補上「巢狀資料夾歸屬」、「來源-only member 排除」與「imported row 依路徑篩選」的 regression tests。
 
 ## 5. Indexing 與更新時機
 
@@ -276,12 +284,12 @@ App
 
 ## 9. 後續實作順序
 
-1. **修正 authoritative artist list**：由 active root-first-level scopes 產生 `/api/artists`，排除所有只存在於 `pixiv_master_member` 的成員。
-2. **補 scope active lifecycle**：新增 first-level discovery 的 last-seen／active 狀態；新增、改名、移除都能在不掃描 API request 的前提下反映。
-3. **收緊 `get_artist_scope()`**：只接受 active first-level artist scope，不再從任意 member row 拼接目錄。
-4. **校正既有 Viewer snapshot**：依 stored media path 的 root 第一 segment 重建 artist member mapping；只修改 Viewer SQLite，不碰 PixivUtil2 `db.sqlite` 與來源檔。
-5. **補 regression tests**：至少覆蓋巢狀資料夾歸屬、來源-only member 不出現、root 直屬檔案未分類、第一層新增／移除、取消後 snapshot、一個 multi-artist job 與無 HDD walk 的 gallery API。
-6. **保留既有 grid 機制**：先修 artist data boundary，再以 browser performance measurement 驗證 page cache、MonthQuickNav 與 virtual range；不要用重新渲染整個 grid 解決資料更新問題。
+1. **已完成：修正 authoritative artist list**：由 active root-first-level scopes 產生 `/api/artists`，排除所有只存在於 `pixiv_master_member` 的成員。
+2. **已完成：補 scope active lifecycle**：新增 first-level discovery 的 last-seen／active 狀態；新增、改名、移除都能在不掃描 API request 的前提下反映。
+3. **已完成：收緊 `get_artist_scope()`**：只接受 active first-level artist scope，不再從任意 member row 拼接目錄。
+4. **待完成：校正既有 Viewer snapshot 的 member mapping**：依 stored media path 的 root 第一 segment 重建 artist member mapping；只修改 Viewer SQLite，不碰 PixivUtil2 `db.sqlite` 與來源檔。現階段 gallery filter 已先以路徑修正顯示結果。
+5. **已完成：補 regression tests**：已覆蓋巢狀資料夾歸屬、來源-only member 不出現、imported row 依路徑篩選、第一層 scope 移除與無 HDD walk 的 gallery API。
+6. **進行中：保留既有 grid 機制**：先修 artist data boundary，再以 browser performance measurement 驗證 page cache、MonthQuickNav 與 virtual range；不要用重新渲染整個 grid 解決資料更新問題。
 
 ## 10. 驗收條件
 

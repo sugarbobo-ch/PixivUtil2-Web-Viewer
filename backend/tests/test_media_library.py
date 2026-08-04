@@ -166,6 +166,93 @@ class MediaLibraryTests(unittest.TestCase):
         self.assertEqual(image_row["member_id"], expected_member_id)
         self.assertEqual(member_row["name"], archive.name)
 
+    def test_artist_list_uses_root_first_level_scopes_only(self):
+        self._write_media("Artist A/extracted/001.jpg", b"nested-a")
+        self._write_media("Artist A/Manga 01/002.jpg", b"nested-a-2")
+        self._write_media("Artist B/003.jpg", b"artist-b")
+        db.scan_and_index_directory(str(self.root))
+
+        # This row represents a member imported from PixivUtil2, but it has
+        # no corresponding first-level directory under the configured root.
+        conn = db.get_db_connection()
+        try:
+            conn.execute(
+                """
+                INSERT INTO pixiv_master_member
+                    (member_id, name, save_folder, created_date, last_update_date)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (4252792, "Source-only member", "Source-only member", "2026-01-01", "2026-01-01"),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        original_workspace_root = config_paths.WORKSPACE_ROOT
+        original_config_path_reader = config_paths.get_pixiv_config_path
+        config_paths.WORKSPACE_ROOT = str(self.root)
+        config_paths.get_pixiv_config_path = lambda: str(self.root / "missing-config.ini")
+        try:
+            artists = db.get_all_artists()
+        finally:
+            config_paths.WORKSPACE_ROOT = original_workspace_root
+            config_paths.get_pixiv_config_path = original_config_path_reader
+
+        self.assertEqual(
+            [artist["name"] for artist in artists],
+            ["Artist A", "Artist B"],
+        )
+        self.assertEqual(artists[0]["artwork_count"], 2)
+        self.assertEqual(artists[1]["artwork_count"], 1)
+
+    def test_artist_filter_uses_first_level_path_for_imported_rows(self):
+        artist_directory = self.root / "Path Artist"
+        artist_directory.mkdir()
+        db.discover_root_scopes(str(self.root))
+        artist_id = db.get_folder_member_id(str(artist_directory))
+        imported_path = artist_directory / "nested" / "imported.jpg"
+
+        conn = db.get_db_connection()
+        try:
+            conn.execute(
+                """
+                INSERT INTO pixiv_master_image
+                    (image_id, member_id, title, save_name, created_date, last_update_date)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (76543210, 1234567, "Imported path row", str(imported_path), "2026-02-01", "2026-02-01"),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        images, total, _months = db.get_images(artist_id=artist_id)
+
+        self.assertEqual(total, 1)
+        self.assertEqual(images[0]["save_name"], str(imported_path))
+
+    def test_root_discovery_deactivates_removed_first_level_scope(self):
+        artist_directory = self.root / "Temporary Artist"
+        artist_directory.mkdir()
+        db.discover_root_scopes(str(self.root))
+
+        moved_directory = self.root.parent / "Temporary Artist moved out"
+        artist_directory.rename(moved_directory)
+        try:
+            db.discover_root_scopes(str(self.root))
+
+            original_workspace_root = config_paths.WORKSPACE_ROOT
+            original_config_path_reader = config_paths.get_pixiv_config_path
+            config_paths.WORKSPACE_ROOT = str(self.root)
+            config_paths.get_pixiv_config_path = lambda: str(self.root / "missing-config.ini")
+            try:
+                self.assertEqual(db.get_all_artists(), [])
+            finally:
+                config_paths.WORKSPACE_ROOT = original_workspace_root
+                config_paths.get_pixiv_config_path = original_config_path_reader
+        finally:
+            moved_directory.rename(artist_directory)
+
     def test_folder_member_id_is_not_process_local(self):
         folder = self.root / "Archive without Pixiv id"
 
@@ -232,6 +319,10 @@ class MediaLibraryTests(unittest.TestCase):
         self._write_media("Snapshot Artist/123.jpg", b"image")
         db.scan_and_index_directory(str(self.root))
         original_walk = db.os.walk
+        original_workspace_root = config_paths.WORKSPACE_ROOT
+        original_config_path_reader = config_paths.get_pixiv_config_path
+        config_paths.WORKSPACE_ROOT = str(self.root)
+        config_paths.get_pixiv_config_path = lambda: str(self.root / "missing-config.ini")
 
         def fail_walk(*_args, **_kwargs):
             raise AssertionError("gallery navigation must not walk the source tree")
@@ -246,6 +337,8 @@ class MediaLibraryTests(unittest.TestCase):
             ))
         finally:
             db.os.walk = original_walk
+            config_paths.WORKSPACE_ROOT = original_workspace_root
+            config_paths.get_pixiv_config_path = original_config_path_reader
 
         self.assertEqual(total, 1)
         self.assertEqual(images[0]["save_name"], str(self.root / "Snapshot Artist" / "123.jpg"))
