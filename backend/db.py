@@ -5,6 +5,7 @@ import sqlite3
 import time
 import uuid
 import hashlib
+import threading
 from typing import Callable, List, Dict, Any, Optional, Tuple
 
 import config_paths
@@ -132,7 +133,7 @@ def get_db_connection() -> sqlite3.Connection:
     return conn
 
 
-VIEWER_SCHEMA_VERSION = 3
+VIEWER_SCHEMA_VERSION = 4
 DOMINANT_COLOR_ALGORITHM_VERSION = "rgb-bucket-v1"
 LIBRARY_JOB_ACTIVE_STATUSES = ("queued", "running", "cancelling")
 LIBRARY_JOB_TERMINAL_STATUSES = ("completed", "cancelled", "failed", "interrupted")
@@ -234,6 +235,22 @@ def _ensure_viewer_schema(cursor: sqlite3.Cursor) -> None:
         )
     """)
     cursor.execute("""
+        CREATE TABLE IF NOT EXISTS viewer_hidden_artist (
+            member_id INTEGER PRIMARY KEY,
+            folder_name TEXT NOT NULL DEFAULT '',
+            hidden_at TEXT NOT NULL,
+            unhidden_at TEXT
+        )
+    """)
+    hidden_artist_columns = {
+        row["name"]
+        for row in cursor.execute("PRAGMA table_info(viewer_hidden_artist)").fetchall()
+    }
+    if "unhidden_at" not in hidden_artist_columns:
+        cursor.execute(
+            "ALTER TABLE viewer_hidden_artist ADD COLUMN unhidden_at TEXT"
+        )
+    cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_viewer_library_job_status
         ON viewer_library_job (status, created_at)
     """)
@@ -290,9 +307,18 @@ def init_db_schema():
                 image_id INTEGER NOT NULL,
                 original_path TEXT NOT NULL DEFAULT '',
                 trash_path TEXT,
-                trashed_at TEXT NOT NULL
+                trashed_at TEXT NOT NULL,
+                sent_to_system_recycle_at TEXT
             )
         """)
+        trash_columns = {
+            row["name"]
+            for row in cursor.execute("PRAGMA table_info(pixivutil2_trash_image)").fetchall()
+        }
+        if "sent_to_system_recycle_at" not in trash_columns:
+            cursor.execute(
+                "ALTER TABLE pixivutil2_trash_image ADD COLUMN sent_to_system_recycle_at TEXT"
+            )
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_pixivutil2_trash_image_id
             ON pixivutil2_trash_image (image_id)
@@ -1034,92 +1060,122 @@ def recover_interrupted_library_jobs() -> int:
 # process. Filtering should operate on this cached path list instead of
 # reopening and inspecting every media file on each request.
 _SCAN_CACHE: Dict[Tuple[str, str], Dict[str, Any]] = {}
+_SCAN_CACHE_LOCK = threading.RLock()
+_SCAN_INFLIGHT: Dict[Tuple[str, str], threading.Event] = {}
+_SCAN_GENERATION = 0
 CACHE_TTL = 300.0
 
 
 def invalidate_scan_cache(folder_path: Optional[str] = None) -> None:
     """Invalidate cached recursive/direct scans for a folder tree."""
-    if folder_path is None:
-        _SCAN_CACHE.clear()
-        _MEDIA_STATUS_CACHE.clear()
-        return
+    global _SCAN_GENERATION
+    with _SCAN_CACHE_LOCK:
+        _SCAN_GENERATION += 1
+        if folder_path is None:
+            _SCAN_CACHE.clear()
+            _MEDIA_STATUS_CACHE.clear()
+            return
 
-    target = os.path.normcase(os.path.abspath(folder_path))
-    for cache_key in list(_SCAN_CACHE):
-        _, cached_folder = cache_key
-        normalized_folder = os.path.normcase(cached_folder)
-        if normalized_folder == target or normalized_folder.startswith(target + os.sep):
-            _SCAN_CACHE.pop(cache_key, None)
-    for media_path in list(_MEDIA_STATUS_CACHE):
-        normalized_media_path = os.path.normcase(media_path)
-        if normalized_media_path == target or normalized_media_path.startswith(target + os.sep):
-            _MEDIA_STATUS_CACHE.pop(media_path, None)
+        target = os.path.normcase(os.path.abspath(folder_path))
+        for cache_key in list(_SCAN_CACHE):
+            _, cached_folder = cache_key
+            normalized_folder = os.path.normcase(cached_folder)
+            if normalized_folder == target or normalized_folder.startswith(target + os.sep):
+                _SCAN_CACHE.pop(cache_key, None)
+        for media_path in list(_MEDIA_STATUS_CACHE):
+            normalized_media_path = os.path.normcase(media_path)
+            if normalized_media_path == target or normalized_media_path.startswith(target + os.sep):
+                _MEDIA_STATUS_CACHE.pop(media_path, None)
 
 
 def _get_cached_file_scan(folder_path: str, recursive: bool) -> Dict[str, Any]:
-    """Return cached file paths and metadata for a folder."""
-    now = time.monotonic()
+    """Return one shared snapshot for concurrent requests for the same folder.
+
+    The artist list, month filters and gallery can all arrive together during a
+    cold start.  The in-flight event makes the second request wait for the
+    first snapshot instead of walking the HDD a second time.
+    """
     abs_folder = os.path.abspath(folder_path)
     cache_key = ("recursive" if recursive else "direct", abs_folder)
-    if cache_key in _SCAN_CACHE:
-        cached = _SCAN_CACHE[cache_key]
-        if now - cached["timestamp"] < CACHE_TTL:
-            return cached
+
+    while True:
+        with _SCAN_CACHE_LOCK:
+            cached = _SCAN_CACHE.get(cache_key)
+            if cached and time.monotonic() - cached["timestamp"] < CACHE_TTL:
+                return cached
+
+            inflight = _SCAN_INFLIGHT.get(cache_key)
+            if inflight is None:
+                inflight = threading.Event()
+                _SCAN_INFLIGHT[cache_key] = inflight
+                scan_generation = _SCAN_GENERATION
+                break
+
+        inflight.wait()
 
     records = []
-    if os.path.exists(abs_folder):
-        try:
-            if recursive:
-                file_entries = []
-                for root, dirs, files in os.walk(abs_folder):
-                    _prune_internal_directories(dirs)
-                    dirs.sort(key=natural_sort_key)
-                    files.sort(key=natural_sort_key)
-                    file_entries.extend(os.path.join(root, file) for file in files)
-            else:
-                file_entries = [
-                    entry.path
-                    for entry in os.scandir(abs_folder)
-                    if entry.is_file()
-                ]
+    try:
+        if os.path.exists(abs_folder):
+            try:
+                if recursive:
+                    file_entries = []
+                    for root, dirs, files in os.walk(abs_folder):
+                        _prune_internal_directories(dirs)
+                        dirs.sort(key=natural_sort_key)
+                        files.sort(key=natural_sort_key)
+                        file_entries.extend(os.path.join(root, file) for file in files)
+                else:
+                    file_entries = [
+                        entry.path
+                        for entry in os.scandir(abs_folder)
+                        if entry.is_file()
+                    ]
 
-            for file_path in file_entries:
-                full_path = os.path.abspath(file_path)
-                ext = os.path.splitext(full_path)[1].lower()
-                if ext not in MEDIA_EXTENSIONS or is_internal_media_path(full_path):
-                    continue
-                try:
-                    mtime = os.stat(full_path).st_mtime
-                except OSError:
-                    continue
-                records.append({
-                    "path": full_path,
-                    "file_name": os.path.basename(full_path),
-                    "created_date": time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(mtime)),
-                    "image_id": _stable_synthetic_image_id(full_path),
-                })
-        except Exception as ex:
-            print(f"Error scanning folder {abs_folder}: {ex}")
+                for file_path in file_entries:
+                    full_path = os.path.abspath(file_path)
+                    ext = os.path.splitext(full_path)[1].lower()
+                    if ext not in MEDIA_EXTENSIONS or is_internal_media_path(full_path):
+                        continue
+                    try:
+                        mtime = os.stat(full_path).st_mtime
+                    except OSError:
+                        continue
+                    records.append({
+                        "path": full_path,
+                        "file_name": os.path.basename(full_path),
+                        "created_date": time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(mtime)),
+                        "image_id": _stable_synthetic_image_id(full_path),
+                    })
+            except Exception as ex:
+                print(f"Error scanning folder {abs_folder}: {ex}")
 
-    records.sort(key=lambda record: natural_sort_key(record["path"]))
-    records_by_month: Dict[str, List[Dict[str, Any]]] = {}
-    records_by_year: Dict[str, List[Dict[str, Any]]] = {}
-    for order, record in enumerate(records):
-        record["order"] = order
-        month_key = record["created_date"][:7]
-        year_key = record["created_date"][:4]
-        records_by_month.setdefault(month_key, []).append(record)
-        records_by_year.setdefault(year_key, []).append(record)
+        records.sort(key=lambda record: natural_sort_key(record["path"]))
+        records_by_month: Dict[str, List[Dict[str, Any]]] = {}
+        records_by_year: Dict[str, List[Dict[str, Any]]] = {}
+        for order, record in enumerate(records):
+            record["order"] = order
+            month_key = record["created_date"][:7]
+            year_key = record["created_date"][:4]
+            records_by_month.setdefault(month_key, []).append(record)
+            records_by_year.setdefault(year_key, []).append(record)
 
-    cached = {
-        "timestamp": now,
-        "records": records,
-        "files": [record["path"] for record in records],
-        "records_by_month": records_by_month,
-        "records_by_year": records_by_year,
-    }
-    _SCAN_CACHE[cache_key] = cached
-    return cached
+        cached = {
+            "timestamp": time.monotonic(),
+            "records": records,
+            "files": [record["path"] for record in records],
+            "records_by_month": records_by_month,
+            "records_by_year": records_by_year,
+        }
+        with _SCAN_CACHE_LOCK:
+            # Do not replace a newer snapshot created after invalidation.
+            if scan_generation == _SCAN_GENERATION:
+                _SCAN_CACHE[cache_key] = cached
+        return cached
+    finally:
+        with _SCAN_CACHE_LOCK:
+            pending = _SCAN_INFLIGHT.pop(cache_key, None)
+            if pending is not None:
+                pending.set()
 
 
 def get_folder_files_fast(folder_path: str) -> List[str]:
@@ -1211,8 +1267,151 @@ def get_trash_destination(file_path: str, image_id: int) -> str:
     return os.path.join(get_trash_directory_for_path(file_path), filename)
 
 
+def get_hidden_artist_ids() -> set[int]:
+    if not os.path.exists(DB_PATH):
+        return set()
+    init_db_schema()
+    with get_db_connection() as conn:
+        rows = conn.execute(
+            "SELECT member_id FROM viewer_hidden_artist WHERE unhidden_at IS NULL"
+        ).fetchall()
+    return {int(row["member_id"]) for row in rows}
+
+
+def get_hidden_artists() -> List[Dict[str, Any]]:
+    if not os.path.exists(DB_PATH):
+        return []
+    init_db_schema()
+    with get_db_connection() as conn:
+        rows = conn.execute(
+            """
+                SELECT member_id, folder_name, hidden_at
+                FROM viewer_hidden_artist
+                WHERE unhidden_at IS NULL
+                ORDER BY hidden_at DESC, member_id ASC
+            """
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def hide_artist(member_id: int, folder_name: str = "") -> None:
+    if int(member_id) == -1:
+        raise ValueError("未分類圖片無法作為繪師隱藏")
+    init_db_schema()
+    with get_db_connection() as conn:
+        conn.execute(
+            """
+                INSERT INTO viewer_hidden_artist (member_id, folder_name, hidden_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(member_id) DO UPDATE SET
+                    folder_name = excluded.folder_name,
+                    hidden_at = excluded.hidden_at,
+                    unhidden_at = NULL
+            """,
+            (int(member_id), str(folder_name or ""), _utc_timestamp()),
+        )
+        conn.commit()
+
+
+def unhide_artist(member_id: int) -> bool:
+    init_db_schema()
+    with get_db_connection() as conn:
+        cursor = conn.execute(
+            """
+                UPDATE viewer_hidden_artist
+                SET unhidden_at = ?
+                WHERE member_id = ? AND unhidden_at IS NULL
+            """,
+            (_utc_timestamp(), int(member_id)),
+        )
+        conn.commit()
+    return cursor.rowcount > 0
+
+
+def get_trash_entries() -> List[Dict[str, Any]]:
+    """Return source media moved to the app recycle area.
+
+    Entries are retained after being sent to the Windows Recycle Bin for
+    auditability, but only pending entries are shown in the Web Viewer.
+    """
+    if not os.path.exists(DB_PATH):
+        return []
+    init_db_schema()
+    with get_db_connection() as conn:
+        rows = conn.execute(
+            """
+                SELECT
+                    trash.trash_id,
+                    trash.image_id,
+                    trash.original_path,
+                    trash.trash_path,
+                    trash.trashed_at,
+                    image.member_id,
+                    member.name AS artist_name
+                FROM pixivutil2_trash_image trash
+                LEFT JOIN pixiv_master_image image ON image.image_id = trash.image_id
+                LEFT JOIN pixiv_master_member member ON member.member_id = image.member_id
+                WHERE trash.sent_to_system_recycle_at IS NULL
+                ORDER BY trash.trashed_at DESC, trash.trash_id DESC
+            """
+        ).fetchall()
+
+    root_dir = get_configured_root_directory()
+    entries: List[Dict[str, Any]] = []
+    for row in rows:
+        entry = dict(row)
+        original_path = entry.get("original_path") or ""
+        artist_name = entry.get("artist_name") or ""
+        member_id = entry.get("member_id")
+        if not artist_name and original_path and _is_path_within(original_path, root_dir):
+            relative_path = os.path.relpath(original_path, root_dir)
+            parts = os.path.normpath(relative_path).split(os.sep)
+            if len(parts) > 1 and parts[0] not in (".", os.pardir):
+                artist_name = parts[0]
+                folder_path = os.path.join(root_dir, parts[0])
+                member_id = get_folder_member_id(folder_path)
+
+        trash_path = entry.get("trash_path") or ""
+        file_size: Optional[int] = None
+        if trash_path:
+            try:
+                file_size = int(os.path.getsize(trash_path))
+            except OSError:
+                file_size = None
+        entry.update({
+            "member_id": int(member_id) if member_id is not None else None,
+            "artist_name": artist_name or "未分類作品",
+            "file_name": os.path.basename(original_path) if original_path else "未知檔案",
+            "file_size": file_size,
+            "available": bool(trash_path and os.path.isfile(trash_path)),
+        })
+        entries.append(entry)
+    return entries
+
+
+def mark_trash_entries_sent_to_system_recycle(trash_ids: List[int]) -> int:
+    unique_ids = list(dict.fromkeys(int(trash_id) for trash_id in trash_ids))
+    if not unique_ids or not os.path.exists(DB_PATH):
+        return 0
+    init_db_schema()
+    placeholders = ",".join("?" for _ in unique_ids)
+    with get_db_connection() as conn:
+        cursor = conn.execute(
+            f"""
+                UPDATE pixivutil2_trash_image
+                SET sent_to_system_recycle_at = ?
+                WHERE trash_id IN ({placeholders})
+                  AND sent_to_system_recycle_at IS NULL
+            """,
+            [_utc_timestamp(), *unique_ids],
+        )
+        conn.commit()
+    return int(cursor.rowcount)
+
+
 def get_all_artists() -> List[Dict[str, Any]]:
     import configparser
+    init_db_schema()
     config_path = config_paths.get_pixiv_config_path()
     root_dir = config_paths.WORKSPACE_ROOT
     if os.path.exists(config_path):
@@ -1240,6 +1439,20 @@ def get_all_artists() -> List[Dict[str, Any]]:
     except Exception as ex:
         print(f"Error listing root directory folders: {ex}")
 
+    # The root snapshot is shared with the first gallery request. Counting
+    # from it avoids one recursive HDD walk per artist during cold start.
+    root_snapshot = _get_cached_file_scan(root_dir, recursive=True)
+    artwork_counts: Dict[str, int] = {}
+    direct_root_count = 0
+    for record in root_snapshot["records"]:
+        folder_path = _top_level_folder_for_path(root_dir, os.path.dirname(record["path"]))
+        if folder_path is None:
+            direct_root_count += 1
+            continue
+        folder_key = os.path.normcase(os.path.abspath(folder_path))
+        artwork_counts[folder_key] = artwork_counts.get(folder_key, 0) + 1
+
+    hidden_artist_ids = get_hidden_artist_ids()
     result = []
     with get_db_connection() as conn:
         cursor = conn.cursor()
@@ -1256,9 +1469,10 @@ def get_all_artists() -> List[Dict[str, Any]]:
                 folder_path,
                 int(member_row["member_id"]) if member_row and member_row["member_id"] is not None else None,
             )
+            if member_id in hidden_artist_ids:
+                continue
 
-            # Accurately count all media files inside folder_path
-            artwork_count = len(get_folder_files_fast(folder_path))
+            artwork_count = artwork_counts.get(os.path.normcase(os.path.abspath(folder_path)), 0)
 
             result.append({
                 "member_id": member_id,
@@ -1268,12 +1482,11 @@ def get_all_artists() -> List[Dict[str, Any]]:
             })
 
         # The uncategorized bucket represents files directly in rootDirectory.
-        direct_root_files = get_direct_folder_files_fast(root_dir)
-        if direct_root_files:
+        if direct_root_count:
             result.insert(0, {
                 "member_id": -1,
                 "name": "未分類/單張根目錄圖片",
-                "artwork_count": len(direct_root_files)
+                "artwork_count": direct_root_count
             })
 
     return result
@@ -1287,13 +1500,18 @@ def get_all_months() -> List[Dict[str, Any]]:
         cursor = conn.cursor()
         query = """
             SELECT strftime('%Y-%m', created_date) as month, COUNT(*) as count
-            FROM pixiv_master_image
-            WHERE created_date IS NOT NULL AND created_date != ''
+            FROM pixiv_master_image image
+            WHERE image.created_date IS NOT NULL AND image.created_date != ''
+              AND NOT EXISTS (
+                  SELECT 1 FROM viewer_hidden_artist hidden
+                  WHERE hidden.member_id = image.member_id
+                    AND hidden.unhidden_at IS NULL
+              )
               AND NOT EXISTS (
                   SELECT 1 FROM pixivutil2_trash_image trash
-                  WHERE trash.image_id = pixiv_master_image.image_id
+                  WHERE trash.image_id = image.image_id
               )
-            GROUP BY month
+            GROUP BY strftime('%Y-%m', image.created_date)
             ORDER BY month DESC
         """
         rows = cursor.execute(query).fetchall()
@@ -1367,6 +1585,7 @@ def get_images(
     sort_mode: str = "newest"
 ) -> Tuple[List[Dict[str, Any]], int, List[Dict[str, Any]]]:
     db_items = []
+    hidden_artist_ids = get_hidden_artist_ids() if os.path.exists(DB_PATH) else set()
     month_list = [m.strip() for m in month.split(',') if m.strip()] if month else []
     if os.path.exists(DB_PATH):
         init_db_schema()
@@ -1467,7 +1686,11 @@ def get_images(
     # Do not surface stale database rows that point into an external tool's
     # temporary state tree. The files are intentionally ignored by the disk
     # scanner above, so keeping them here would reintroduce them from SQLite.
-    db_items = [item for item in db_items if should_keep_database_media(item.get("save_name"))]
+    db_items = [
+        item for item in db_items
+        if should_keep_database_media(item.get("save_name"))
+        and not (artist_id is None and item.get("member_id") in hidden_artist_ids)
+    ]
 
     if only_show_db_files:
         if artist_id == -1:
@@ -1552,11 +1775,19 @@ def get_images(
 
                     rel_p = os.path.relpath(full_path, root_dir)
                     parts = os.path.normpath(rel_p).split(os.sep)
+                    artist_folder = _top_level_folder_for_path(root_dir, os.path.dirname(full_path))
+                    discovered_member_id = (
+                        -1
+                        if artist_folder is None
+                        else get_folder_member_id(artist_folder)
+                    )
+                    if artist_id is None and discovered_member_id in hidden_artist_ids:
+                        continue
                     art_name = parts[0] if len(parts) > 1 else os.path.basename(target_scan_dir)
 
                     new_item = {
                         "image_id": item_id,
-                        "member_id": artist_id,
+                        "member_id": artist_id if artist_id is not None else discovered_member_id,
                         "title": os.path.splitext(file)[0],
                         "save_name": full_path,
                         "created_date": created_date,
@@ -1748,7 +1979,7 @@ def mark_images_as_trashed(
 ) -> int:
     """Record a reversible trash operation without deleting DB rows."""
     unique_ids = list(dict.fromkeys(int(image_id) for image_id in image_ids))
-    if not os.path.exists(DB_PATH) or not unique_ids:
+    if not os.path.exists(DB_PATH) or (not unique_ids and not moved_records):
         return 0
 
     init_db_schema()
@@ -1760,45 +1991,48 @@ def mark_images_as_trashed(
     with get_db_connection() as conn:
         cursor = conn.cursor()
         placeholders = ",".join(["?"] * len(unique_ids))
-        master_rows = cursor.execute(
-            f"""
-                SELECT image_id, save_name
-                FROM pixiv_master_image
-                WHERE image_id IN ({placeholders})
-            """,
-            unique_ids,
-        ).fetchall()
-        manga_rows = []
-        try:
-            manga_rows = cursor.execute(
+        master_rows = []
+        if unique_ids:
+            master_rows = cursor.execute(
                 f"""
                     SELECT image_id, save_name
-                    FROM pixiv_manga_image
+                    FROM pixiv_master_image
                     WHERE image_id IN ({placeholders})
                 """,
                 unique_ids,
             ).fetchall()
-        except sqlite3.OperationalError:
-            pass
+        manga_rows = []
+        if unique_ids:
+            try:
+                manga_rows = cursor.execute(
+                    f"""
+                        SELECT image_id, save_name
+                        FROM pixiv_manga_image
+                        WHERE image_id IN ({placeholders})
+                    """,
+                    unique_ids,
+                ).fetchall()
+            except sqlite3.OperationalError:
+                pass
 
         existing_ids = {
             int(row["image_id"])
             for row in [*master_rows, *manga_rows]
         }
-        already_trashed = {
-            int(row["image_id"])
-            for row in cursor.execute(
-                f"""
-                    SELECT DISTINCT image_id
-                    FROM pixivutil2_trash_image
-                    WHERE image_id IN ({placeholders})
-                """,
-                unique_ids,
-            ).fetchall()
-        }
+        already_trashed = set()
+        if unique_ids:
+            already_trashed = {
+                int(row["image_id"])
+                for row in cursor.execute(
+                    f"""
+                        SELECT DISTINCT image_id
+                        FROM pixivutil2_trash_image
+                        WHERE image_id IN ({placeholders})
+                    """,
+                    unique_ids,
+                ).fetchall()
+            }
         ids_to_mark = existing_ids - already_trashed
-        if not ids_to_mark:
-            return 0
 
         paths_by_id: Dict[int, List[str]] = {}
         for row in [*master_rows, *manga_rows]:
@@ -1810,12 +2044,17 @@ def mark_images_as_trashed(
                 paths_by_id[image_id].append(path)
 
         trashed_at = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())
+        inserted_ids = set()
+        inserted_keys = set()
         for image_id in sorted(ids_to_mark):
             paths = paths_by_id.get(image_id) or [""]
             for database_path in paths:
                 moved = moved_by_record.get((image_id, _path_key(database_path)))
                 original_path = moved[0] if moved else database_path
                 trash_path = moved[1] if moved else None
+                record_key = (image_id, _path_key(original_path))
+                if record_key in inserted_keys:
+                    continue
                 cursor.execute(
                     """
                         INSERT INTO pixivutil2_trash_image
@@ -1824,5 +2063,37 @@ def mark_images_as_trashed(
                     """,
                     (image_id, original_path, trash_path, trashed_at),
                 )
+                inserted_keys.add(record_key)
+                inserted_ids.add(image_id)
+
+        # Disk-only files receive deterministic synthetic IDs and have no
+        # pixiv_master_image row. Keep those moved files visible in the
+        # recycle page as well, instead of silently losing the recovery record.
+        for image_id, _database_path, original_path, trash_path in moved_records:
+            image_id = int(image_id)
+            record_key = (image_id, _path_key(original_path))
+            if record_key in inserted_keys:
+                continue
+            existing_row = cursor.execute(
+                """
+                    SELECT 1
+                    FROM pixivutil2_trash_image
+                    WHERE image_id = ? AND original_path = ?
+                    LIMIT 1
+                """,
+                (image_id, original_path),
+            ).fetchone()
+            if existing_row:
+                continue
+            cursor.execute(
+                """
+                    INSERT INTO pixivutil2_trash_image
+                    (image_id, original_path, trash_path, trashed_at)
+                    VALUES (?, ?, ?, ?)
+                """,
+                (image_id, original_path, trash_path, trashed_at),
+            )
+            inserted_keys.add(record_key)
+            inserted_ids.add(image_id)
         conn.commit()
-    return len(ids_to_mark)
+    return len(inserted_ids)

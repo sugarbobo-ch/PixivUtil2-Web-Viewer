@@ -5,6 +5,25 @@ export interface Artist {
   folder_name?: string;
 }
 
+export interface HiddenArtist {
+  member_id: number;
+  folder_name: string;
+  hidden_at: string;
+}
+
+export interface RecycleEntry {
+  trash_id: number;
+  image_id: number;
+  original_path: string;
+  trash_path: string | null;
+  trashed_at: string;
+  member_id: number | null;
+  artist_name: string;
+  file_name: string;
+  file_size: number | null;
+  available: boolean;
+}
+
 export type SourcePlatform = 'pixiv' | 'fanbox';
 
 export interface SourceLink {

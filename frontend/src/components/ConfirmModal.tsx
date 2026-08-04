@@ -59,30 +59,30 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({
     <div
       role="presentation"
       onClick={handleBackdropClick}
-      className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 animate-fadeIn"
+      className="settings-modal__confirm-overlay fixed inset-0 z-[70] flex items-center justify-center p-4"
     >
       <div
         role="dialog"
         aria-modal="true"
         aria-labelledby="confirm-modal-title"
         aria-describedby="confirm-modal-message"
-        className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 max-w-md w-full shadow-2xl text-zinc-100 space-y-4"
+        className="settings-modal__confirm-panel w-full max-w-md space-y-4 rounded-2xl p-6 shadow-2xl"
       >
-        <div className="flex items-center gap-3 text-rose-500">
-          <div className="p-2.5 rounded-full bg-rose-500/10">
+        <div className="flex items-center gap-3">
+          <div className="settings-modal__danger-icon rounded-lg p-2.5">
             <AlertTriangle className="w-6 h-6" aria-hidden="true" />
           </div>
-          <h3 id="confirm-modal-title" className="text-lg font-bold text-white">{title}</h3>
+          <h3 id="confirm-modal-title" className="settings-modal__confirm-title text-lg font-bold">{title}</h3>
         </div>
 
-        <p id="confirm-modal-message" className="text-sm text-zinc-300 leading-relaxed">{message}</p>
+        <p id="confirm-modal-message" className="settings-modal__confirm-text text-sm leading-relaxed">{message}</p>
 
-        <div className="flex items-center justify-end gap-3 pt-3 border-t border-zinc-800">
+        <div className="flex items-center justify-end gap-3 border-t border-[var(--settings-border)] pt-3">
           <button
             ref={cancelButtonRef}
             type="button"
             onClick={onCancel}
-            className="min-h-11 rounded-xl px-4 py-2 text-xs font-semibold bg-zinc-800 hover:bg-zinc-700 text-zinc-300 transition-[background-color,transform] active:scale-[0.96] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-300"
+            className="settings-modal__secondary-button min-h-11 rounded-xl px-4 py-2 text-xs font-semibold transition-[background-color,transform] active:scale-[0.96] focus-visible:outline-2 focus-visible:outline-offset-2"
           >
             {cancelLabel}
           </button>
@@ -90,7 +90,7 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({
           <button
             type="button"
             onClick={onConfirm}
-            className="min-h-11 rounded-xl px-4 py-2 text-xs font-semibold bg-rose-600 hover:bg-rose-500 text-white flex items-center gap-1.5 transition-[background-color,transform] active:scale-[0.96] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rose-300 shadow-lg shadow-rose-900/30"
+            className="settings-modal__danger-button inline-flex min-h-11 items-center gap-1.5 rounded-xl px-4 py-2 text-xs font-semibold transition-[background-color,transform] active:scale-[0.96] focus-visible:outline-2 focus-visible:outline-offset-2"
           >
             <Trash2 className="w-4 h-4" aria-hidden="true" />
             <span>{confirmLabel}</span>

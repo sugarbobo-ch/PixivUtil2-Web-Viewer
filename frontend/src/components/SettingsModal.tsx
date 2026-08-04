@@ -31,6 +31,7 @@ import {
   ThumbnailCacheRecoveryDetails,
   ThumbnailCacheRecoveryJob,
   ThumbnailCacheStats,
+  HiddenArtist,
   WebConfig,
 } from '../types';
 import { normalizeWebConfig } from '../utils/webConfig';
@@ -39,6 +40,7 @@ interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSettingsSaved: () => void;
+  onOpenRecycleBin?: () => void;
 }
 
 type MainTab = 'web' | 'library' | 'pixiv' | 'backup';
@@ -166,6 +168,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   isOpen,
   onClose,
   onSettingsSaved,
+  onOpenRecycleBin,
 }) => {
   const [mainTab, setMainTab] = useState<MainTab>('web');
   const [webConfig, setWebConfig] = useState<WebViewerConfig>(defaultWebConfig);
@@ -192,6 +195,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [hardDeleteLoading, setHardDeleteLoading] = useState(false);
   const [message, setMessage] = useState<FeedbackMessage | null>(null);
   const [showSaveConfirm, setShowSaveConfirm] = useState(false);
+  const [hiddenArtists, setHiddenArtists] = useState<HiddenArtist[]>([]);
   const libraryPollTimerRef = useRef<number | null>(null);
 
   const sectionKeys = Object.keys(pixivSections);
@@ -286,6 +290,27 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const getPathFileName = (path: string | null) => {
     if (!path) return '未找到來源資料';
     return path.split(/[\\/]/).pop() || path;
+  };
+
+  const loadHiddenArtists = async () => {
+    try {
+      const response = await fetch('/api/hidden-artists', { cache: 'no-store' });
+      const data = await readJsonResponse<HiddenArtist[]>(response);
+      setHiddenArtists(Array.isArray(data) ? data : []);
+    } catch (error) {
+      setMessage({ type: 'error', text: `無法讀取已隱藏繪師：${getErrorMessage(error)}` });
+    }
+  };
+
+  const handleUnhideArtist = async (artist: HiddenArtist) => {
+    try {
+      const response = await fetch(`/api/artists/${encodeURIComponent(artist.member_id)}/unhide`, { method: 'POST' });
+      await readJsonResponse(response);
+      await loadHiddenArtists();
+      setMessage({ type: 'success', text: `已恢復顯示「${artist.folder_name || artist.member_id}」。` });
+    } catch (error) {
+      setMessage({ type: 'error', text: `無法恢復繪師：${getErrorMessage(error)}` });
+    }
   };
 
   const stopLibraryPolling = () => {
@@ -424,6 +449,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setMessage(null);
     setSectionFilter('');
     void loadConfigs();
+    void loadHiddenArtists();
   }, [isOpen]);
 
   useEffect(() => () => stopLibraryPolling(), []);
@@ -1019,10 +1045,45 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         <div className="settings-modal__content min-h-0 flex-1 overflow-y-auto overscroll-contain p-6">
           {mainTab === 'web' && (
             <section id="settings-panel-web" role="tabpanel" aria-labelledby="settings-tab-web" className="space-y-6">
-              <div>
-                <h3 className="settings-modal__heading text-base font-bold">顯示與瀏覽</h3>
-                <p className="settings-modal__description mt-1 text-sm leading-5">調整檢視器的外觀、縮圖與瀏覽行為。</p>
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h3 className="settings-modal__heading text-base font-bold">顯示與瀏覽</h3>
+                  <p className="settings-modal__description mt-1 text-sm leading-5">調整檢視器的外觀、縮圖與瀏覽行為。</p>
+                </div>
+                {onOpenRecycleBin && (
+                  <button
+                    type="button"
+                    onClick={onOpenRecycleBin}
+                    className="settings-modal__secondary-button inline-flex min-h-11 items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold"
+                  >
+                    <Trash2 className="h-4 w-4" aria-hidden="true" />
+                    開啟回收區
+                  </button>
+                )}
               </div>
+
+              {hiddenArtists.length > 0 && (
+                <section className="settings-modal__hidden-artists space-y-2" aria-labelledby="hidden-artists-title">
+                  <div className="flex items-center justify-between gap-3">
+                    <h4 id="hidden-artists-title" className="settings-modal__label text-sm font-semibold">已隱藏繪師</h4>
+                    <span className="settings-modal__text-subtle text-xs">{hiddenArtists.length} 位</span>
+                  </div>
+                  <div className="space-y-2">
+                    {hiddenArtists.map(artist => (
+                      <div key={artist.member_id} className="settings-modal__hidden-artist-row flex flex-wrap items-center justify-between gap-3 rounded-lg px-3 py-2">
+                        <span className="min-w-0 truncate text-xs" title={artist.folder_name || undefined}>{artist.folder_name || `繪師 ${artist.member_id}`}</span>
+                        <button
+                          type="button"
+                          onClick={() => void handleUnhideArtist(artist)}
+                          className="settings-modal__secondary-button min-h-10 rounded-lg px-3 py-2 text-xs font-semibold"
+                        >
+                          恢復顯示
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              )}
 
               <div className="grid gap-4 md:grid-cols-2">
                 <div>
@@ -1554,6 +1615,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           </div>
         </div>
       )}
+
     </div>
   );
 };

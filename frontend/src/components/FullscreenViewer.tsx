@@ -15,22 +15,21 @@ const buildMediaUrl = (item: ImageItem): string => (
 interface FilmstripThumbnailProps {
   item: ImageItem;
   index: number;
-  currentIndex: number;
+  isNearCurrent: boolean;
   isVisible: boolean;
   thumbnailSize: number;
   blurEnabled: boolean;
 }
 
-const FilmstripThumbnail: React.FC<FilmstripThumbnailProps> = ({
+const FilmstripThumbnail = React.memo<FilmstripThumbnailProps>(({
   item,
   index,
-  currentIndex,
+  isNearCurrent,
   isVisible,
   thumbnailSize,
   blurEnabled,
 }) => {
   const url = buildThumbnailUrl(item, thumbnailSize);
-  const isNearCurrent = Math.abs(index - currentIndex) <= 3;
   const loadEnabled = isNearCurrent || isVisible;
   const admitted = useImageLoadPermission({
     url,
@@ -58,7 +57,7 @@ const FilmstripThumbnail: React.FC<FilmstripThumbnailProps> = ({
       )}
     </span>
   );
-};
+});
 
 interface FullscreenViewerProps {
   images: ImageItem[];
@@ -246,9 +245,11 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
   // Observe the entire filmstrip with one root observer. The grid virtualizer
   // deliberately owns the expensive viewport work; the filmstrip only needs
   // to reveal thumbnails that are actually in or near its horizontal viewport.
+  // Keep the previous visibility set while the active item changes so a
+  // thumbnail that remains on screen is not replaced by a placeholder while
+  // the observer reports the new scroll position.
   useEffect(() => {
     const root = filmstripScrollRef.current;
-    setVisibleFilmstripIndexes(new Set());
     if (!root || typeof IntersectionObserver === 'undefined') {
       return undefined;
     }
@@ -269,7 +270,7 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
 
     root.querySelectorAll<HTMLElement>('[data-filmstrip-index]').forEach(element => observer.observe(element));
     return () => observer.disconnect();
-  }, [currentIndex, images.length]);
+  }, [images.length]);
 
   // Dynamic configurable image preloader. Keep the query string identical to
   // the visible image URL so the browser can reuse the fetched response.
@@ -783,7 +784,7 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
                       <FilmstripThumbnail
                         item={item}
                         index={idx}
-                        currentIndex={currentIndex}
+                        isNearCurrent={Math.abs(idx - currentIndex) <= 3}
                         isVisible={visibleFilmstripIndexes.has(idx)}
                         thumbnailSize={thumbnailSize}
                         blurEnabled={blurEnabled}

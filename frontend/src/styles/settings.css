@@ -180,6 +180,22 @@
   background: var(--settings-surface-soft);
 }
 
+.settings-modal__artist-card,
+.settings-modal__hidden-artist-row {
+  border: 1px solid var(--settings-border-soft);
+  background: var(--settings-surface-soft);
+  color: var(--settings-text);
+}
+
+.settings-modal__artist-card {
+  box-shadow: 0 1px 2px oklch(0 0 0 / 0.06);
+}
+
+.settings-modal__artist-management {
+  padding-bottom: 1.25rem;
+  border-bottom: 1px solid var(--settings-border-soft);
+}
+
 .settings-modal__info-card {
   border: 1px solid color-mix(in oklch, var(--settings-accent) 30%, var(--settings-border));
   background: var(--settings-accent-soft);
@@ -588,6 +604,11 @@
   outline: 2px solid var(--settings-danger);
   outline-offset: 2px;
   box-shadow: 0 0 0 4px color-mix(in oklch, var(--settings-danger) 16%, transparent);
+}
+
+.settings-modal__danger-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
 }
 
 .settings-modal__danger-icon {

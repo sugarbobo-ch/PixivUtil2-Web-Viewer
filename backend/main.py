@@ -25,10 +25,13 @@ import config_paths
 import source_resolver
 import library_jobs
 import path_picker
+import recycle_bin
 
 app = FastAPI(title="PixivUtil2 Web Viewer Backend API", version="1.0.0")
 
 _default_allowed_origins = {
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
     "http://localhost:4173",
     "http://127.0.0.1:4173",
     "http://localhost:5173",
@@ -278,6 +281,10 @@ class SystemPickerRequest(BaseModel):
         "ffmpeg-executable",
         "fanbox-list-file",
     ]
+
+
+class ArtistVisibilityRequest(BaseModel):
+    folder_name: str = ""
 
 
 def _validate_picker_origin(request: Request) -> None:
@@ -606,6 +613,37 @@ def restore_library_cache(job_id: str):
 @app.get("/api/artists")
 def read_artists():
     return db.get_all_artists()
+
+
+@app.get("/api/hidden-artists")
+def read_hidden_artists():
+    return db.get_hidden_artists()
+
+
+@app.post("/api/artists/{artist_id}/hide")
+def hide_artist(artist_id: int, req: ArtistVisibilityRequest = ArtistVisibilityRequest()):
+    if artist_id == -1:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="未分類圖片無法隱藏")
+    folder_name = req.folder_name.strip()
+    if not folder_name:
+        folder_name = next(
+            (
+                str(artist.get("folder_name") or artist.get("name") or "")
+                for artist in db.get_all_artists()
+                if int(artist.get("member_id", 0)) == artist_id
+            ),
+            "",
+        )
+    db.hide_artist(artist_id, folder_name)
+    db.invalidate_scan_cache()
+    return {"status": "hidden", "member_id": artist_id, "folder_name": folder_name}
+
+
+@app.post("/api/artists/{artist_id}/unhide")
+def unhide_artist(artist_id: int):
+    changed = db.unhide_artist(artist_id)
+    db.invalidate_scan_cache()
+    return {"status": "visible", "member_id": artist_id, "changed": changed}
 
 
 @app.get("/api/source-link")
@@ -941,27 +979,18 @@ def download_selected_images(req: BatchDownloadRequest):
         raise HTTPException(status_code=500, detail=f"建立 ZIP 下載檔失敗：{err}") from err
 
 
-@app.post("/api/images/batch-trash")
-@app.post("/api/images/batch-delete")
-def batch_trash(req: BatchDeleteRequest):
-    """Move selected media to a recoverable trash directory.
-
-    ``batch-delete`` remains as a safe compatibility alias for older clients;
-    neither route permanently deletes a file or database record.
-    """
-    requested_ids = list(dict.fromkeys(
-        [*req.image_ids, *(item.image_id for item in req.items)]
-    ))
-    if not requested_ids and not req.items:
+def _move_media_records_to_app_trash(
+    requested_ids: List[int],
+    selected_records: List[tuple[int, str]],
+) -> Dict[str, Any]:
+    """Move source files into the app recycle area and record every move."""
+    if not requested_ids and not selected_records:
         return {
             "trashed_items": 0,
             "moved_files": 0,
             "missing_files": 0,
             "errors": [],
         }
-
-    selected_records = db.get_image_paths_by_ids(requested_ids)
-    selected_records.extend((item.image_id, item.path) for item in req.items)
 
     moved_records = []
     moved_paths = []
@@ -1029,6 +1058,110 @@ def batch_trash(req: BatchDeleteRequest):
         "missing_files": missing_files,
         "errors": [],
     }
+
+
+@app.post("/api/images/batch-trash")
+@app.post("/api/images/batch-delete")
+def batch_trash(req: BatchDeleteRequest):
+    """Move selected media to a recoverable trash directory.
+
+    ``batch-delete`` remains as a safe compatibility alias for older clients;
+    neither route permanently deletes a file or database record.
+    """
+    requested_ids = list(dict.fromkeys(
+        [*req.image_ids, *(item.image_id for item in req.items)]
+    ))
+    selected_records = db.get_image_paths_by_ids(requested_ids)
+    selected_records.extend((item.image_id, item.path) for item in req.items)
+    return _move_media_records_to_app_trash(requested_ids, selected_records)
+
+
+@app.post("/api/artists/{artist_id}/trash")
+def trash_artist(artist_id: int):
+    """Move all currently discoverable works for one artist to app trash."""
+    if artist_id == -1:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="未分類圖片請用批次操作")
+
+    artist_items, _total, _months = db.get_images(
+        artist_id=artist_id,
+        limit=10_000_000,
+        offset=0,
+    )
+    selected_records = [
+        (int(item["image_id"]), str(item.get("save_name") or ""))
+        for item in artist_items
+        if item.get("save_name")
+    ]
+    requested_ids = list(dict.fromkeys(int(item["image_id"]) for item in artist_items))
+    result = _move_media_records_to_app_trash(requested_ids, selected_records)
+    return {**result, "artist_id": artist_id}
+
+
+def _send_trash_entries_to_system_recycle(trash_ids: List[int]) -> Dict[str, Any]:
+    requested_ids = list(dict.fromkeys(int(trash_id) for trash_id in trash_ids))
+    if not requested_ids:
+        return {"moved": 0, "errors": []}
+
+    entries_by_id = {
+        int(entry["trash_id"]): entry
+        for entry in db.get_trash_entries()
+        if entry.get("trash_id") is not None
+    }
+    moved_ids: List[int] = []
+    errors: List[str] = []
+    for trash_id in requested_ids:
+        entry = entries_by_id.get(trash_id)
+        if not entry:
+            errors.append(f"找不到回收區項目 #{trash_id}")
+            continue
+        trash_path = str(entry.get("trash_path") or "")
+        if not trash_path or not os.path.isfile(trash_path):
+            errors.append(f"{entry.get('file_name') or trash_id}：找不到回收區檔案")
+            continue
+        trash_parent = os.path.basename(os.path.dirname(os.path.abspath(trash_path)))
+        if trash_parent.casefold() != db.RECYCLE_DIRECTORY_NAME.casefold():
+            errors.append(f"{entry.get('file_name') or trash_id}：回收區路徑無效")
+            continue
+        try:
+            recycle_bin.send_path_to_system_recycle_bin(trash_path)
+            moved_ids.append(trash_id)
+        except (OSError, ValueError) as error:
+            errors.append(f"{entry.get('file_name') or trash_id}：{error}")
+
+    if moved_ids:
+        try:
+            db.mark_trash_entries_sent_to_system_recycle(moved_ids)
+        except Exception as error:
+            # The file has already been handed to Windows. Surface the DB
+            # error instead of pretending the app recycle list is in sync.
+            errors.append(f"更新回收區記錄失敗：{error}")
+
+    return {"moved": len(moved_ids), "errors": errors}
+
+
+@app.get("/api/recycle-bin")
+def read_recycle_bin():
+    entries = db.get_trash_entries()
+    return {
+        "entries": entries,
+        "total": len(entries),
+    }
+
+
+@app.post("/api/recycle-bin/{trash_id}/send-to-system")
+def send_trash_entry_to_system(trash_id: int):
+    result = _send_trash_entries_to_system_recycle([trash_id])
+    if result["moved"] == 0 and result["errors"]:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=result["errors"][0])
+    return result
+
+
+@app.post("/api/recycle-bin/send-all-to-system")
+def send_all_trash_to_system():
+    result = _send_trash_entries_to_system_recycle(
+        [int(entry["trash_id"]) for entry in db.get_trash_entries()]
+    )
+    return result
 
 
 if __name__ == "__main__":

@@ -7,9 +7,14 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import path_picker
+import main
 
 
 class PathPickerValidationTests(unittest.TestCase):
+    def test_default_dev_frontend_origins_can_use_the_picker_session(self):
+        self.assertIn("http://localhost:3000", main.ALLOWED_ORIGINS)
+        self.assertIn("http://127.0.0.1:3000", main.ALLOWED_ORIGINS)
+
     def test_inventory_modes_validate_file_folder_and_save_paths(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

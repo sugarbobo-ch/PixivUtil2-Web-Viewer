@@ -276,6 +276,25 @@
   box-shadow: 0 0.35rem 0.9rem color-mix(in oklch, var(--sidebar-primary) 24%, transparent);
 }
 
+.app-sidebar__loading {
+  display: flex;
+  min-height: 2.75rem;
+  align-items: center;
+  gap: 0.5rem;
+  padding-inline: 0.75rem;
+  color: var(--sidebar-text-muted);
+  font-size: 0.75rem;
+}
+
+.app-sidebar__loading-dot {
+  width: 0.45rem;
+  height: 0.45rem;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: var(--sidebar-accent);
+  box-shadow: 0 0 0 0.25rem color-mix(in oklch, var(--sidebar-accent) 14%, transparent);
+}
+
 .app-sidebar__artist-option:focus-visible,
 .app-sidebar__month-list > button:focus-visible,
 .app-sidebar__section-toggle:focus-visible,

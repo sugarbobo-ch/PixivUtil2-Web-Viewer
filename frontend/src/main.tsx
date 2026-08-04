@@ -11,6 +11,7 @@ import './styles/theme.css'
 import './styles/settings.css'
 import './styles/sidebar.css'
 import './styles/navigation.css'
+import './styles/recycle-bin.css'
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

@@ -12,6 +12,8 @@ import { WebtoonFeed } from './components/WebtoonFeed';
 import { BatchEditToolbar } from './components/BatchEditToolbar';
 import { ConfirmModal } from './components/ConfirmModal';
 import { SettingsModal } from './components/SettingsModal';
+import { ArtistSettingsModal } from './components/ArtistSettingsModal';
+import { RecycleBinModal } from './components/RecycleBinModal';
 import { MangaGroupModal } from './components/MangaGroupModal';
 import { MonthJumpItem, MonthJumpNavigationOptions, MonthNavigationPhase } from './components/MonthQuickNav';
 import { getScrollTopForElement, scrollElementToContainerStart, getTargetPageAndLocalIndex } from './utils/galleryLayout';
@@ -199,6 +201,9 @@ export const App: React.FC = () => {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isEditMode, setIsEditMode] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isArtistSettingsOpen, setIsArtistSettingsOpen] = useState(false);
+  const [isRecycleBinOpen, setIsRecycleBinOpen] = useState(false);
+  const [isArtistUpdateNoticeOpen, setIsArtistUpdateNoticeOpen] = useState(false);
 
   // Group Mode & Manga Modal States
   const [groupMangaPosts, setGroupMangaPosts] = useState(DEFAULT_WEB_CONFIG.groupMangaPosts);
@@ -213,6 +218,7 @@ export const App: React.FC = () => {
 
   // Data States
   const [artists, setArtists] = useState<Artist[]>([]);
+  const [isLoadingArtists, setIsLoadingArtists] = useState(false);
   const [months, setMonths] = useState<MonthItem[]>([]);
   const [images, setImages] = useState<ImageItem[]>([]);
   const [availableMonthIndexItems, setAvailableMonthIndexItems] = useState<MonthJumpItem[]>([]);
@@ -230,6 +236,26 @@ export const App: React.FC = () => {
       return nextArtists.some(artist => Number(artist.member_id) === current) ? current : null;
     });
   }, []);
+
+  const refreshDirectoryMetadata = useCallback(async () => {
+    setIsLoadingArtists(true);
+    try {
+      const [artistsResponse, monthsResponse] = await Promise.all([
+        fetch('/api/artists', { cache: 'no-store' }),
+        fetch('/api/months', { cache: 'no-store' }),
+      ]);
+      if (!artistsResponse.ok) throw new Error(`artists request failed: ${artistsResponse.status}`);
+      if (!monthsResponse.ok) throw new Error(`months request failed: ${monthsResponse.status}`);
+      const [artistsData, monthsData] = await Promise.all([
+        artistsResponse.json(),
+        monthsResponse.json(),
+      ]);
+      applyArtistList(artistsData);
+      setMonths(Array.isArray(monthsData) ? monthsData : []);
+    } finally {
+      setIsLoadingArtists(false);
+    }
+  }, [applyArtistList]);
 
   // Selection & Modal States
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
@@ -349,6 +375,9 @@ export const App: React.FC = () => {
           if (libraryAnnouncementTimerRef.current !== null) window.clearTimeout(libraryAnnouncementTimerRef.current);
           setLibraryAnnouncement(getLibraryJobAnnouncement(nextJob));
           libraryAnnouncementTimerRef.current = window.setTimeout(() => setLibraryAnnouncement(''), 8000);
+          if (nextJob.job_type === 'update-library' && ['completed', 'cancelled'].includes(nextJob.status)) {
+            window.dispatchEvent(new Event('web-viewer-library-data-changed'));
+          }
         }
         schedulePoll(isLibraryJobActive(nextJob) ? 1000 : 10000);
       } catch {
@@ -373,16 +402,8 @@ export const App: React.FC = () => {
 
   // Fetch Artists & Months
   useEffect(() => {
-    fetch('/api/artists')
-      .then(res => res.json())
-      .then(applyArtistList)
-      .catch(err => console.error('Failed to fetch artists:', err));
-
-    fetch('/api/months')
-      .then(res => res.json())
-      .then(data => setMonths(data))
-      .catch(err => console.error('Failed to fetch months:', err));
-  }, [applyArtistList]);
+    void refreshDirectoryMetadata().catch(err => console.error('Failed to fetch directory metadata:', err));
+  }, [refreshDirectoryMetadata]);
 
   // Keep filter state shareable and restore it when the browser navigates to a
   // URL that already contains filter parameters.
@@ -528,6 +549,17 @@ export const App: React.FC = () => {
     if (!isWebConfigReady) return;
     fetchImages();
   }, [fetchImages, isWebConfigReady]);
+
+  useEffect(() => {
+    const handleLibraryDataChanged = () => {
+      imagePageCacheRef.current.clear();
+      void refreshDirectoryMetadata().catch(err => console.error('Failed to refresh directory metadata:', err));
+      fetchImages();
+    };
+
+    window.addEventListener('web-viewer-library-data-changed', handleLibraryDataChanged);
+    return () => window.removeEventListener('web-viewer-library-data-changed', handleLibraryDataChanged);
+  }, [fetchImages, refreshDirectoryMetadata]);
 
   useEffect(() => {
     const fullscreenActive = fullscreenIndex !== null || viewMode === 'fullscreen';
@@ -1244,6 +1276,53 @@ export const App: React.FC = () => {
     setSelectedMonths([]);
   };
 
+  const currentArtist = useMemo(
+    () => (selectedArtist === null ? null : artists.find(artist => artist.member_id === selectedArtist) ?? null),
+    [artists, selectedArtist],
+  );
+
+  const isArtistUpdating = isLibraryJobActive(libraryJob) && libraryJob?.job_type === 'update-library';
+
+  const handleRequestArtistUpdate = useCallback(() => {
+    if (isArtistUpdating) return;
+    setIsArtistUpdateNoticeOpen(true);
+  }, [isArtistUpdating]);
+
+  const handleStartArtistUpdate = useCallback(async () => {
+    if (isLibraryJobActive(libraryJob)) {
+      setIsArtistUpdateNoticeOpen(false);
+      return;
+    }
+
+    setIsArtistUpdateNoticeOpen(false);
+    try {
+      const response = await fetch('/api/library/jobs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: 'update-library', analyze_colors: false }),
+      });
+      const data = await response.json().catch(() => ({})) as { job?: LibraryJob; detail?: string };
+      if (!response.ok || !data.job) throw new Error(data.detail || `背景更新啟動失敗（${response.status}）`);
+      setLibraryJob(data.job);
+      setLibraryAnnouncement('繪師作品資料已開始在背景更新，瀏覽期間可能會有短暫卡頓。');
+      window.dispatchEvent(new Event('web-viewer-library-job-changed'));
+    } catch (error) {
+      setLibraryAnnouncement(error instanceof Error ? error.message : '背景更新啟動失敗');
+    }
+  }, [libraryJob]);
+
+  const handleArtistChanged = useCallback(() => {
+    imagePageCacheRef.current.clear();
+    setSelectedArtist(null);
+    void refreshDirectoryMetadata().catch(err => console.error('Failed to refresh after artist action:', err));
+  }, [refreshDirectoryMetadata]);
+
+  const handleOpenRecycleBin = useCallback(() => {
+    setIsSettingsOpen(false);
+    setIsArtistSettingsOpen(false);
+    setIsRecycleBinOpen(true);
+  }, []);
+
   const handleSettingsSaved = useCallback((savedConfig?: Partial<WebConfig>) => {
     if (savedConfig) {
       applyWebConfig(savedConfig);
@@ -1253,9 +1332,8 @@ export const App: React.FC = () => {
 
     fetchImages();
     // Also refetch artists and months in case directory rescan indexed new files.
-    fetch('/api/artists').then(res => res.json()).then(applyArtistList).catch(err => console.error(err));
-    fetch('/api/months').then(res => res.json()).then(data => setMonths(data)).catch(err => console.error(err));
-  }, [applyArtistList, applyWebConfig, fetchImages, loadWebConfig]);
+    void refreshDirectoryMetadata().catch(err => console.error(err));
+  }, [applyWebConfig, fetchImages, loadWebConfig, refreshDirectoryMetadata]);
 
   if (!isWebConfigReady) {
     return (
@@ -1333,6 +1411,7 @@ export const App: React.FC = () => {
           searchQuery={searchQuery}
           setSearchQuery={setSearchQuery}
           onResetAllFilters={handleResetAllFilters}
+          isLoading={isLoadingArtists}
         />
 
         <main
@@ -1378,7 +1457,11 @@ export const App: React.FC = () => {
              destinationMonthKey={destinationMonthKey}
              destinationGlobalIndex={destinationGlobalIndex}
              isLoading={isLoadingImages}
-            blurEnabled={blurEnabled}
+             isArtistLoading={isLoadingImages && selectedArtist !== null}
+              isArtistUpdating={isArtistUpdating}
+              onRequestArtistUpdate={handleRequestArtistUpdate}
+              onOpenArtistSettings={() => setIsArtistSettingsOpen(true)}
+             blurEnabled={blurEnabled}
           />
           )}
 
@@ -1454,11 +1537,37 @@ export const App: React.FC = () => {
         onCancel={() => setShowConfirmModal(false)}
       />
 
+      <ConfirmModal
+        isOpen={isArtistUpdateNoticeOpen}
+        title="在背景更新繪師作品？"
+        message="更新會在背景掃描圖片資料夾並同步資料庫。掃描 HDD 期間可能造成檔案讀取聲、介面短暫卡頓；你仍可繼續瀏覽，完成後列表會自動更新。"
+        confirmLabel="開始背景更新"
+        cancelLabel="稍後再做"
+        onConfirm={() => void handleStartArtistUpdate()}
+        onCancel={() => setIsArtistUpdateNoticeOpen(false)}
+      />
+
       {/* Settings Modal */}
       <SettingsModal
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
         onSettingsSaved={handleSettingsSaved}
+        onOpenRecycleBin={handleOpenRecycleBin}
+      />
+
+      <ArtistSettingsModal
+        isOpen={isArtistSettingsOpen}
+        artist={currentArtist}
+        onClose={() => setIsArtistSettingsOpen(false)}
+        onArtistChanged={handleArtistChanged}
+        onOpenRecycleBin={handleOpenRecycleBin}
+        isUpdating={isArtistUpdating}
+        onRequestUpdate={handleRequestArtistUpdate}
+      />
+
+      <RecycleBinModal
+        isOpen={isRecycleBinOpen}
+        onClose={() => setIsRecycleBinOpen(false)}
       />
     </div>
   );

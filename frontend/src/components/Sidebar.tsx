@@ -24,6 +24,7 @@ interface SidebarProps {
   searchQuery?: string;
   setSearchQuery?: (query: string) => void;
   onResetAllFilters?: () => void;
+  isLoading?: boolean;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -38,6 +39,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   searchQuery = '',
   setSearchQuery,
   onResetAllFilters,
+  isLoading = false,
 }) => {
   const [artistFilter, setArtistFilter] = useState('');
   const [isMonthSectionOpen, setIsMonthSectionOpen] = useState(true);
@@ -194,30 +196,39 @@ export const Sidebar: React.FC<SidebarProps> = ({
           />
 
           <div className="app-sidebar__list app-sidebar__artist-list flex-1 overflow-y-auto overscroll-contain space-y-1 pr-1 rounded-xl p-1">
-            <button
-              type="button"
-              onClick={() => setSelectedArtist(null)}
-              className={`app-sidebar__artist-option w-full flex items-center justify-between px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                selectedArtist === null ? 'is-selected' : ''
-              }`}
-            >
-              <span>全部繪師</span>
-              {selectedArtist === null && <Check className="w-3.5 h-3.5" />}
-            </button>
+            {isLoading ? (
+              <div className="app-sidebar__loading" role="status" aria-live="polite" aria-busy="true">
+                <span className="app-sidebar__loading-dot" aria-hidden="true" />
+                <span>正在讀取繪師列表…</span>
+              </div>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  onClick={() => setSelectedArtist(null)}
+                  className={`app-sidebar__artist-option w-full flex items-center justify-between px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                    selectedArtist === null ? 'is-selected' : ''
+                  }`}
+                >
+                  <span>全部繪師</span>
+                  {selectedArtist === null && <Check className="w-3.5 h-3.5" />}
+                </button>
 
-            {filteredArtists.map((a) => (
-              <button
-                key={a.member_id}
-                type="button"
-                onClick={() => setSelectedArtist(a.member_id === selectedArtist ? null : a.member_id)}
-                className={`app-sidebar__artist-option w-full flex items-center justify-between px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                  selectedArtist === a.member_id ? 'is-selected' : ''
-                }`}
-              >
-                <span className="truncate max-w-[140px] text-left">{a.name || `ID: ${a.member_id}`}</span>
-                <span className="text-[11px] opacity-70">({a.artwork_count})</span>
-              </button>
-            ))}
+                {filteredArtists.map((a) => (
+                  <button
+                    key={a.member_id}
+                    type="button"
+                    onClick={() => setSelectedArtist(a.member_id === selectedArtist ? null : a.member_id)}
+                    className={`app-sidebar__artist-option w-full flex items-center justify-between px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                      selectedArtist === a.member_id ? 'is-selected' : ''
+                    }`}
+                  >
+                    <span className="truncate max-w-[140px] text-left">{a.name || `ID: ${a.member_id}`}</span>
+                    <span className="text-[11px] opacity-70">({a.artwork_count})</span>
+                  </button>
+                ))}
+              </>
+            )}
           </div>
         </div>
 

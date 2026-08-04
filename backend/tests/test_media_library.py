@@ -10,6 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import db
+import config_paths
 import library_jobs
 from library_jobs import LibraryJobManager
 from PIL import Image
@@ -118,6 +119,101 @@ class MediaLibraryTests(unittest.TestCase):
 
         self.assertEqual(first, second)
         self.assertNotEqual(first, abs(hash(folder.name)) % 100000000)
+
+    def test_concurrent_folder_scans_share_one_snapshot(self):
+        for index in range(4):
+            self._write_media(f"artist/{index}.jpg", str(index).encode("ascii"))
+
+        original_walk = db.os.walk
+        walk_count = 0
+        walk_count_lock = threading.Lock()
+
+        def counted_walk(*args, **kwargs):
+            nonlocal walk_count
+            with walk_count_lock:
+                walk_count += 1
+            time.sleep(0.05)
+            yield from original_walk(*args, **kwargs)
+
+        db.invalidate_scan_cache(str(self.root))
+        db.os.walk = counted_walk
+        try:
+            results = []
+
+            def read_snapshot():
+                results.append(db.get_folder_files_fast(str(self.root)))
+
+            first = threading.Thread(target=read_snapshot)
+            second = threading.Thread(target=read_snapshot)
+            first.start()
+            second.start()
+            first.join()
+            second.join()
+        finally:
+            db.os.walk = original_walk
+
+        self.assertEqual(walk_count, 1)
+        self.assertEqual(len(results), 2)
+        self.assertEqual(len(results[0]), 4)
+        self.assertEqual(results[0], results[1])
+
+    def test_artist_counts_are_derived_from_shared_root_snapshot(self):
+        self._write_media("Artist folder/123.jpg", b"image")
+        original_workspace_root = config_paths.WORKSPACE_ROOT
+        original_config_path_reader = config_paths.get_pixiv_config_path
+        config_paths.WORKSPACE_ROOT = str(self.root)
+        config_paths.get_pixiv_config_path = lambda: str(self.root / "missing-config.ini")
+        try:
+            artists = db.get_all_artists()
+        finally:
+            config_paths.WORKSPACE_ROOT = original_workspace_root
+            config_paths.get_pixiv_config_path = original_config_path_reader
+
+        artist = next(item for item in artists if item.get("name") == "Artist folder")
+        self.assertEqual(artist["artwork_count"], 1)
+
+    def test_hidden_artist_and_recycle_metadata_are_reversible(self):
+        artist_id = 4252792
+        db.hide_artist(artist_id, "Example Artist")
+        self.assertIn(artist_id, db.get_hidden_artist_ids())
+        self.assertEqual(db.get_hidden_artists()[0]["folder_name"], "Example Artist")
+
+        self.assertTrue(db.unhide_artist(artist_id))
+        self.assertNotIn(artist_id, db.get_hidden_artist_ids())
+        conn = db.get_db_connection()
+        try:
+            self.assertIsNotNone(conn.execute(
+                "SELECT unhidden_at FROM viewer_hidden_artist WHERE member_id = ?",
+                (artist_id,),
+            ).fetchone()["unhidden_at"])
+        finally:
+            conn.close()
+
+        source = self._write_media("Example Artist/123.jpg", b"image")
+        trash = self.root / db.RECYCLE_DIRECTORY_NAME / "123-trash.jpg"
+        trash.parent.mkdir(parents=True, exist_ok=True)
+        source.rename(trash)
+        image_id = db._stable_synthetic_image_id(str(source))
+        self.assertEqual(
+            db.mark_images_as_trashed(
+                [image_id],
+                [(image_id, str(source), str(source), str(trash))],
+            ),
+            1,
+        )
+        entries = db.get_trash_entries()
+        self.assertEqual(len(entries), 1)
+        self.assertTrue(entries[0]["available"])
+        self.assertEqual(db.mark_trash_entries_sent_to_system_recycle([entries[0]["trash_id"]]), 1)
+        self.assertEqual(db.get_trash_entries(), [])
+        conn = db.get_db_connection()
+        try:
+            self.assertIsNotNone(conn.execute(
+                "SELECT sent_to_system_recycle_at FROM pixivutil2_trash_image WHERE trash_id = ?",
+                (entries[0]["trash_id"],),
+            ).fetchone()["sent_to_system_recycle_at"])
+        finally:
+            conn.close()
 
     def test_cancel_keeps_completed_index_rows(self):
         for index in range(12):

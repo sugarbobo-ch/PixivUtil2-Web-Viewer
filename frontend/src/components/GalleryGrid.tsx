@@ -45,6 +45,10 @@ interface GalleryGridProps {
   destinationMonthKey?: string | null;
   destinationGlobalIndex?: number | null;
   isLoading?: boolean;
+  isArtistLoading?: boolean;
+  isArtistUpdating?: boolean;
+  onRequestArtistUpdate?: () => void;
+  onOpenArtistSettings?: () => void;
   blurEnabled?: boolean;
 }
 
@@ -134,6 +138,10 @@ export const GalleryGrid: React.FC<GalleryGridProps> = ({
   destinationMonthKey = null,
   destinationGlobalIndex = null,
   isLoading = false,
+  isArtistLoading = false,
+  isArtistUpdating = false,
+  onRequestArtistUpdate,
+  onOpenArtistSettings,
   blurEnabled = false,
 }) => {
   const galleryRootRef = React.useRef<HTMLDivElement | null>(null);
@@ -742,7 +750,23 @@ export const GalleryGrid: React.FC<GalleryGridProps> = ({
             {hasActiveFilters && <span className="gallery-filter-toolbar__filter-indicator" aria-hidden="true" />}
           </button>
         )}
-        <ArtistStickyNav artist={selectedArtistObj} onClearArtist={onClearArtist} />
+        <ArtistStickyNav
+          artist={selectedArtistObj}
+          onClearArtist={onClearArtist}
+          isLoading={isArtistLoading}
+          isUpdating={isArtistUpdating}
+          onRequestUpdate={onRequestArtistUpdate}
+          onOpenSettings={onOpenArtistSettings}
+          isEditMode={isEditMode}
+          onToggleEditMode={onToggleEditMode}
+          sortMode={sortMode}
+          sortOptions={sortOptions}
+          onSortModeChange={onSortModeChange}
+          itemsPerPage={itemsPerPage}
+          itemsPerPageOptions={itemsPerPageOptions}
+          onItemsPerPageChange={onItemsPerPageChange}
+          onPageChange={onPageChange}
+        />
           <div className="gallery-filter-toolbar__actions">
             <div className="gallery-filter-toolbar__sort ml-auto flex min-h-9 shrink-0 items-center gap-2">
             <span className="gallery-filter-toolbar__label text-xs font-medium text-zinc-400">排序:</span>
@@ -794,7 +818,17 @@ export const GalleryGrid: React.FC<GalleryGridProps> = ({
 
       {/* Main Grid View - Grouped by Month Sections */}
       <div className="gallery-month-content p-4 space-y-6" data-gallery-scroll-container="true">
-        {images.length === 0 ? (
+        {isLoading && images.length === 0 ? (
+          <div className="gallery-empty-state gallery-empty-state--loading" role="status" aria-live="polite" aria-busy="true">
+            <div className="gallery-empty-state__icon" aria-hidden="true">
+              <RotateCcw className="h-7 w-7 gallery-empty-state__spinner" />
+            </div>
+            <div className="gallery-empty-state__copy">
+              <p className="gallery-empty-state__title">正在載入作品</p>
+              <p className="gallery-empty-state__description">正在讀取圖片資料夾，第一次載入可能需要一點時間。</p>
+            </div>
+          </div>
+        ) : images.length === 0 ? (
           <div className="gallery-empty-state" role="status" aria-live="polite">
             <div className="gallery-empty-state__icon" aria-hidden="true">
               <Search className="h-7 w-7" />
