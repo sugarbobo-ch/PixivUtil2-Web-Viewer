@@ -57,6 +57,12 @@ interface WebViewerConfig {
   groupMangaPosts: boolean;
   blurEnabled: boolean;
   preloadImageCount: number;
+  fullscreenToolbarSimpleMode: boolean;
+  webtoonImageScale: number;
+  webtoonImageGap: number;
+  webtoonShowInfo: boolean;
+  webtoonShowPageNumber: boolean;
+  webtoonShowThumbnails: boolean;
   analyzeColorsAfterLibraryUpdate: boolean;
   manageThumbnailCache: boolean;
   thumbnailCacheLimitMiB: number;
@@ -1152,6 +1158,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   <label htmlFor="preload-image-count" className="settings-modal__label mb-1.5 block text-sm font-semibold">全螢幕預載張數</label>
                   <input id="preload-image-count" type="number" min={0} max={10} value={webConfig.preloadImageCount} onChange={event => setWebConfig(current => ({ ...current, preloadImageCount: Number(event.target.value) }))} className={inputClass} />
                 </div>
+                <div>
+                  <label htmlFor="webtoon-image-scale" className="settings-modal__label mb-1.5 block text-sm font-semibold">條漫圖片寬度比例（%）</label>
+                  <input id="webtoon-image-scale" type="number" min={30} max={100} step={5} value={webConfig.webtoonImageScale} onChange={event => setWebConfig(current => ({ ...current, webtoonImageScale: Number(event.target.value) }))} className={inputClass} />
+                </div>
+                <div>
+                  <label htmlFor="webtoon-image-gap" className="settings-modal__label mb-1.5 block text-sm font-semibold">條漫圖片間距（px）</label>
+                  <input id="webtoon-image-gap" type="number" min={0} max={300} step={4} value={webConfig.webtoonImageGap} onChange={event => setWebConfig(current => ({ ...current, webtoonImageGap: Number(event.target.value) }))} className={inputClass} />
+                </div>
               </div>
 
               <div className="space-y-3">
@@ -1168,6 +1182,34 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   <span className="min-w-0">
                     <span className="block font-semibold">套用模糊遮罩</span>
                     <span className="settings-modal__description mt-1 block text-xs leading-5">在縮圖、條漫與全螢幕預覽套用模糊遮罩。</span>
+                  </span>
+                </label>
+                <label htmlFor="fullscreen-toolbar-simple-mode" className="settings-modal__check-row flex min-h-11 cursor-pointer items-start gap-3 rounded-xl px-3 py-2 text-sm">
+                  <input id="fullscreen-toolbar-simple-mode" type="checkbox" checked={!!webConfig.fullscreenToolbarSimpleMode} onChange={event => setWebConfig(current => ({ ...current, fullscreenToolbarSimpleMode: event.target.checked }))} className="settings-modal__checkbox mt-0.5 h-4 w-4 shrink-0 rounded focus-visible:outline-2 focus-visible:outline-offset-2" />
+                  <span className="min-w-0">
+                    <span className="block font-semibold">全螢幕使用簡易工具列</span>
+                    <span className="settings-modal__description mt-1 block text-xs leading-5">只顯示閱讀模式、縮放、說明與關閉；可在 viewer 內隨時展開完整工具列。</span>
+                  </span>
+                </label>
+                <label htmlFor="webtoon-show-info" className="settings-modal__check-row flex min-h-11 cursor-pointer items-start gap-3 rounded-xl px-3 py-2 text-sm">
+                  <input id="webtoon-show-info" type="checkbox" checked={!!webConfig.webtoonShowInfo} onChange={event => setWebConfig(current => ({ ...current, webtoonShowInfo: event.target.checked }))} className="settings-modal__checkbox mt-0.5 h-4 w-4 shrink-0 rounded focus-visible:outline-2 focus-visible:outline-offset-2" />
+                  <span className="min-w-0">
+                    <span className="block font-semibold">顯示條漫圖片資訊欄</span>
+                    <span className="settings-modal__description mt-1 block text-xs leading-5">關閉後只保留圖片內容。</span>
+                  </span>
+                </label>
+                <label htmlFor="webtoon-show-page-number" className="settings-modal__check-row flex min-h-11 cursor-pointer items-start gap-3 rounded-xl px-3 py-2 text-sm">
+                  <input id="webtoon-show-page-number" type="checkbox" checked={!!webConfig.webtoonShowPageNumber} onChange={event => setWebConfig(current => ({ ...current, webtoonShowPageNumber: event.target.checked }))} className="settings-modal__checkbox mt-0.5 h-4 w-4 shrink-0 rounded focus-visible:outline-2 focus-visible:outline-offset-2" />
+                  <span className="min-w-0">
+                    <span className="block font-semibold">顯示條漫頁碼</span>
+                    <span className="settings-modal__description mt-1 block text-xs leading-5">在圖片上保留目前圖片的全域頁碼。</span>
+                  </span>
+                </label>
+                <label htmlFor="webtoon-show-thumbnails" className="settings-modal__check-row flex min-h-11 cursor-pointer items-start gap-3 rounded-xl px-3 py-2 text-sm">
+                  <input id="webtoon-show-thumbnails" type="checkbox" checked={!!webConfig.webtoonShowThumbnails} onChange={event => setWebConfig(current => ({ ...current, webtoonShowThumbnails: event.target.checked }))} className="settings-modal__checkbox mt-0.5 h-4 w-4 shrink-0 rounded focus-visible:outline-2 focus-visible:outline-offset-2" />
+                  <span className="min-w-0">
+                    <span className="block font-semibold">顯示直式縮圖導覽</span>
+                    <span className="settings-modal__description mt-1 block text-xs leading-5">桌面版以固定欄位快速跳到其他圖片。</span>
                   </span>
                 </label>
               </div>

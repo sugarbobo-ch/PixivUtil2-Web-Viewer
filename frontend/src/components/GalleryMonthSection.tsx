@@ -39,6 +39,7 @@ interface GalleryMonthSectionProps {
   navigationMode: 'idle' | 'click-scrolling' | 'scrubbing-preview' | 'scrubbing-settle' | 'scrubbing-commit';
   destinationMonthKey?: string | null;
   destinationGlobalIndex?: number | null;
+  restoreGlobalIndex?: number | null;
 }
 
 interface DisplayCard {
@@ -83,6 +84,7 @@ export const GalleryMonthSection: React.FC<GalleryMonthSectionProps> = ({
   navigationMode,
   destinationMonthKey = null,
   destinationGlobalIndex = null,
+  restoreGlobalIndex = null,
 }) => {
   const sectionRef = React.useRef<HTMLDivElement | null>(null);
   const gridShellRef = React.useRef<HTMLDivElement | null>(null);
@@ -140,6 +142,9 @@ export const GalleryMonthSection: React.FC<GalleryMonthSectionProps> = ({
   const destinationLocalIndex = destinationMonthKey === group.key && destinationGlobalIndex !== null
     ? displayCards.findIndex(card => card.globalIndices.includes(destinationGlobalIndex))
     : undefined;
+  const restoreLocalIndex = restoreGlobalIndex !== null
+    ? displayCards.findIndex(card => card.globalIndices.includes(restoreGlobalIndex))
+    : undefined;
 
   const measure = React.useCallback(() => {
     const grid = gridRef.current;
@@ -180,7 +185,9 @@ export const GalleryMonthSection: React.FC<GalleryMonthSectionProps> = ({
     const viewportHeight = Math.max(1, rootRect.height);
     const forcedIndex = destinationLocalIndex !== undefined && destinationLocalIndex >= 0
       ? destinationLocalIndex
-      : undefined;
+      : restoreLocalIndex !== undefined && restoreLocalIndex >= 0
+        ? restoreLocalIndex
+        : undefined;
     const nextRange = getVirtualRange({
       itemCount: displayCards.length,
       metrics: activeMetrics,
@@ -191,7 +198,7 @@ export const GalleryMonthSection: React.FC<GalleryMonthSectionProps> = ({
       forcedIndex,
     });
     setVirtualRange(current => rangesEqual(current, nextRange) ? current : nextRange);
-  }, [destinationLocalIndex, displayCards.length, metrics, navigationMode, scrollContainerRef, scrollTick]);
+  }, [destinationLocalIndex, displayCards.length, metrics, navigationMode, restoreLocalIndex, scrollContainerRef, scrollTick]);
 
   const activeMetrics = metrics ?? FALLBACK_METRICS;
   const totalRows = getRowCount(displayCards.length, activeMetrics.columns);
@@ -211,9 +218,11 @@ export const GalleryMonthSection: React.FC<GalleryMonthSectionProps> = ({
       gridTop: shellRect.top,
       viewportTop: rootRect.top,
       viewportBottom: rootRect.bottom,
-      forcedIndex: destinationMode ? destinationLocalIndex : undefined,
+      forcedIndex: destinationMode
+        ? destinationLocalIndex
+        : restoreLocalIndex,
     });
-  }, [activeMetrics, destinationLocalIndex, destinationMode, displayCards.length, scrollTick, scrollContainerRef, virtualRange]);
+  }, [activeMetrics, destinationLocalIndex, destinationMode, displayCards.length, restoreLocalIndex, scrollTick, scrollContainerRef, virtualRange]);
 
   const isClickNavigation = navigationMode === 'click-scrolling';
   const renderCard = (card: DisplayCard, localIndex: number) => {
@@ -249,6 +258,8 @@ export const GalleryMonthSection: React.FC<GalleryMonthSectionProps> = ({
         data-selection-card="true"
         data-selection-key={card.key}
         data-selection-ids={card.ids.join(',')}
+        data-gallery-index={card.globalIndex}
+        data-gallery-indices={card.globalIndices.join(' ')}
         role={isEditMode ? 'checkbox' : 'button'}
         tabIndex={0}
         aria-checked={isEditMode ? isSelected : undefined}

@@ -53,11 +53,16 @@ export interface ImageItem {
   last_update_date: string;
   artist_name?: string;
   dominant_color?: string;
+  /** 1-based page position within the current work group. */
+  group_page_index?: number;
+  /** Total number of pages in the current work group. */
+  group_page_total?: number;
   media_status?: 'invalid' | 'missing' | 'internal';
   media_error?: string;
 }
 
-export type ViewMode = 'grid' | 'fullscreen' | 'webtoon';
+export type ViewerMode = 'fullscreen' | 'webtoon';
+export type ViewMode = 'grid' | ViewerMode;
 export type ThemeMode = 'dark' | 'light';
 export type SortMode = 'newest_month' | 'oldest_month' | 'oldest' | 'natural_name';
 
@@ -81,6 +86,12 @@ export interface WebConfig {
   groupMangaPosts: boolean;
   blurEnabled: boolean;
   preloadImageCount: number;
+  fullscreenToolbarSimpleMode: boolean;
+  webtoonImageScale: number;
+  webtoonImageGap: number;
+  webtoonShowInfo: boolean;
+  webtoonShowPageNumber: boolean;
+  webtoonShowThumbnails: boolean;
   analyzeColorsAfterLibraryUpdate: boolean;
   manageThumbnailCache: boolean;
   thumbnailCacheLimitMiB: number;
@@ -96,6 +107,12 @@ export const DEFAULT_WEB_CONFIG: WebConfig = {
   groupMangaPosts: false,
   blurEnabled: false,
   preloadImageCount: 3,
+  fullscreenToolbarSimpleMode: true,
+  webtoonImageScale: 100,
+  webtoonImageGap: 24,
+  webtoonShowInfo: true,
+  webtoonShowPageNumber: true,
+  webtoonShowThumbnails: true,
   analyzeColorsAfterLibraryUpdate: true,
   manageThumbnailCache: true,
   thumbnailCacheLimitMiB: 1024,

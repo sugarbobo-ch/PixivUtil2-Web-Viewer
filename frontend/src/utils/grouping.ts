@@ -51,6 +51,52 @@ export const getItemGroupKey = (item: ImageItem): string => {
   return `file_${normPath.toLowerCase()}`;
 };
 
+export interface GroupPageNumberState {
+  pageNumbers: number[];
+  pageTotals: number[];
+  /** Largest group size, used as a safe fallback for shared counters. */
+  totalPages: number;
+}
+
+const isPositiveGroupNumber = (value: number | undefined): value is number => (
+  typeof value === 'number' && Number.isFinite(value) && value > 0
+);
+
+/**
+ * Resolve the 1-based page number used by group-aware viewers.
+ * The API supplies the position and total for each work group; the local
+ * fallback keeps older API responses usable without changing grouping.
+ */
+export const getGroupPageNumbers = (images: ImageItem[]): GroupPageNumberState => {
+  const fallbackGroupTotals = new Map<string, number>();
+  images.forEach(item => {
+    const groupKey = getItemGroupKey(item);
+    fallbackGroupTotals.set(groupKey, (fallbackGroupTotals.get(groupKey) ?? 0) + 1);
+  });
+
+  const fallbackGroupPositions = new Map<string, number>();
+
+  const pageNumbers = images.map(item => {
+    if (isPositiveGroupNumber(item.group_page_index)) return item.group_page_index;
+
+    const groupKey = getItemGroupKey(item);
+    const nextPosition = (fallbackGroupPositions.get(groupKey) ?? 0) + 1;
+    fallbackGroupPositions.set(groupKey, nextPosition);
+    return nextPosition;
+  });
+
+  const pageTotals = images.map(item => {
+    if (isPositiveGroupNumber(item.group_page_total)) return item.group_page_total;
+    return fallbackGroupTotals.get(getItemGroupKey(item)) ?? 1;
+  });
+
+  return {
+    pageNumbers,
+    pageTotals,
+    totalPages: Math.max(1, ...pageTotals),
+  };
+};
+
 /**
  * Group ImageItem[] into WorkGroup[]
  */

@@ -259,18 +259,20 @@ export const Header: React.FC<HeaderProps> = ({
             </button>
           )}
 
-          <button
-            type="button"
-            onClick={() => setIsEditMode(!isEditMode)}
-            aria-pressed={isEditMode}
-            aria-label={isEditMode ? '結束編輯模式' : '開啟編輯模式'}
-            className={`header-action header-action-labeled ${isEditMode ? 'is-danger' : ''}`}
-            title="切換編輯模式 (E)"
-          >
-            <CheckSquare className="h-4 w-4" aria-hidden="true" />
-            <span>{isEditMode ? '編輯中' : '編輯模式'}</span>
-            <kbd className="header-shortcut">E</kbd>
-          </button>
+          {viewMode !== 'webtoon' && (
+            <button
+              type="button"
+              onClick={() => setIsEditMode(!isEditMode)}
+              aria-pressed={isEditMode}
+              aria-label={isEditMode ? '結束編輯模式' : '開啟編輯模式'}
+              className={`header-action header-action-labeled ${isEditMode ? 'is-danger' : ''}`}
+              title="切換編輯模式 (E)"
+            >
+              <CheckSquare className="h-4 w-4" aria-hidden="true" />
+              <span>{isEditMode ? '編輯中' : '編輯模式'}</span>
+              <kbd className="header-shortcut">E</kbd>
+            </button>
+          )}
         </div>
 
         <div className="app-header__utility-actions">

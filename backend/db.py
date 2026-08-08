@@ -635,6 +635,52 @@ def _normalise_media_path(file_path: str) -> str:
     return os.path.normcase(os.path.normpath(os.path.abspath(file_path)))
 
 
+def _get_image_group_key(item: Dict[str, Any]) -> str:
+    """Mirror the frontend work-group key for stable webtoon numbering."""
+    file_path = item.get("save_name")
+    if not file_path:
+        return f"item_{item.get('image_id') or 'unknown'}"
+
+    normalized_path = str(file_path).replace("\\", "/")
+    separator = normalized_path.rfind("/")
+    filename = normalized_path[separator + 1:]
+    dir_path = normalized_path[:separator] if separator >= 0 else ""
+
+    pixiv_match = re.match(r"^(\d{5,12})_p\d+", filename, re.IGNORECASE)
+    if pixiv_match:
+        return f"pixiv_{pixiv_match.group(1)}"
+
+    post_id_match = re.match(r"^(\d{5,12})[_-]", filename, re.IGNORECASE)
+    if post_id_match:
+        return f"pixiv_{post_id_match.group(1)}"
+
+    title_match = re.match(r"^(.+?)[_-]p\d+", filename, re.IGNORECASE)
+    if title_match:
+        return f"title_{dir_path.lower()}_{title_match.group(1).lower()}"
+
+    path_parts = [part for part in dir_path.split("/") if part]
+    if len(path_parts) >= 3:
+        return f"dir_{dir_path.lower()}"
+
+    return f"file_{normalized_path.lower()}"
+
+
+def _annotate_group_page_numbers(items: List[Dict[str, Any]]) -> None:
+    """Attach 1-based page positions and totals for each work group."""
+    group_totals: Dict[str, int] = {}
+    for item in items:
+        group_key = _get_image_group_key(item)
+        group_totals[group_key] = group_totals.get(group_key, 0) + 1
+
+    group_positions: Dict[str, int] = {}
+    for item in items:
+        group_key = _get_image_group_key(item)
+        next_position = group_positions.get(group_key, 0) + 1
+        group_positions[group_key] = next_position
+        item["group_page_index"] = next_position
+        item["group_page_total"] = group_totals[group_key]
+
+
 def _sql_path_prefix_like(directory: str) -> str:
     """Return an escaped SQLite LIKE prefix for one stored directory tree."""
     prefix = _normalise_media_path(directory).rstrip("\\/") + os.sep
@@ -2758,6 +2804,7 @@ def _get_images_from_viewer_snapshot(
         key = _normalise_media_path(path) if path else f"id:{item.get('image_id')}"
         deduplicated.setdefault(key, item)
     all_items = _sort_gallery_items(list(deduplicated.values()), sort_mode)
+    _annotate_group_page_numbers(all_items)
 
     available_month_counts: Dict[str, int] = {}
     available_month_offsets: Dict[str, int] = {}

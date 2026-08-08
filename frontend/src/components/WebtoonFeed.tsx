@@ -1,58 +1,1237 @@
 import React from 'react';
-import { ImageItem } from '../types';
+import {
+  ChevronLeft,
+  ChevronRight,
+  ChevronUp,
+  ChevronDown,
+  CircleHelp,
+  Eye,
+  EyeOff,
+  Hash,
+  Minus,
+  PanelLeft,
+  Plus,
+  Settings2,
+} from 'lucide-react';
+import { ImageItem, WebConfig } from '../types';
 import { MediaIssuePlaceholder } from './MediaIssuePlaceholder';
+import { buildThumbnailUrl } from '../utils/webConfig';
+import { getGroupPageNumbers, getItemGroupKey } from '../utils/grouping';
+import {
+  ImagePriority,
+  imageLoadScheduler,
+  useImageLoadPermission,
+} from '../utils/imageLoadScheduler';
+import { getScrollTopForElement } from '../utils/galleryLayout';
+
+type WebtoonSettingsPatch = Partial<Pick<
+  WebConfig,
+  'webtoonImageScale' | 'webtoonImageGap' | 'webtoonShowInfo' | 'webtoonShowPageNumber' | 'webtoonShowThumbnails'
+>>;
 
 interface WebtoonFeedProps {
   images: ImageItem[];
   blurEnabled?: boolean;
+  initialIndex?: number | null;
+  initialRequestId?: number;
+  thumbnailSize: number;
+  imageScale: number;
+  imageGap: number;
+  showInfo: boolean;
+  showPageNumber: boolean;
+  showThumbnails: boolean;
+  groupMangaPosts?: boolean;
+  pageOffset?: number;
+  totalImages?: number;
+  currentPage?: number;
+  totalPages?: number;
+  onPageChange?: (page: number, anchorIndex?: number) => void;
+  onSettingsChange?: (patch: WebtoonSettingsPatch) => void;
 }
 
-export const WebtoonFeed: React.FC<WebtoonFeedProps> = ({ images, blurEnabled = false }) => {
-  if (images.length === 0) {
+interface WebtoonMetrics {
+  offsets: number[];
+  heights: number[];
+  totalHeight: number;
+  estimatedHeight: number;
+}
+
+interface WebtoonThumbnailLayout {
+  offsets: number[];
+  heights: number[];
+  boundaryOffsets: Array<number | null>;
+  totalHeight: number;
+}
+
+const DEFAULT_ASPECT_RATIO = 4 / 5;
+const VIRTUAL_OVERSCAN = 1400;
+const MIN_ITEM_HEIGHT = 180;
+const DEFAULT_THUMBNAIL_ASPECT_RATIO = 4 / 5;
+const THUMBNAIL_EDGE_PADDING = 8;
+const THUMBNAIL_GAP = 4;
+const THUMBNAIL_BOUNDARY_WIDTH = 2;
+const THUMBNAIL_BOUNDARY_MARGIN = 4;
+const THUMBNAIL_MIN_HEIGHT = 44;
+const THUMBNAIL_WIDTH_INSET = 16;
+const THUMBNAIL_OVERSCAN = 4;
+const QUICK_SCALE_STEP = 10;
+const QUICK_GAP_STEP = 8;
+const QUICK_TOOLBAR_COLLAPSE_DELAY = 500;
+
+const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
+
+const getThumbnailHeight = (railWidth: number, aspectRatio: number) => {
+  const safeAspectRatio = clamp(aspectRatio, 0.2, 5);
+  const itemWidth = Math.max(1, railWidth - THUMBNAIL_WIDTH_INSET);
+  return Math.max(THUMBNAIL_MIN_HEIGHT, Math.round(itemWidth / safeAspectRatio));
+};
+
+const isVideoItem = (item: ImageItem) => item.save_name.toLowerCase().endsWith('.mp4');
+
+const buildMediaUrl = (item: ImageItem) => (
+  `/api/file?path=${encodeURIComponent(item.save_name || '')}&image_id=${item.image_id}`
+);
+
+const getMainForFeed = (feed: HTMLElement | null): HTMLElement | null => (
+  feed?.closest('main') as HTMLElement | null
+);
+
+const getFeedDocumentTop = (main: HTMLElement, feed: HTMLElement) => {
+  const mainRect = main.getBoundingClientRect();
+  const feedRect = feed.getBoundingClientRect();
+  return main.scrollTop + feedRect.top - mainRect.top;
+};
+
+const findIndexAtOffset = (offsets: number[], offset: number) => {
+  if (offsets.length === 0) return 0;
+  let low = 0;
+  let high = offsets.length - 1;
+  let result = 0;
+  while (low <= high) {
+    const middle = Math.floor((low + high) / 2);
+    if (offsets[middle] <= offset) {
+      result = middle;
+      low = middle + 1;
+    } else {
+      high = middle - 1;
+    }
+  }
+  return result;
+};
+
+interface WebtoonMediaProps {
+  item: ImageItem;
+  index: number;
+  pageNumber: number;
+  thumbnailSize: number;
+  blurEnabled: boolean;
+  isNearCurrent: boolean;
+}
+
+const WebtoonMedia = React.memo<WebtoonMediaProps>(({
+  item,
+  index,
+  pageNumber,
+  thumbnailSize,
+  blurEnabled,
+  isNearCurrent,
+}) => {
+  const isVideo = isVideoItem(item);
+  const mediaUrl = buildMediaUrl(item);
+  const thumbnailUrl = buildThumbnailUrl(item, thumbnailSize);
+  const [thumbnailReady, setThumbnailReady] = React.useState(false);
+  const [thumbnailFailed, setThumbnailFailed] = React.useState(false);
+  const [originalReady, setOriginalReady] = React.useState(false);
+  const [originalFailed, setOriginalFailed] = React.useState(false);
+  const [aspectRatio, setAspectRatio] = React.useState(DEFAULT_ASPECT_RATIO);
+
+  const thumbnailAdmitted = useImageLoadPermission({
+    url: thumbnailUrl,
+    priority: isNearCurrent ? 1 : 2,
+    kind: 'thumbnail',
+    owner: 'webtoon',
+    enabled: !isVideo && !item.media_status,
+  });
+  const originalAdmitted = useImageLoadPermission({
+    url: mediaUrl,
+    priority: isNearCurrent ? 0 : 1,
+    kind: 'original',
+    owner: 'webtoon',
+    enabled: !isVideo && !item.media_status && isNearCurrent,
+  });
+
+  React.useEffect(() => {
+    setThumbnailReady(false);
+    setThumbnailFailed(false);
+    setOriginalReady(false);
+    setOriginalFailed(false);
+    setAspectRatio(DEFAULT_ASPECT_RATIO);
+  }, [item.image_id, item.save_name, thumbnailUrl]);
+
+  const updateAspectRatio = (width: number, height: number) => {
+    if (width > 0 && height > 0) setAspectRatio(width / height);
+  };
+
+  if (item.media_status) {
     return (
-      <div className="flex flex-col items-center justify-center p-12 text-zinc-500">
-        <p className="text-base font-medium">沒有可連貫觀看的作品</p>
+      <div className="webtoon-feed__media-frame webtoon-feed__media-frame--issue">
+        <MediaIssuePlaceholder message={item.media_error} />
+      </div>
+    );
+  }
+
+  if (isVideo) {
+    return (
+      <div className="webtoon-feed__media-frame webtoon-feed__media-frame--video">
+        <video
+          src={mediaUrl}
+          controls
+          loop
+          className={`webtoon-feed__video ${blurEnabled ? 'blur-media blur-media--feed' : ''}`}
+        />
       </div>
     );
   }
 
   return (
-    <div className="max-w-4xl mx-auto py-6 px-4 space-y-8 select-none">
-      {images.map((item, index) => {
-        const isVideo = item.save_name.toLowerCase().endsWith('.mp4');
-        const mediaUrl = `/api/file?path=${encodeURIComponent(item.save_name)}`;
+    <div
+      className={`webtoon-feed__media-frame${thumbnailReady ? ' is-thumbnail-ready' : ''}${originalReady ? ' is-original-ready' : ''}`}
+      style={{ aspectRatio: String(aspectRatio) }}
+    >
+      {!thumbnailReady && !thumbnailFailed && (
+        <div className="webtoon-feed__media-skeleton" aria-hidden="true" />
+      )}
+      {thumbnailAdmitted && !thumbnailFailed && (
+        <img
+          src={thumbnailUrl}
+          alt=""
+          aria-hidden="true"
+          draggable={false}
+          loading={isNearCurrent ? 'eager' : 'lazy'}
+          decoding="async"
+          {...{ fetchpriority: isNearCurrent ? 'high' : 'low' }}
+          onLoad={event => {
+            const image = event.currentTarget;
+            imageLoadScheduler.markLoaded(thumbnailUrl);
+            updateAspectRatio(image.naturalWidth, image.naturalHeight);
+            setThumbnailReady(true);
+          }}
+          onError={() => {
+            imageLoadScheduler.markFinished(thumbnailUrl, false);
+            setThumbnailFailed(true);
+          }}
+          className={`webtoon-feed__media-layer webtoon-feed__media-layer--thumbnail ${blurEnabled ? 'blur-media blur-media--feed' : ''}`}
+        />
+      )}
+      {originalAdmitted && !originalFailed && (
+        <img
+          src={mediaUrl}
+          alt={item.title || `第 ${pageNumber} 頁`}
+          draggable={false}
+          loading="eager"
+          decoding="async"
+          {...{ fetchpriority: isNearCurrent ? 'high' : 'low' }}
+          onLoad={event => {
+            const image = event.currentTarget;
+            imageLoadScheduler.markLoaded(mediaUrl);
+            updateAspectRatio(image.naturalWidth, image.naturalHeight);
+            setOriginalReady(true);
+          }}
+          onError={() => {
+            imageLoadScheduler.markFinished(mediaUrl, false);
+            setOriginalFailed(true);
+          }}
+          className={`webtoon-feed__media-layer webtoon-feed__media-layer--original ${originalReady ? 'is-visible' : ''} ${blurEnabled ? 'blur-media blur-media--feed' : ''}`}
+        />
+      )}
+      {thumbnailFailed && originalFailed && (
+        <MediaIssuePlaceholder message="圖片載入失敗" />
+      )}
+    </div>
+  );
+});
 
-        return (
-          <div key={item.image_id} className="flex flex-col items-center bg-zinc-900/60 border border-zinc-800 rounded-2xl overflow-hidden shadow-xl">
-            <div className="w-full p-4 border-b border-zinc-800/80 flex items-center justify-between text-xs text-zinc-400">
-              <span className="font-semibold text-zinc-200">#{index + 1} - {item.title || '無題'}</span>
-              <span>{item.artist_name || `繪師 ID: ${item.member_id}`}</span>
-            </div>
+interface WebtoonThumbnailRailProps {
+  images: ImageItem[];
+  currentIndex: number;
+  thumbnailSize: number;
+  pageNumbers: number[];
+  blurEnabled: boolean;
+  onSelect: (index: number) => void;
+}
 
-            <div className="w-full flex items-center justify-center bg-black/40 p-2">
-              {item.media_status ? (
-                <div className="h-[min(70vh,720px)] w-full max-w-2xl overflow-hidden rounded-lg">
-                  <MediaIssuePlaceholder message={item.media_error} />
+interface WebtoonThumbnailItemProps {
+  item: ImageItem;
+  index: number;
+  currentIndex: number;
+  thumbnailSize: number;
+  aspectRatio: number;
+  top: number;
+  height: number;
+  pageNumber: number;
+  blurEnabled: boolean;
+  onSelect: (index: number) => void;
+  onAspectRatioChange: (index: number, aspectRatio: number) => void;
+  onMoveFocus: (index: number, direction: -1 | 1) => void;
+  onRestoreFocus: (index: number) => void;
+}
+
+const WebtoonThumbnailItem: React.FC<WebtoonThumbnailItemProps> = ({
+  item,
+  index,
+  currentIndex,
+  thumbnailSize,
+  aspectRatio,
+  top,
+  height,
+  pageNumber,
+  blurEnabled,
+  onSelect,
+  onAspectRatioChange,
+  onMoveFocus,
+  onRestoreFocus,
+}) => {
+  const isActive = index === currentIndex;
+  const isNearCurrent = Math.abs(index - currentIndex) <= 3;
+  const url = buildThumbnailUrl(item, thumbnailSize);
+  const admitted = useImageLoadPermission({
+    url,
+    priority: isActive ? 0 : isNearCurrent ? 1 : 2,
+    kind: 'thumbnail',
+    owner: 'webtoon',
+    enabled: !item.media_status,
+  });
+
+  return (
+    <button
+      type="button"
+      data-webtoon-thumbnail-index={index}
+      onClick={() => onSelect(index)}
+      onKeyDown={event => {
+        if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+          event.preventDefault();
+          event.stopPropagation();
+          onMoveFocus(index, event.key === 'ArrowUp' ? -1 : 1);
+          return;
+        }
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          event.stopPropagation();
+          onSelect(index);
+          onRestoreFocus(index);
+        }
+      }}
+      aria-label={`跳到第 ${pageNumber} 頁`}
+      aria-current={isActive ? 'true' : undefined}
+      tabIndex={isActive ? 0 : -1}
+      className={`webtoon-thumbnails__item${isActive ? ' is-active' : ''}`}
+      style={{
+        top: `${top}px`,
+        height: `${height}px`,
+        aspectRatio: String(aspectRatio),
+      }}
+    >
+      <span className="webtoon-thumbnails__image-frame">
+        {item.media_status ? (
+          <MediaIssuePlaceholder message={item.media_error} compact />
+        ) : admitted ? (
+          <img
+            src={url}
+            alt=""
+            aria-hidden="true"
+            draggable={false}
+            loading={isNearCurrent ? 'eager' : 'lazy'}
+            decoding="async"
+            onLoad={event => {
+              const image = event.currentTarget;
+              imageLoadScheduler.markLoaded(url);
+              if (image.naturalWidth > 0 && image.naturalHeight > 0) {
+                onAspectRatioChange(index, image.naturalWidth / image.naturalHeight);
+              }
+            }}
+            onError={() => imageLoadScheduler.markFinished(url, false)}
+            className={`webtoon-thumbnails__image ${blurEnabled ? 'blur-media blur-media--thumbnail' : ''}`}
+          />
+        ) : (
+          <span className="webtoon-thumbnails__placeholder" aria-hidden="true" />
+        )}
+      </span>
+      <span className="webtoon-thumbnails__index">{pageNumber}</span>
+    </button>
+  );
+};
+
+const WebtoonThumbnailRail: React.FC<WebtoonThumbnailRailProps> = ({
+  images,
+  currentIndex,
+  thumbnailSize,
+  pageNumbers,
+  blurEnabled,
+  onSelect,
+}) => {
+  const railRef = React.useRef<HTMLDivElement | null>(null);
+  const focusFrameRef = React.useRef<number | null>(null);
+  const aspectRatiosRef = React.useRef(new Map<number, number>());
+  const [layoutVersion, setLayoutVersion] = React.useState(0);
+  const [railWidth, setRailWidth] = React.useState(128);
+  const [railHeight, setRailHeight] = React.useState(720);
+  const [scrollTop, setScrollTop] = React.useState(0);
+  const [viewportHeight, setViewportHeight] = React.useState(720);
+  const thumbnailLayoutRef = React.useRef<WebtoonThumbnailLayout | null>(null);
+
+  React.useEffect(() => {
+    aspectRatiosRef.current.clear();
+    setLayoutVersion(version => version + 1);
+  }, [images]);
+
+  React.useLayoutEffect(() => {
+    const rail = railRef.current;
+    const container = rail?.parentElement;
+    if (!rail || !container) return undefined;
+    const main = container.closest('main') as HTMLElement | null;
+
+    const updateSize = () => {
+      const mainRect = main?.getBoundingClientRect();
+      const containerRect = container.getBoundingClientRect();
+      const topInset = mainRect && containerRect.top > mainRect.top
+        ? Math.min(16, Math.max(0, Math.round(containerRect.top - mainRect.top)))
+        : 0;
+      const nextHeight = Math.max(
+        1,
+        (main?.clientHeight ?? container.clientHeight) - topInset,
+      );
+      const nextWidth = Math.max(1, rail.clientWidth || container.clientWidth);
+
+      setRailWidth(previous => previous === nextWidth ? previous : nextWidth);
+      setRailHeight(previous => previous === nextHeight ? previous : nextHeight);
+      setViewportHeight(previous => previous === nextHeight ? previous : nextHeight);
+    };
+    const handleScroll = () => setScrollTop(rail.scrollTop);
+    updateSize();
+    rail.addEventListener('scroll', handleScroll, { passive: true });
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(updateSize);
+    observer?.observe(rail);
+    observer?.observe(container);
+    if (main) observer?.observe(main);
+    window.addEventListener('resize', updateSize);
+    return () => {
+      rail.removeEventListener('scroll', handleScroll);
+      window.removeEventListener('resize', updateSize);
+      observer?.disconnect();
+    };
+  }, [images.length]);
+
+  const thumbnailLayout = React.useMemo<WebtoonThumbnailLayout>(() => {
+    const offsets: number[] = [];
+    const heights: number[] = [];
+    const boundaryOffsets: Array<number | null> = [];
+    let offset = THUMBNAIL_EDGE_PADDING;
+
+    for (let index = 0; index < images.length; index += 1) {
+      if (index > 0) {
+        offset += THUMBNAIL_GAP;
+        const previousItem = images[index - 1];
+        const isWorkBoundary = getItemGroupKey(images[index]) !== getItemGroupKey(previousItem);
+        if (isWorkBoundary) {
+          boundaryOffsets[index] = offset + THUMBNAIL_BOUNDARY_MARGIN;
+          offset += THUMBNAIL_BOUNDARY_WIDTH + THUMBNAIL_BOUNDARY_MARGIN * 2;
+        } else {
+          boundaryOffsets[index] = null;
+        }
+      } else {
+        boundaryOffsets[index] = null;
+      }
+
+      const aspectRatio = aspectRatiosRef.current.get(index) ?? DEFAULT_THUMBNAIL_ASPECT_RATIO;
+      const height = getThumbnailHeight(railWidth, aspectRatio);
+      offsets.push(offset);
+      heights.push(height);
+      offset += height;
+    }
+
+    return {
+      offsets,
+      heights,
+      boundaryOffsets,
+      totalHeight: images.length > 0
+        ? offset + THUMBNAIL_EDGE_PADDING
+        : THUMBNAIL_EDGE_PADDING * 2,
+    };
+  }, [images, layoutVersion, railWidth]);
+
+  thumbnailLayoutRef.current = thumbnailLayout;
+
+  const handleAspectRatioChange = React.useCallback((index: number, aspectRatio: number) => {
+    const safeAspectRatio = clamp(aspectRatio, 0.2, 5);
+    const previousAspectRatio = aspectRatiosRef.current.get(index) ?? DEFAULT_THUMBNAIL_ASPECT_RATIO;
+    if (Math.abs(previousAspectRatio - safeAspectRatio) < 0.01) return;
+
+    const rail = railRef.current;
+    const anchorIndex = rail
+      ? findIndexAtOffset(thumbnailLayout.offsets, rail.scrollTop + 1)
+      : 0;
+    const previousHeight = getThumbnailHeight(railWidth, previousAspectRatio);
+    const nextHeight = getThumbnailHeight(railWidth, safeAspectRatio);
+    aspectRatiosRef.current.set(index, safeAspectRatio);
+
+    // Keep the first visible thumbnail anchored while an image above it
+    // reveals its real aspect ratio and changes the virtual offsets.
+    if (rail && index < anchorIndex) {
+      rail.scrollTop = Math.max(0, rail.scrollTop + nextHeight - previousHeight);
+    }
+    setLayoutVersion(version => version + 1);
+  }, [railWidth, thumbnailLayout.offsets]);
+
+  React.useLayoutEffect(() => {
+    const rail = railRef.current;
+    if (!rail || images.length === 0) return;
+    const layout = thumbnailLayoutRef.current;
+    if (!layout) return;
+    const targetTop = layout.offsets[currentIndex] ?? THUMBNAIL_EDGE_PADDING;
+    const targetBottom = targetTop + (layout.heights[currentIndex] ?? THUMBNAIL_MIN_HEIGHT);
+    const edgePadding = THUMBNAIL_EDGE_PADDING;
+    let nextScrollTop = rail.scrollTop;
+
+    if (targetTop < rail.scrollTop + edgePadding) {
+      nextScrollTop = targetTop - edgePadding;
+    } else if (targetBottom > rail.scrollTop + rail.clientHeight - edgePadding) {
+      nextScrollTop = targetBottom - rail.clientHeight + edgePadding;
+    }
+
+    const maxScrollTop = Math.max(0, layout.totalHeight - rail.clientHeight);
+    nextScrollTop = clamp(nextScrollTop, 0, maxScrollTop);
+    if (Math.abs(nextScrollTop - rail.scrollTop) > 0.5) {
+      rail.scrollTo({ top: nextScrollTop, behavior: 'auto' });
+    }
+    // Do not include layoutVersion here. Thumbnail aspect-ratio updates are
+    // already anchored in handleAspectRatioChange; re-running this effect for
+    // every measurement would snap a manually scrolled rail back to the old
+    // active item.
+  }, [currentIndex, images]);
+
+  const focusThumbnail = React.useCallback((index: number) => {
+    const safeIndex = clamp(Math.floor(index), 0, Math.max(0, images.length - 1));
+    if (focusFrameRef.current !== null) {
+      window.cancelAnimationFrame(focusFrameRef.current);
+      focusFrameRef.current = null;
+    }
+
+    let attempts = 0;
+    const focusMountedThumbnail = () => {
+      const rail = railRef.current;
+      const target = rail?.querySelector<HTMLButtonElement>(
+        `[data-webtoon-thumbnail-index="${safeIndex}"]`,
+      );
+      if (target) {
+        target.focus({ preventScroll: true });
+        focusFrameRef.current = null;
+        return;
+      }
+      if (!rail || attempts >= 12) {
+        focusFrameRef.current = null;
+        return;
+      }
+
+      const targetTop = thumbnailLayout.offsets[safeIndex] ?? THUMBNAIL_EDGE_PADDING;
+      const targetHeight = thumbnailLayout.heights[safeIndex] ?? THUMBNAIL_MIN_HEIGHT;
+      const centeredTop = targetTop - Math.max(0, (rail.clientHeight - targetHeight) / 2);
+      const maxScrollTop = Math.max(0, thumbnailLayout.totalHeight - rail.clientHeight);
+      rail.scrollTo({
+        top: clamp(centeredTop, 0, maxScrollTop),
+        behavior: 'auto',
+      });
+      attempts += 1;
+      focusFrameRef.current = window.requestAnimationFrame(focusMountedThumbnail);
+    };
+
+    focusMountedThumbnail();
+  }, [images.length, thumbnailLayout]);
+
+  React.useEffect(() => () => {
+    if (focusFrameRef.current !== null) window.cancelAnimationFrame(focusFrameRef.current);
+  }, []);
+
+  const moveFocus = React.useCallback((index: number, direction: -1 | 1) => {
+    const nextIndex = clamp(index + direction, 0, Math.max(0, images.length - 1));
+    onSelect(nextIndex);
+    focusThumbnail(nextIndex);
+  }, [focusThumbnail, images.length, onSelect]);
+
+  const startIndex = images.length > 0
+    ? Math.max(
+      0,
+      findIndexAtOffset(
+        thumbnailLayout.offsets,
+        Math.max(0, scrollTop - VIRTUAL_OVERSCAN),
+      ) - THUMBNAIL_OVERSCAN,
+    )
+    : 0;
+  const endIndex = images.length > 0
+    ? Math.min(
+      images.length,
+      findIndexAtOffset(
+        thumbnailLayout.offsets,
+        scrollTop + viewportHeight + VIRTUAL_OVERSCAN,
+      ) + THUMBNAIL_OVERSCAN + 1,
+    )
+    : 0;
+
+  return (
+    <aside className="webtoon-thumbnails" aria-label="條漫縮圖導覽">
+      <div
+        ref={railRef}
+        className="webtoon-thumbnails__scroll"
+        style={{ height: `${railHeight}px` }}
+      >
+        <div className="webtoon-thumbnails__track" style={{ height: `${thumbnailLayout.totalHeight}px` }}>
+          {images.slice(startIndex, endIndex).map((item, offset) => {
+            const index = startIndex + offset;
+            const boundaryTop = thumbnailLayout.boundaryOffsets[index];
+            return (
+              <React.Fragment key={item.image_id}>
+                {boundaryTop !== null && boundaryTop !== undefined && (
+                  <div
+                    className="webtoon-thumbnails__boundary"
+                    style={{ top: `${boundaryTop}px` }}
+                    aria-hidden="true"
+                  />
+                )}
+                <WebtoonThumbnailItem
+                  item={item}
+                  index={index}
+                  currentIndex={currentIndex}
+                  thumbnailSize={thumbnailSize}
+                  aspectRatio={aspectRatiosRef.current.get(index) ?? DEFAULT_THUMBNAIL_ASPECT_RATIO}
+                  top={thumbnailLayout.offsets[index] ?? THUMBNAIL_EDGE_PADDING}
+                  height={thumbnailLayout.heights[index] ?? THUMBNAIL_MIN_HEIGHT}
+                  pageNumber={pageNumbers[index] ?? index + 1}
+                  blurEnabled={blurEnabled}
+                  onSelect={onSelect}
+                  onAspectRatioChange={handleAspectRatioChange}
+                  onMoveFocus={moveFocus}
+                  onRestoreFocus={focusThumbnail}
+                />
+              </React.Fragment>
+            );
+          })}
+        </div>
+      </div>
+    </aside>
+  );
+};
+
+interface WebtoonQuickToolbarProps {
+  currentIndex: number;
+  imageCount: number;
+  currentPageNumber: number;
+  totalPageNumbers: number;
+  imageScale: number;
+  imageGap: number;
+  showInfo: boolean;
+  showPageNumber: boolean;
+  showThumbnails: boolean;
+  currentPage: number;
+  totalPages: number;
+  onPrevious: () => void;
+  onNext: () => void;
+  onSettingsChange: (patch: WebtoonSettingsPatch) => void;
+  onPageChange?: (page: number) => void;
+  isScrolling: boolean;
+  onReveal: () => void;
+  onPointerEnter: (event: React.PointerEvent<HTMLDivElement>) => void;
+  onPointerLeave: () => void;
+}
+
+const WebtoonQuickToolbar: React.FC<WebtoonQuickToolbarProps> = ({
+  currentIndex,
+  imageCount,
+  currentPageNumber,
+  totalPageNumbers,
+  imageScale,
+  imageGap,
+  showInfo,
+  showPageNumber,
+  showThumbnails,
+  currentPage,
+  totalPages,
+  onPrevious,
+  onNext,
+  onSettingsChange,
+  onPageChange,
+  isScrolling,
+  onReveal,
+  onPointerEnter,
+  onPointerLeave,
+}) => {
+  const [pageInput, setPageInput] = React.useState(String(currentPage));
+  const [isHelpOpen, setIsHelpOpen] = React.useState(false);
+  const previousScrollingRef = React.useRef(isScrolling);
+  const helpIsVisible = isHelpOpen && isScrolling;
+
+  React.useEffect(() => setPageInput(String(currentPage)), [currentPage]);
+
+  React.useEffect(() => {
+    if (!isScrolling || (isScrolling && !previousScrollingRef.current)) {
+      setIsHelpOpen(false);
+    }
+    previousScrollingRef.current = isScrolling;
+  }, [isScrolling]);
+
+  const commitPage = () => {
+    const parsedPage = Number.parseInt(pageInput, 10);
+    const page = Number.isFinite(parsedPage) ? clamp(parsedPage, 1, totalPages) : currentPage;
+    setPageInput(String(page));
+    if (Number.isInteger(page) && page !== currentPage) onPageChange?.(page);
+  };
+
+  return (
+    <div
+      className={`webtoon-quick-toolbar__hit-area${isScrolling ? ' is-scrolling' : ''}`}
+      onPointerLeave={() => {
+        setIsHelpOpen(false);
+        onPointerLeave();
+      }}
+    >
+      <div className={`webtoon-quick-toolbar__controls${isScrolling ? ' is-scrolling' : ''}`}>
+        {isScrolling && (
+          <button
+            type="button"
+            className={`webtoon-quick-toolbar__button webtoon-quick-toolbar__help-trigger${helpIsVisible ? ' is-active' : ''}`}
+            onClick={event => {
+              event.stopPropagation();
+              setIsHelpOpen(open => !open);
+            }}
+            aria-expanded={helpIsVisible}
+            aria-controls="webtoon-shortcuts-help"
+            aria-label="顯示條漫快捷鍵"
+            title="顯示條漫快捷鍵"
+          >
+            <CircleHelp aria-hidden="true" />
+          </button>
+        )}
+
+        <div
+        className={`webtoon-quick-toolbar${isScrolling ? ' is-scrolling' : ''}`}
+        onPointerEnter={onPointerEnter}
+      role="toolbar"
+      aria-label="條漫快捷設定"
+    >
+      <div className="webtoon-quick-toolbar__group" aria-label="圖片導覽">
+        <button type="button" onClick={onPrevious} disabled={currentIndex <= 0 && currentPage <= 1} className="webtoon-quick-toolbar__button" aria-label="上一張圖片" title="上一張圖片（↑ / ← / J）">
+          <ChevronUp aria-hidden="true" />
+        </button>
+        <span className="webtoon-quick-toolbar__counter" aria-live="polite">{currentPageNumber} / {totalPageNumbers}</span>
+        <button type="button" onClick={onNext} disabled={currentIndex >= imageCount - 1 && currentPage >= totalPages} className="webtoon-quick-toolbar__button" aria-label="下一張圖片" title="下一張圖片（↓ / → / K）">
+          <ChevronDown aria-hidden="true" />
+        </button>
+      </div>
+
+      <div className="webtoon-quick-toolbar__group" aria-label="圖片寬度">
+        <button type="button" onClick={() => onSettingsChange({ webtoonImageScale: clamp(imageScale - QUICK_SCALE_STEP, 30, 100) })} className="webtoon-quick-toolbar__button" aria-label="縮小圖片" title="縮小圖片（每次 10%，[）">
+          <Minus aria-hidden="true" />
+        </button>
+        <span className="webtoon-quick-toolbar__value">{imageScale}%</span>
+        <button type="button" onClick={() => onSettingsChange({ webtoonImageScale: clamp(imageScale + QUICK_SCALE_STEP, 30, 100) })} className="webtoon-quick-toolbar__button" aria-label="放大圖片" title="放大圖片（每次 10%，]）">
+          <Plus aria-hidden="true" />
+        </button>
+      </div>
+
+      <div className="webtoon-quick-toolbar__group" aria-label="圖片間距">
+        <button type="button" onClick={() => onSettingsChange({ webtoonImageGap: clamp(imageGap - QUICK_GAP_STEP, 0, 300) })} className="webtoon-quick-toolbar__button" aria-label="縮小圖片間距" title="縮小圖片間距（每次 8px）">
+          <Minus aria-hidden="true" />
+        </button>
+        <span className="webtoon-quick-toolbar__value">{imageGap}px</span>
+        <button type="button" onClick={() => onSettingsChange({ webtoonImageGap: clamp(imageGap + QUICK_GAP_STEP, 0, 300) })} className="webtoon-quick-toolbar__button" aria-label="增加圖片間距" title="增加圖片間距（每次 8px）">
+          <Plus aria-hidden="true" />
+        </button>
+      </div>
+
+      <div className="webtoon-quick-toolbar__group webtoon-quick-toolbar__group--display" aria-label="顯示設定">
+        <button type="button" onClick={() => onSettingsChange({ webtoonShowInfo: !showInfo })} aria-pressed={showInfo} className={`webtoon-quick-toolbar__button${showInfo ? ' is-active' : ''}`} aria-label={showInfo ? '隱藏圖片資訊' : '顯示圖片資訊'} title={showInfo ? '隱藏圖片資訊（I）' : '顯示圖片資訊（I）'}>
+          {showInfo ? <Eye aria-hidden="true" /> : <EyeOff aria-hidden="true" />}
+        </button>
+        <button type="button" onClick={() => onSettingsChange({ webtoonShowPageNumber: !showPageNumber })} aria-pressed={showPageNumber} className={`webtoon-quick-toolbar__button${showPageNumber ? ' is-active' : ''}`} aria-label={showPageNumber ? '隱藏頁碼' : '顯示頁碼'} title={showPageNumber ? '隱藏頁碼（P）' : '顯示頁碼（P）'}>
+          <Hash aria-hidden="true" />
+        </button>
+        <button type="button" onClick={() => onSettingsChange({ webtoonShowThumbnails: !showThumbnails })} aria-pressed={showThumbnails} className={`webtoon-quick-toolbar__button${showThumbnails ? ' is-active' : ''}`} aria-label={showThumbnails ? '隱藏縮圖導覽' : '顯示縮圖導覽'} title={showThumbnails ? '隱藏縮圖導覽（T）' : '顯示縮圖導覽（T）'}>
+          <PanelLeft aria-hidden="true" />
+        </button>
+      </div>
+
+      {totalPages > 1 && (
+        <div className="webtoon-quick-toolbar__group webtoon-quick-toolbar__pagination" aria-label="資料頁面">
+          <button type="button" onClick={() => onPageChange?.(currentPage - 1)} disabled={currentPage <= 1} className="webtoon-quick-toolbar__button" aria-label="上一資料頁" title="上一資料頁">
+            <ChevronLeft aria-hidden="true" />
+          </button>
+          <label className="webtoon-quick-toolbar__page-input">
+            <span className="sr-only">資料頁</span>
+            <input
+              type="number"
+              min={1}
+              max={totalPages}
+              value={pageInput}
+              onChange={event => setPageInput(event.target.value)}
+              onBlur={commitPage}
+              onKeyDown={event => {
+                if (event.key === 'Enter') {
+                  event.preventDefault();
+                  commitPage();
+                }
+              }}
+              aria-label={`資料頁，共 ${totalPages} 頁`}
+            />
+            <span>/ {totalPages}</span>
+          </label>
+          <button type="button" onClick={() => onPageChange?.(currentPage + 1)} disabled={currentPage >= totalPages} className="webtoon-quick-toolbar__button" aria-label="下一資料頁" title="下一資料頁">
+            <ChevronRight aria-hidden="true" />
+          </button>
+        </div>
+      )}
+
+      {isScrolling && (
+        <button
+          type="button"
+          className="webtoon-quick-toolbar__button webtoon-quick-toolbar__reveal"
+          onClick={() => {
+            setIsHelpOpen(false);
+            onReveal();
+          }}
+          aria-label="展開條漫快捷設定"
+          title="展開條漫快捷設定"
+        >
+          <Settings2 aria-hidden="true" />
+        </button>
+      )}
+    </div>
+      </div>
+      {helpIsVisible && (
+        <div id="webtoon-shortcuts-help" className="webtoon-quick-toolbar__help-popover" role="note">
+          <strong>條漫快捷鍵</strong>
+          <span>↑/↓、←/→、J/K 翻頁</span>
+          <span>[ ] 比例 · I 資訊 · P 頁碼 · T 縮圖 · E 編輯</span>
+        </div>
+      )}
+      </div>
+  );
+};
+
+export const WebtoonFeed: React.FC<WebtoonFeedProps> = ({
+  images,
+  blurEnabled = false,
+  initialIndex = null,
+  initialRequestId = 0,
+  thumbnailSize,
+  imageScale,
+  imageGap,
+  showInfo,
+  showPageNumber,
+  showThumbnails,
+  groupMangaPosts = false,
+  pageOffset = 0,
+  totalImages = images.length,
+  currentPage = 1,
+  totalPages = 1,
+  onPageChange,
+  onSettingsChange,
+}) => {
+  const feedRef = React.useRef<HTMLElement | null>(null);
+  const heightsRef = React.useRef(new Map<number, number>());
+  const alignFrameRef = React.useRef<number | null>(null);
+  const alignToIndexRef = React.useRef<(index: number, behavior?: ScrollBehavior) => void>(() => undefined);
+  const initialAnchorLockRef = React.useRef<{ index: number; requestId: number } | null>(null);
+  const touchStartRef = React.useRef<{ x: number; y: number } | null>(null);
+  const [heightVersion, setHeightVersion] = React.useState(0);
+  const [scrollTop, setScrollTop] = React.useState(0);
+  const [viewportHeight, setViewportHeight] = React.useState(720);
+  const [feedWidth, setFeedWidth] = React.useState(760);
+  const [feedTop, setFeedTop] = React.useState(0);
+  const [isScrolling, setIsScrolling] = React.useState(false);
+  const toolbarCollapseTimerRef = React.useRef<number | null>(null);
+  const toolbarPointerInsideRef = React.useRef(false);
+  const pageNumberState = React.useMemo(
+    () => groupMangaPosts
+      ? getGroupPageNumbers(images)
+      : {
+        pageNumbers: images.map((_, index) => pageOffset + index + 1),
+        pageTotals: images.map(() => Math.max(1, totalImages)),
+        totalPages: Math.max(1, totalImages),
+      },
+    [groupMangaPosts, images, pageOffset, totalImages],
+  );
+
+  const cancelToolbarCollapse = React.useCallback(() => {
+    if (toolbarCollapseTimerRef.current !== null) {
+      window.clearTimeout(toolbarCollapseTimerRef.current);
+      toolbarCollapseTimerRef.current = null;
+    }
+  }, []);
+
+  const revealToolbar = React.useCallback(() => {
+    cancelToolbarCollapse();
+    setIsScrolling(false);
+  }, [cancelToolbarCollapse]);
+
+  const handleToolbarPointerEnter = React.useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    toolbarPointerInsideRef.current = true;
+    const target = event.target instanceof Element ? event.target : null;
+    if (target?.closest('button, input, select, textarea')) {
+      cancelToolbarCollapse();
+      return;
+    }
+    revealToolbar();
+  }, [cancelToolbarCollapse, revealToolbar]);
+
+  const handleToolbarPointerLeave = React.useCallback(() => {
+    toolbarPointerInsideRef.current = false;
+    cancelToolbarCollapse();
+    toolbarCollapseTimerRef.current = window.setTimeout(() => {
+      toolbarCollapseTimerRef.current = null;
+      if (!toolbarPointerInsideRef.current) setIsScrolling(true);
+    }, QUICK_TOOLBAR_COLLAPSE_DELAY);
+  }, [cancelToolbarCollapse]);
+
+  React.useEffect(() => () => cancelToolbarCollapse(), [cancelToolbarCollapse]);
+
+  const markScrolling = React.useCallback(() => {
+    if (!toolbarPointerInsideRef.current) setIsScrolling(true);
+  }, []);
+
+  const estimatedHeight = React.useMemo(() => {
+    const mediaWidth = Math.min(960, Math.max(320, feedWidth * imageScale / 100));
+    const infoHeight = showInfo ? 64 : 0;
+    return Math.max(MIN_ITEM_HEIGHT, Math.round(mediaWidth / DEFAULT_ASPECT_RATIO) + infoHeight + 16);
+  }, [feedWidth, imageScale, showInfo]);
+
+  React.useEffect(() => {
+    heightsRef.current.clear();
+    setHeightVersion(version => version + 1);
+  }, [images, imageScale, showInfo]);
+
+  const metrics = React.useMemo<WebtoonMetrics>(() => {
+    const offsets: number[] = [];
+    const heights: number[] = [];
+    let offset = 0;
+    for (let index = 0; index < images.length; index += 1) {
+      const height = Math.max(MIN_ITEM_HEIGHT, heightsRef.current.get(index) ?? estimatedHeight);
+      offsets.push(offset);
+      heights.push(height);
+      offset += height + imageGap;
+    }
+    return {
+      offsets,
+      heights,
+      totalHeight: Math.max(0, offset - (images.length > 0 ? imageGap : 0)),
+      estimatedHeight,
+    };
+  }, [estimatedHeight, heightVersion, imageGap, images.length]);
+
+  const relativeScrollTop = Math.max(0, scrollTop - feedTop);
+  const activeIndex = images.length > 0
+    ? clamp(findIndexAtOffset(metrics.offsets, relativeScrollTop + 1), 0, images.length - 1)
+    : 0;
+  const virtualStart = images.length > 0
+    ? clamp(findIndexAtOffset(metrics.offsets, Math.max(0, relativeScrollTop - VIRTUAL_OVERSCAN)), 0, images.length - 1)
+    : 0;
+  const virtualEnd = images.length > 0
+    ? clamp(findIndexAtOffset(metrics.offsets, relativeScrollTop + viewportHeight + VIRTUAL_OVERSCAN) + 2, virtualStart + 1, images.length)
+    : 0;
+
+  const updateScrollMetrics = React.useCallback(() => {
+    const feed = feedRef.current;
+    const main = getMainForFeed(feed);
+    if (!feed || !main) return;
+    const mainRect = main.getBoundingClientRect();
+    const feedRect = feed.getBoundingClientRect();
+    setScrollTop(main.scrollTop);
+    setViewportHeight(Math.max(1, main.clientHeight));
+    setFeedWidth(Math.max(1, feed.clientWidth));
+    setFeedTop(Math.max(0, main.scrollTop + feedRect.top - mainRect.top));
+  }, []);
+
+  React.useEffect(() => {
+    const feed = feedRef.current;
+    const main = getMainForFeed(feed);
+    if (!feed || !main) return undefined;
+
+    let frameId: number | null = null;
+    const scheduleMetrics = () => {
+      if (frameId !== null) return;
+      frameId = window.requestAnimationFrame(() => {
+        frameId = null;
+        updateScrollMetrics();
+      });
+    };
+    const handleScroll = () => {
+      markScrolling();
+      scheduleMetrics();
+    };
+    const clearInitialAnchorLock = () => {
+      initialAnchorLockRef.current = null;
+      if (alignFrameRef.current !== null) {
+        window.cancelAnimationFrame(alignFrameRef.current);
+        alignFrameRef.current = null;
+      }
+    };
+
+    updateScrollMetrics();
+    main.addEventListener('scroll', handleScroll, { passive: true });
+    main.addEventListener('wheel', clearInitialAnchorLock, { passive: true });
+    main.addEventListener('pointerdown', clearInitialAnchorLock, { passive: true });
+    main.addEventListener('touchstart', clearInitialAnchorLock, { passive: true });
+    window.addEventListener('resize', scheduleMetrics);
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(scheduleMetrics);
+    observer?.observe(main);
+    observer?.observe(feed);
+    return () => {
+      main.removeEventListener('scroll', handleScroll);
+      main.removeEventListener('wheel', clearInitialAnchorLock);
+      main.removeEventListener('pointerdown', clearInitialAnchorLock);
+      main.removeEventListener('touchstart', clearInitialAnchorLock);
+      window.removeEventListener('resize', scheduleMetrics);
+      observer?.disconnect();
+      if (frameId !== null) window.cancelAnimationFrame(frameId);
+      setIsScrolling(false);
+    };
+  }, [images.length, markScrolling, updateScrollMetrics, showThumbnails]);
+
+  React.useEffect(() => {
+    const root = feedRef.current;
+    if (!root || typeof ResizeObserver === 'undefined') return undefined;
+    const observer = new ResizeObserver(entries => {
+      let changed = false;
+      entries.forEach(entry => {
+        const element = entry.target as HTMLElement;
+        const index = Number(element.dataset.webtoonIndex);
+        const height = Math.round(element.getBoundingClientRect().height);
+        if (!Number.isInteger(index) || height < MIN_ITEM_HEIGHT) return;
+        const previousHeight = heightsRef.current.get(index);
+        if (previousHeight === undefined || Math.abs(previousHeight - height) > 1) {
+          heightsRef.current.set(index, height);
+          changed = true;
+        }
+      });
+      if (changed) setHeightVersion(version => version + 1);
+    });
+    root.querySelectorAll<HTMLElement>('[data-webtoon-index]').forEach(element => observer.observe(element));
+    return () => observer.disconnect();
+  }, [virtualEnd, virtualStart, imageGap, showInfo, imageScale]);
+
+  const alignToIndex = React.useCallback((index: number, behavior: ScrollBehavior = 'smooth') => {
+    const safeIndex = clamp(Math.floor(index), 0, Math.max(0, images.length - 1));
+    const feed = feedRef.current;
+    const main = getMainForFeed(feed);
+    if (!feed || !main || images.length === 0) return;
+
+    if (alignFrameRef.current !== null) window.cancelAnimationFrame(alignFrameRef.current);
+    let attempts = 0;
+    const align = () => {
+      const target = feed.querySelector<HTMLElement>(`[data-webtoon-index="${safeIndex}"]`);
+      const media = target?.querySelector<HTMLElement>('.webtoon-feed__media-frame');
+      if (target) {
+        const top = getScrollTopForElement(main, media ?? target);
+        main.scrollTo({ top, behavior: attempts === 0 ? behavior : 'auto' });
+        setScrollTop(top);
+      } else {
+        const top = getFeedDocumentTop(main, feed) + metrics.offsets[safeIndex];
+        main.scrollTo({ top, behavior: attempts === 0 ? behavior : 'auto' });
+        setScrollTop(top);
+      }
+      attempts += 1;
+      if (attempts < 10) alignFrameRef.current = window.requestAnimationFrame(align);
+      else alignFrameRef.current = null;
+    };
+    alignFrameRef.current = window.requestAnimationFrame(align);
+  }, [images.length, metrics.offsets]);
+
+  alignToIndexRef.current = alignToIndex;
+
+  React.useLayoutEffect(() => {
+    if (initialIndex === null || initialRequestId === 0 || images.length === 0) return undefined;
+    initialAnchorLockRef.current = { index: initialIndex, requestId: initialRequestId };
+    alignToIndexRef.current(initialIndex, 'auto');
+    return () => {
+      if (initialAnchorLockRef.current?.requestId === initialRequestId) {
+        initialAnchorLockRef.current = null;
+      }
+      if (alignFrameRef.current !== null) {
+        window.cancelAnimationFrame(alignFrameRef.current);
+        alignFrameRef.current = null;
+      }
+    };
+  }, [images.length, initialIndex, initialRequestId]);
+
+  // Thumbnail/original dimensions can arrive after the first alignment. Their
+  // height changes rebuild the virtual offsets, so keep the requested image at
+  // the viewport start until the user provides a new scroll/navigation intent.
+  React.useLayoutEffect(() => {
+    const lock = initialAnchorLockRef.current;
+    if (
+      initialIndex === null
+      || initialRequestId === 0
+      || lock?.index !== initialIndex
+      || lock.requestId !== initialRequestId
+    ) return;
+    alignToIndexRef.current(initialIndex, 'auto');
+  }, [heightVersion, imageGap, initialIndex, initialRequestId, metrics.offsets]);
+
+  React.useEffect(() => () => {
+    if (alignFrameRef.current !== null) window.cancelAnimationFrame(alignFrameRef.current);
+  }, []);
+
+  const navigate = React.useCallback((direction: -1 | 1) => {
+    const nextIndex = activeIndex + direction;
+    if (nextIndex >= 0 && nextIndex < images.length) {
+      initialAnchorLockRef.current = null;
+      alignToIndex(nextIndex);
+      return;
+    }
+    if (direction > 0 && currentPage < totalPages) onPageChange?.(currentPage + 1, 0);
+    if (direction < 0 && currentPage > 1) onPageChange?.(currentPage - 1, 0);
+  }, [activeIndex, alignToIndex, currentPage, images.length, onPageChange, totalPages]);
+
+  React.useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const target = event.target instanceof Element ? event.target : null;
+      if (target?.closest('input, textarea, select, [contenteditable="true"], [role="dialog"]')) return;
+      if (
+        target?.closest('.webtoon-thumbnails__item')
+        && (event.key === 'ArrowUp' || event.key === 'ArrowDown')
+      ) return;
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      if (event.key === 'ArrowDown' || event.key === 'ArrowRight' || event.key === 'k' || event.key === 'K') {
+        event.preventDefault();
+        navigate(1);
+      } else if (event.key === 'ArrowUp' || event.key === 'ArrowLeft' || event.key === 'j' || event.key === 'J') {
+        event.preventDefault();
+        navigate(-1);
+      } else if (event.key === '[') {
+        event.preventDefault();
+        onSettingsChange?.({ webtoonImageScale: clamp(imageScale - QUICK_SCALE_STEP, 30, 100) });
+      } else if (event.key === ']') {
+        event.preventDefault();
+        onSettingsChange?.({ webtoonImageScale: clamp(imageScale + QUICK_SCALE_STEP, 30, 100) });
+      } else if (event.key.toLowerCase() === 'i') {
+        onSettingsChange?.({ webtoonShowInfo: !showInfo });
+      } else if (event.key.toLowerCase() === 'p') {
+        onSettingsChange?.({ webtoonShowPageNumber: !showPageNumber });
+      } else if (event.key.toLowerCase() === 't') {
+        onSettingsChange?.({ webtoonShowThumbnails: !showThumbnails });
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown, true);
+    return () => document.removeEventListener('keydown', handleKeyDown, true);
+  }, [imageScale, navigate, onSettingsChange, showInfo, showPageNumber, showThumbnails]);
+
+  if (images.length === 0) {
+    return (
+      <div className="webtoon-feed webtoon-feed--empty">
+        <p>目前沒有可閱讀的圖片。</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className={`webtoon-reader${showThumbnails ? ' has-thumbnails' : ''}`}>
+      {showThumbnails && (
+        <WebtoonThumbnailRail
+          images={images}
+          currentIndex={activeIndex}
+          thumbnailSize={thumbnailSize}
+          pageNumbers={pageNumberState.pageNumbers}
+          blurEnabled={blurEnabled}
+          onSelect={index => {
+            initialAnchorLockRef.current = null;
+            alignToIndex(index);
+          }}
+        />
+      )}
+
+      <section
+        ref={feedRef}
+        className="webtoon-feed"
+        aria-label="條漫閱讀區"
+        onTouchStart={event => {
+          const touch = event.touches[0];
+          if (touch) touchStartRef.current = { x: touch.clientX, y: touch.clientY };
+        }}
+        onTouchEnd={event => {
+          const start = touchStartRef.current;
+          const touch = event.changedTouches[0];
+          touchStartRef.current = null;
+          if (!start || !touch) return;
+          const deltaX = touch.clientX - start.x;
+          const deltaY = touch.clientY - start.y;
+          if (Math.abs(deltaY) < 72 || Math.abs(deltaY) < Math.abs(deltaX) * 1.2) return;
+          // A long swipe is an explicit page gesture; ordinary short swipes
+          // keep the browser's native continuous scrolling behavior.
+          navigate(deltaY < 0 ? 1 : -1);
+        }}
+      >
+        <div className="webtoon-feed__virtual-list" style={{ height: `${metrics.totalHeight}px` }}>
+          {Array.from({ length: Math.max(0, virtualEnd - virtualStart) }, (_, offset) => {
+            const index = virtualStart + offset;
+            const item = images[index];
+            const pageNumber = pageNumberState.pageNumbers[index] ?? pageOffset + index + 1;
+            return (
+              <article
+                key={item.image_id}
+                data-webtoon-index={index}
+                className="webtoon-feed__item"
+                style={{
+                  top: `${metrics.offsets[index]}px`,
+                  marginBottom: `${imageGap}px`,
+                  '--webtoon-image-scale': `${imageScale}%`,
+                } as React.CSSProperties}
+              >
+                {showInfo && (
+                  <header className="webtoon-feed__info">
+                    <div className="webtoon-feed__info-primary">
+                      <strong>{item.title || '未命名作品'}</strong>
+                      <span>{item.artist_name || `繪師 ID: ${item.member_id}`}</span>
+                    </div>
+                    {showPageNumber && <span className="webtoon-feed__info-page">第 {pageNumber} 頁</span>}
+                  </header>
+                )}
+                {showPageNumber && !showInfo && (
+                  <span className="webtoon-feed__page-badge">{pageNumber}</span>
+                )}
+                <div className="webtoon-feed__media-wrap">
+                  <WebtoonMedia
+                    item={item}
+                    index={index}
+                    pageNumber={pageNumber}
+                    thumbnailSize={thumbnailSize}
+                    blurEnabled={blurEnabled}
+                    isNearCurrent={Math.abs(index - activeIndex) <= 3}
+                  />
                 </div>
-              ) : isVideo ? (
-                <video
-                  src={mediaUrl}
-                  controls
-                  loop
-                  className={`max-h-[85vh] w-auto object-contain rounded-lg ${blurEnabled ? 'blur-media blur-media--feed' : ''}`}
-                />
-              ) : (
-                <img
-                  src={mediaUrl}
-                  alt={item.title}
-                  loading="lazy"
-                  className={`max-h-[90vh] w-auto object-contain rounded-lg ${blurEnabled ? 'blur-media blur-media--feed' : ''}`}
-                />
-              )}
-            </div>
-          </div>
-        );
-      })}
+              </article>
+            );
+          })}
+        </div>
+      </section>
+
+      <WebtoonQuickToolbar
+        currentIndex={activeIndex}
+        imageCount={images.length}
+        currentPageNumber={pageNumberState.pageNumbers[activeIndex] ?? pageOffset + activeIndex + 1}
+        totalPageNumbers={pageNumberState.pageTotals[activeIndex] ?? pageNumberState.totalPages}
+        imageScale={imageScale}
+        imageGap={imageGap}
+        showInfo={showInfo}
+        showPageNumber={showPageNumber}
+        showThumbnails={showThumbnails}
+        currentPage={currentPage}
+        totalPages={totalPages}
+        onPrevious={() => navigate(-1)}
+        onNext={() => navigate(1)}
+        onSettingsChange={patch => onSettingsChange?.(patch)}
+        onPageChange={page => onPageChange?.(page, 0)}
+        isScrolling={isScrolling}
+        onReveal={revealToolbar}
+        onPointerEnter={handleToolbarPointerEnter}
+        onPointerLeave={handleToolbarPointerLeave}
+      />
     </div>
   );
 };

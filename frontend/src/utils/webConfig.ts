@@ -37,6 +37,31 @@ export const normalizeWebConfig = (value: WebConfigInput | null | undefined): We
       DEFAULT_WEB_CONFIG.blurEnabled,
     ),
     preloadImageCount: clampInteger(source.preloadImageCount, DEFAULT_WEB_CONFIG.preloadImageCount, 0, 10),
+    fullscreenToolbarSimpleMode: toBoolean(
+      source.fullscreenToolbarSimpleMode,
+      DEFAULT_WEB_CONFIG.fullscreenToolbarSimpleMode,
+    ),
+    webtoonImageScale: clampInteger(
+      source.webtoonImageScale,
+      DEFAULT_WEB_CONFIG.webtoonImageScale,
+      30,
+      100,
+    ),
+    webtoonImageGap: clampInteger(
+      source.webtoonImageGap,
+      DEFAULT_WEB_CONFIG.webtoonImageGap,
+      0,
+      300,
+    ),
+    webtoonShowInfo: toBoolean(source.webtoonShowInfo, DEFAULT_WEB_CONFIG.webtoonShowInfo),
+    webtoonShowPageNumber: toBoolean(
+      source.webtoonShowPageNumber,
+      DEFAULT_WEB_CONFIG.webtoonShowPageNumber,
+    ),
+    webtoonShowThumbnails: toBoolean(
+      source.webtoonShowThumbnails,
+      DEFAULT_WEB_CONFIG.webtoonShowThumbnails,
+    ),
     analyzeColorsAfterLibraryUpdate: toBoolean(
       source.analyzeColorsAfterLibraryUpdate,
       DEFAULT_WEB_CONFIG.analyzeColorsAfterLibraryUpdate,

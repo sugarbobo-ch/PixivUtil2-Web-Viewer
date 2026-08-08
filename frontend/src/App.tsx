@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { Artist, LibraryJob, MonthItem, ImageItem, SortMode, ViewMode, ThemeMode, WorkGroup, WebConfig, DEFAULT_WEB_CONFIG } from './types';
-import { ArrowUp } from 'lucide-react';
+import { Artist, LibraryJob, MonthItem, ImageItem, SortMode, ViewMode, ViewerMode, ThemeMode, WorkGroup, WebConfig, DEFAULT_WEB_CONFIG } from './types';
+import { ArrowUp, ChevronDown } from 'lucide-react';
 import { groupImagesIntoWorkGroups } from './utils/grouping';
 import { buildThumbnailUrl, normalizeWebConfig } from './utils/webConfig';
 import { Header } from './components/Header';
@@ -16,7 +16,14 @@ import { ArtistSettingsModal } from './components/ArtistSettingsModal';
 import { RecycleBinModal } from './components/RecycleBinModal';
 import { MangaGroupModal } from './components/MangaGroupModal';
 import { MonthJumpItem, MonthJumpNavigationOptions, MonthNavigationPhase } from './components/MonthQuickNav';
-import { getScrollTopForElement, scrollElementToContainerStart, getTargetPageAndLocalIndex } from './utils/galleryLayout';
+import {
+  getFirstVisibleGridCardIndex,
+  getVisibleAreaMetrics,
+  MIN_VISIBLE_AREA_RATIO,
+  getScrollTopForElement,
+  scrollElementToContainerStart,
+  getTargetPageAndLocalIndex,
+} from './utils/galleryLayout';
 import { imageLoadScheduler, ImagePreloadHandle } from './utils/imageLoadScheduler';
 
 const getMonthKeyFromDate = (dateStr?: string) => {
@@ -117,6 +124,11 @@ interface FilterUrlState {
   searchQuery: string;
 }
 
+interface ViewAnchorRequest {
+  index: number;
+  requestId: number;
+}
+
 const getFilterStateFromUrl = (): FilterUrlState => {
   if (typeof window === 'undefined') {
     return { selectedMonths: [], selectedArtist: null, searchQuery: '' };
@@ -195,6 +207,9 @@ export const App: React.FC = () => {
   // View mode is intentionally session-only. A page refresh should always
   // start in the grid instead of reopening fullscreen or webtoon mode.
   const [viewMode, setViewMode] = useState<ViewMode>('grid');
+  // The grid is a navigation surface, not a reader mode. Keep the last reader
+  // mode separately so opening an image returns to the user's previous reader.
+  const [lastViewerMode, setLastViewerMode] = useState<ViewerMode>('fullscreen');
   const [isSidebarOpen, setIsSidebarOpen] = useState(() => (
     typeof window === 'undefined' ? true : window.innerWidth > 640
   ));
@@ -208,7 +223,13 @@ export const App: React.FC = () => {
   // Group Mode & Manga Modal States
   const [groupMangaPosts, setGroupMangaPosts] = useState(DEFAULT_WEB_CONFIG.groupMangaPosts);
   const [preloadImageCount, setPreloadImageCount] = useState(DEFAULT_WEB_CONFIG.preloadImageCount);
+  const [fullscreenToolbarSimpleMode, setFullscreenToolbarSimpleMode] = useState(DEFAULT_WEB_CONFIG.fullscreenToolbarSimpleMode);
   const [thumbnailSize, setThumbnailSize] = useState(DEFAULT_WEB_CONFIG.thumbnailSize);
+  const [webtoonImageScale, setWebtoonImageScale] = useState(DEFAULT_WEB_CONFIG.webtoonImageScale);
+  const [webtoonImageGap, setWebtoonImageGap] = useState(DEFAULT_WEB_CONFIG.webtoonImageGap);
+  const [webtoonShowInfo, setWebtoonShowInfo] = useState(DEFAULT_WEB_CONFIG.webtoonShowInfo);
+  const [webtoonShowPageNumber, setWebtoonShowPageNumber] = useState(DEFAULT_WEB_CONFIG.webtoonShowPageNumber);
+  const [webtoonShowThumbnails, setWebtoonShowThumbnails] = useState(DEFAULT_WEB_CONFIG.webtoonShowThumbnails);
   const [activeWorkGroup, setActiveWorkGroup] = useState<WorkGroup | null>(null);
   const [isMangaModalOpen, setIsMangaModalOpen] = useState(false);
   const [blurEnabled, setBlurEnabled] = useState(DEFAULT_WEB_CONFIG.blurEnabled);
@@ -265,13 +286,21 @@ export const App: React.FC = () => {
   const [isDownloadingSelection, setIsDownloadingSelection] = useState(false);
   const [downloadSelectionError, setDownloadSelectionError] = useState<string | null>(null);
   const [showScrollTop, setShowScrollTop] = useState(false);
+  const [isWebtoonHeaderHidden, setIsWebtoonHeaderHidden] = useState(false);
+  const [gridRestoreAnchor, setGridRestoreAnchor] = useState<ViewAnchorRequest | null>(null);
+  const [webtoonStartAnchor, setWebtoonStartAnchor] = useState<ViewAnchorRequest | null>(null);
   const mainScrollRef = useRef<HTMLElement | null>(null);
+  const gridRestoreRequestIdRef = useRef(0);
+  const webtoonStartRequestIdRef = useRef(0);
+  const previousMainScrollTopRef = useRef(0);
+  const webtoonUserScrollIntentRef = useRef(false);
   const imageRequestIdRef = useRef(0);
   const imagePageCacheRef = useRef(new Map<string, ImagePageCacheEntry>());
   const imagePageRequestsRef = useRef(new Map<string, ImagePageRequest>());
   const thumbnailPreloadRequestsRef = useRef(new Map<string, ImagePreloadHandle>());
   const blurSaveRequestRef = useRef(0);
   const groupSaveRequestRef = useRef(0);
+  const fullscreenToolbarModeSaveRequestRef = useRef(0);
   const [isLoadingImages, setIsLoadingImages] = useState(false);
   const [pendingMonthKey, setPendingMonthKey] = useState<string | null>(null);
   const pendingMonthScrollBehaviorRef = useRef<ScrollBehavior>('smooth');
@@ -291,42 +320,140 @@ export const App: React.FC = () => {
   const libraryAnnouncementTimerRef = useRef<number | null>(null);
 
   const handleEditModeChange = useCallback((edit: boolean) => {
-    setIsEditMode(edit);
+    const nextEditMode = edit && viewMode !== 'webtoon';
+    setIsEditMode(nextEditMode);
     setDownloadSelectionError(null);
-    if (!edit) setSelectedIds(new Set());
-  }, []);
+    if (!nextEditMode) setSelectedIds(new Set());
+  }, [viewMode]);
 
   const handleToggleEditMode = useCallback(() => {
     setIsEditMode(current => {
-      const next = !current;
+      const next = viewMode !== 'webtoon' && !current;
       setDownloadSelectionError(null);
       if (!next) setSelectedIds(new Set());
       return next;
     });
-  }, []);
-
-  const handleOpenFullscreen = useCallback((index: number) => {
-    setFullscreenIndex(index);
-  }, []);
+  }, [viewMode]);
 
   const handleNavigateFullscreen = useCallback((index: number) => {
     setFullscreenIndex(index);
   }, []);
 
-  const handleCloseFullscreen = useCallback(() => {
-    setFullscreenIndex(null);
-    setViewMode('grid');
-  }, []);
-
   const handleMainScroll = (event: React.UIEvent<HTMLElement>) => {
     const scrollTarget = event.target as HTMLElement;
-    setShowScrollTop(scrollTarget.scrollTop > 240);
+    const nextScrollTop = scrollTarget.scrollTop;
+    setShowScrollTop(nextScrollTop > 240);
+
+    const isCompactViewport = window.matchMedia?.('(max-width: 640px)').matches ?? false;
+    if (viewMode !== 'webtoon' || !isCompactViewport) {
+      setIsWebtoonHeaderHidden(false);
+    } else {
+      const delta = nextScrollTop - previousMainScrollTopRef.current;
+      if (!webtoonUserScrollIntentRef.current || nextScrollTop <= 8 || delta < -8) {
+        setIsWebtoonHeaderHidden(false);
+      } else if (delta > 8) {
+        setIsWebtoonHeaderHidden(true);
+      }
+    }
+    previousMainScrollTopRef.current = nextScrollTop;
   };
+
+  useEffect(() => {
+    previousMainScrollTopRef.current = 0;
+    webtoonUserScrollIntentRef.current = false;
+    setIsWebtoonHeaderHidden(false);
+  }, [viewMode]);
 
   const getGalleryScrollContainer = useCallback(() => (
     mainScrollRef.current?.querySelector<HTMLElement>('[data-gallery-scroll-container="true"]')
       ?? mainScrollRef.current
   ), []);
+
+  const getFirstVisibleWebtoonIndex = useCallback(() => {
+    const main = mainScrollRef.current;
+    if (!main) return null;
+
+    const mainRect = main.getBoundingClientRect();
+    const viewport = {
+      top: mainRect.top,
+      right: mainRect.right,
+      bottom: mainRect.bottom,
+      left: mainRect.left,
+    };
+    const visibleItems = Array.from(
+      main.querySelectorAll<HTMLElement>('[data-webtoon-index]'),
+    )
+      .map(item => {
+        const image = item.querySelector<HTMLElement>('.webtoon-feed__media-frame') ?? item;
+        const rect = image.getBoundingClientRect();
+        return {
+          item,
+          rect,
+          ...getVisibleAreaMetrics(rect, viewport),
+        };
+      })
+      .filter(({ visibleArea, area }) => visibleArea > 0 && area > 0)
+      .sort((left, right) => left.rect.top - right.rect.top || left.rect.left - right.rect.left);
+    // Read from the upper-left edge. Prefer a mounted image with at least half
+    // of its area visible; if none qualifies, use the topmost visible image.
+    // Never fall back to an offscreen overscan item because it is not part of
+    // the user's current reading position.
+    const mostlyVisibleItems = visibleItems.filter(
+      ({ visibleRatio }) => visibleRatio >= MIN_VISIBLE_AREA_RATIO,
+    );
+    const selectedItem = (mostlyVisibleItems.length > 0 ? mostlyVisibleItems : visibleItems)[0];
+    const index = Number(selectedItem?.item.dataset.webtoonIndex);
+    return Number.isInteger(index) && index >= 0 ? index : null;
+  }, []);
+
+  const getCurrentViewAnchorIndex = useCallback(() => {
+    if (fullscreenIndex !== null) return fullscreenIndex;
+    if (viewMode === 'grid') {
+      return getFirstVisibleGridCardIndex(getGalleryScrollContainer() ?? document.body);
+    }
+    if (viewMode === 'webtoon') return getFirstVisibleWebtoonIndex();
+    return null;
+  }, [fullscreenIndex, getFirstVisibleWebtoonIndex, getGalleryScrollContainer, viewMode]);
+
+  const normalizeViewAnchorIndex = useCallback((index: number | null) => {
+    if (images.length === 0 || index === null || !Number.isFinite(index)) return null;
+    return Math.max(0, Math.min(images.length - 1, Math.floor(index)));
+  }, [images.length]);
+
+  const requestGridRestore = useCallback((index: number | null) => {
+    const safeIndex = normalizeViewAnchorIndex(index);
+    if (safeIndex === null) return;
+    const requestId = ++gridRestoreRequestIdRef.current;
+    setGridRestoreAnchor({ index: safeIndex, requestId });
+  }, [normalizeViewAnchorIndex]);
+
+  const requestWebtoonStart = useCallback((index: number | null) => {
+    const safeIndex = normalizeViewAnchorIndex(index);
+    if (safeIndex === null) return;
+    const requestId = ++webtoonStartRequestIdRef.current;
+    setWebtoonStartAnchor({ index: safeIndex, requestId });
+  }, [normalizeViewAnchorIndex]);
+
+  const cancelMonthNavigation = useCallback(() => {
+    const scrub = scrubSettleRef.current;
+    if (scrub.timer !== null) window.clearTimeout(scrub.timer);
+    scrub.timer = null;
+    scrub.cacheKey = null;
+    scrub.active = false;
+    scrub.targetKey = null;
+    scrub.targetPage = null;
+    setPendingMonthKey(null);
+    setDestinationMonthKey(null);
+    setDestinationGlobalIndex(null);
+    setNavigationMode('idle');
+  }, []);
+
+  const handleCloseFullscreen = useCallback(() => {
+    requestGridRestore(fullscreenIndex);
+    setFullscreenIndex(null);
+    setViewMode('grid');
+    cancelMonthNavigation();
+  }, [cancelMonthNavigation, fullscreenIndex, requestGridRestore]);
 
   const handleScrollToTop = () => {
     const prefersReducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
@@ -562,8 +689,8 @@ export const App: React.FC = () => {
   }, [fetchImages, refreshDirectoryMetadata]);
 
   useEffect(() => {
-    const fullscreenActive = fullscreenIndex !== null || viewMode === 'fullscreen';
-    if (fullscreenActive) {
+    const galleryInactive = fullscreenIndex !== null || viewMode !== 'grid';
+    if (galleryInactive) {
       imageLoadScheduler.pauseOwner('grid');
       imageLoadScheduler.pauseOwner('month-navigation');
     } else {
@@ -811,13 +938,17 @@ export const App: React.FC = () => {
     cancelSpeculativePageRequests(preserveCacheKey);
     paginationScrollResetRef.current = page;
     pendingMonthScrollBehaviorRef.current = 'smooth';
-    setPendingMonthKey(null);
-    setDestinationMonthKey(null);
-    setDestinationGlobalIndex(null);
-    setNavigationMode('idle');
+    cancelMonthNavigation();
     getGalleryScrollContainer()?.scrollTo({ top: 0, behavior: 'auto' });
     setCurrentPage(page);
-  }, [buildImageRequestParams, cancelSpeculativePageRequests, getGalleryScrollContainer, supersedeNavigationPageRequests]);
+  }, [buildImageRequestParams, cancelMonthNavigation, cancelSpeculativePageRequests, getGalleryScrollContainer, supersedeNavigationPageRequests]);
+
+  const handleWebtoonPageChange = useCallback((page: number, anchorIndex = 0) => {
+    const totalPages = Math.max(1, Math.ceil(totalImages / Math.max(1, itemsPerPage)));
+    const safePage = Math.max(1, Math.min(totalPages, Math.floor(page)));
+    requestWebtoonStart(anchorIndex);
+    handlePageChange(safePage);
+  }, [handlePageChange, itemsPerPage, requestWebtoonStart, totalImages]);
 
   React.useLayoutEffect(() => {
     if (paginationScrollResetRef.current !== currentPage || pendingMonthKey) return undefined;
@@ -960,6 +1091,12 @@ export const App: React.FC = () => {
     setGroupMangaPosts(config.groupMangaPosts);
     setBlurEnabled(config.blurEnabled);
     setPreloadImageCount(config.preloadImageCount);
+    setFullscreenToolbarSimpleMode(config.fullscreenToolbarSimpleMode);
+    setWebtoonImageScale(config.webtoonImageScale);
+    setWebtoonImageGap(config.webtoonImageGap);
+    setWebtoonShowInfo(config.webtoonShowInfo);
+    setWebtoonShowPageNumber(config.webtoonShowPageNumber);
+    setWebtoonShowThumbnails(config.webtoonShowThumbnails);
     setCurrentPage(1);
   }, []);
 
@@ -991,6 +1128,23 @@ export const App: React.FC = () => {
     return nextConfig;
   }, []);
 
+  const webtoonConfigSaveQueueRef = useRef<Promise<unknown>>(Promise.resolve());
+  const handleWebtoonSettingsChange = useCallback((patch: Partial<WebConfig>) => {
+    const normalized = normalizeWebConfig(patch);
+    if (patch.webtoonImageScale !== undefined) setWebtoonImageScale(normalized.webtoonImageScale);
+    if (patch.webtoonImageGap !== undefined) setWebtoonImageGap(normalized.webtoonImageGap);
+    if (patch.webtoonShowInfo !== undefined) setWebtoonShowInfo(normalized.webtoonShowInfo);
+    if (patch.webtoonShowPageNumber !== undefined) setWebtoonShowPageNumber(normalized.webtoonShowPageNumber);
+    if (patch.webtoonShowThumbnails !== undefined) setWebtoonShowThumbnails(normalized.webtoonShowThumbnails);
+
+    webtoonConfigSaveQueueRef.current = webtoonConfigSaveQueueRef.current
+      .catch(() => undefined)
+      .then(() => persistWebConfigPatch(patch))
+      .catch(error => {
+        console.error('Failed to save webtoon setting:', error);
+      });
+  }, [persistWebConfigPatch]);
+
   // Apply persisted Web Viewer settings before the user starts interacting with the app.
   useEffect(() => {
     let cancelled = false;
@@ -1007,12 +1161,57 @@ export const App: React.FC = () => {
   }, [loadWebConfig]);
 
   const handleViewModeChange = useCallback((nextMode: ViewMode) => {
+    const fullscreenActive = fullscreenIndex !== null;
+    if (nextMode === viewMode && !fullscreenActive) return;
+
+    const anchorIndex = getCurrentViewAnchorIndex();
+    const safeAnchorIndex = normalizeViewAnchorIndex(anchorIndex);
+
+    // A mode change is also a navigation boundary. Do not let an in-flight
+    // month scrub resume against the newly mounted grid and overwrite the
+    // row anchor or page that the user chose.
+    cancelMonthNavigation();
+
+    if (nextMode === 'fullscreen') {
+      setFullscreenIndex(safeAnchorIndex ?? (images.length > 0 ? 0 : null));
+    } else if (nextMode === 'webtoon') {
+      handleEditModeChange(false);
+      requestWebtoonStart(safeAnchorIndex ?? (images.length > 0 ? 0 : null));
+      setFullscreenIndex(null);
+    } else {
+      requestGridRestore(safeAnchorIndex);
+      setFullscreenIndex(null);
+    }
+
+    if (nextMode !== 'grid') setLastViewerMode(nextMode);
     setViewMode(nextMode);
-    setFullscreenIndex(currentIndex => {
-      if (nextMode !== 'fullscreen') return null;
-      return currentIndex ?? (images.length > 0 ? 0 : null);
-    });
-  }, [images.length]);
+  }, [
+    fullscreenIndex,
+    getCurrentViewAnchorIndex,
+    images.length,
+    normalizeViewAnchorIndex,
+    cancelMonthNavigation,
+    requestGridRestore,
+    requestWebtoonStart,
+    handleEditModeChange,
+    viewMode,
+  ]);
+
+  const handleOpenImage = useCallback((index: number) => {
+    const safeIndex = normalizeViewAnchorIndex(index);
+    if (safeIndex === null) return;
+
+    cancelMonthNavigation();
+    if (lastViewerMode === 'webtoon') {
+      requestWebtoonStart(safeIndex);
+      setFullscreenIndex(null);
+      setViewMode('webtoon');
+      return;
+    }
+
+    setFullscreenIndex(safeIndex);
+    setViewMode('fullscreen');
+  }, [cancelMonthNavigation, lastViewerMode, normalizeViewAnchorIndex, requestWebtoonStart]);
 
   const handleThemeChange = useCallback((nextTheme: ThemeMode) => {
     setTheme(nextTheme);
@@ -1039,13 +1238,18 @@ export const App: React.FC = () => {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      if (viewMode === 'webtoon') return;
       if (e.key === 'e' || e.key === 'E') {
         handleEditModeChange(!isEditMode);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [handleEditModeChange, isEditMode]);
+  }, [handleEditModeChange, isEditMode, viewMode]);
+
+  useEffect(() => {
+    if (viewMode === 'webtoon' && isEditMode) handleEditModeChange(false);
+  }, [handleEditModeChange, isEditMode, viewMode]);
 
   // Multi-select handlers
   const toggleSelectImage = (imageId: number) => {
@@ -1214,6 +1418,18 @@ export const App: React.FC = () => {
     });
   }, [blurEnabled, persistWebConfigPatch]);
 
+  const handleFullscreenToolbarSimpleModeChange = useCallback((simpleMode: boolean) => {
+    const previousValue = fullscreenToolbarSimpleMode;
+    const requestId = ++fullscreenToolbarModeSaveRequestRef.current;
+
+    setFullscreenToolbarSimpleMode(simpleMode);
+    persistWebConfigPatch({ fullscreenToolbarSimpleMode: simpleMode }).catch(err => {
+      if (requestId !== fullscreenToolbarModeSaveRequestRef.current) return;
+      console.error('Failed to save fullscreenToolbarSimpleMode setting:', err);
+      setFullscreenToolbarSimpleMode(previousValue);
+    });
+  }, [fullscreenToolbarSimpleMode, persistWebConfigPatch]);
+
   // Group images into WorkGroups for current page
   const allWorkGroups = useMemo(() => {
     return groupImagesIntoWorkGroups(images);
@@ -1280,9 +1496,7 @@ export const App: React.FC = () => {
     if (!activeWorkGroup) return;
     const targetItem = activeWorkGroup.items[pageIdx];
     const globalIdx = images.findIndex(x => x.save_name === targetItem?.save_name);
-    if (globalIdx !== -1) {
-      setFullscreenIndex(globalIdx);
-    }
+    if (globalIdx !== -1) handleOpenImage(globalIdx);
     setIsMangaModalOpen(false);
   };
 
@@ -1374,7 +1588,7 @@ export const App: React.FC = () => {
   }
 
   return (
-    <div className="h-screen flex flex-col overflow-hidden bg-zinc-950 text-zinc-100 transition-colors">
+    <div className={`h-screen flex flex-col overflow-hidden bg-zinc-950 text-zinc-100 transition-colors${viewMode === 'webtoon' ? ' webtoon-app' : ''}${isWebtoonHeaderHidden ? ' webtoon-app--header-hidden' : ''}`}>
       <Header
         viewMode={viewMode}
         setViewMode={handleViewModeChange}
@@ -1416,7 +1630,7 @@ export const App: React.FC = () => {
       />
 
       <div
-        className="relative flex flex-1 min-h-0 overflow-hidden"
+        className="webtoon-layout-shell relative flex flex-1 min-h-0 overflow-hidden"
         style={{ '--viewer-sidebar-offset': isSidebarOpen ? '18rem' : '0px' } as React.CSSProperties}
       >
         {isSidebarOpen && (
@@ -1448,6 +1662,12 @@ export const App: React.FC = () => {
           ref={mainScrollRef}
           onScroll={viewMode === 'grid' ? undefined : handleMainScroll}
           onScrollCapture={viewMode === 'grid' ? handleMainScroll : undefined}
+          onWheel={() => {
+            if (viewMode === 'webtoon') webtoonUserScrollIntentRef.current = true;
+          }}
+          onTouchStart={() => {
+            if (viewMode === 'webtoon') webtoonUserScrollIntentRef.current = true;
+          }}
           className={`flex-1 min-w-0 min-h-0 overflow-x-hidden overscroll-x-none overscroll-y-contain ${viewMode === 'grid' ? 'viewer-main--grid flex flex-col overflow-y-hidden' : 'overflow-y-auto'}`}
         >
           {viewMode === 'grid' && (
@@ -1467,7 +1687,7 @@ export const App: React.FC = () => {
             onToggleSelect={toggleSelectImage}
             onSetSelection={setSelectedImages}
             onReplaceSelection={replaceSelectedImages}
-            onOpenFullscreen={handleOpenFullscreen}
+            onOpenFullscreen={handleOpenImage}
             searchQuery={searchQuery}
             onClearSearch={() => setSearchQuery('')}
             selectedArtist={selectedArtist}
@@ -1486,6 +1706,8 @@ export const App: React.FC = () => {
              navigationMode={navigationMode}
              destinationMonthKey={destinationMonthKey}
              destinationGlobalIndex={destinationGlobalIndex}
+             restoreGlobalIndex={gridRestoreAnchor?.index ?? null}
+             restoreRequestId={gridRestoreAnchor?.requestId ?? 0}
              isLoading={isLoadingImages}
              isArtistLoading={isLoadingImages && selectedArtist !== null}
               isArtistUpdating={isArtistUpdating}
@@ -1496,23 +1718,53 @@ export const App: React.FC = () => {
           )}
 
           {viewMode === 'webtoon' && (
-            <WebtoonFeed images={images} blurEnabled={blurEnabled} />
+            <WebtoonFeed
+              images={images}
+              blurEnabled={blurEnabled}
+              initialIndex={webtoonStartAnchor?.index ?? null}
+              initialRequestId={webtoonStartAnchor?.requestId ?? 0}
+              thumbnailSize={thumbnailSize}
+              imageScale={webtoonImageScale}
+              imageGap={webtoonImageGap}
+              showInfo={webtoonShowInfo}
+              showPageNumber={webtoonShowPageNumber}
+              showThumbnails={webtoonShowThumbnails}
+              groupMangaPosts={groupMangaPosts}
+              pageOffset={Math.max(0, (currentPage - 1) * itemsPerPage)}
+              totalImages={totalImages}
+              currentPage={currentPage}
+              totalPages={Math.max(1, Math.ceil(totalImages / Math.max(1, itemsPerPage)))}
+              onPageChange={handleWebtoonPageChange}
+              onSettingsChange={handleWebtoonSettingsChange}
+            />
           )}
 
         </main>
       </div>
 
-      <button
-        type="button"
-        className={`viewer-scroll-top${showScrollTop ? ' is-visible' : ''}`}
-        onClick={handleScrollToTop}
-        disabled={!showScrollTop}
-        tabIndex={showScrollTop ? 0 : -1}
-        aria-label="回到頂端"
-        title="回到頂端"
-      >
-        <ArrowUp className="h-5 w-5" aria-hidden="true" />
-      </button>
+      {viewMode === 'webtoon' && isWebtoonHeaderHidden && (
+        <button
+          type="button"
+          className="webtoon-header-reveal"
+          onClick={() => setIsWebtoonHeaderHidden(false)}
+          aria-label="顯示上方工具列"
+          title="顯示上方工具列"
+        >
+          <ChevronDown className="h-4 w-4" aria-hidden="true" />
+        </button>
+      )}
+
+      {showScrollTop && (
+        <button
+          type="button"
+          className={`viewer-scroll-top is-visible${viewMode === 'webtoon' ? ' viewer-scroll-top--webtoon' : ''}`}
+          onClick={handleScrollToTop}
+          aria-label="回到頂端"
+          title="回到頂端"
+        >
+          <ArrowUp className="h-5 w-5" aria-hidden="true" />
+        </button>
+      )}
 
       {/* Manga Group Preview Modal */}
       <MangaGroupModal
@@ -1524,7 +1776,7 @@ export const App: React.FC = () => {
         blurEnabled={blurEnabled}
       />
 
-      {/* Keep one Previewer instance for both the grid and Wheel Flip modes. */}
+      {/* Keep one previewer instance for the single-image reader mode. */}
       {(fullscreenIndex !== null || viewMode === 'fullscreen') && images.length > 0 && (
         <FullscreenViewer
           key="fullscreen-viewer"
@@ -1532,12 +1784,21 @@ export const App: React.FC = () => {
           currentIndex={fullscreenIndex ?? 0}
           onClose={handleCloseFullscreen}
           onNavigate={handleNavigateFullscreen}
+          activeMode={viewMode === 'webtoon' ? 'webtoon' : 'fullscreen'}
+          onChangeMode={handleViewModeChange}
           onDeleteCurrent={promptDeleteSingle}
           onNavigateNextWork={handleNavigateNextWork}
           onNavigatePrevWork={handleNavigatePrevWork}
           preloadCount={preloadImageCount}
           thumbnailSize={thumbnailSize}
           blurEnabled={blurEnabled}
+          groupMangaPosts={groupMangaPosts}
+          onToggleGroupMangaPosts={handleToggleGroupMangaPosts}
+          onToggleBlur={handleToggleBlur}
+          simpleToolbar={fullscreenToolbarSimpleMode}
+          onSimpleToolbarChange={handleFullscreenToolbarSimpleModeChange}
+          pageOffset={Math.max(0, (currentPage - 1) * itemsPerPage)}
+          totalImages={totalImages}
         />
       )}
 

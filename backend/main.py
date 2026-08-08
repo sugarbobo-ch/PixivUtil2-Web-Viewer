@@ -134,6 +134,12 @@ DEFAULT_WEB_CONFIG = {
     "groupMangaPosts": False,
     "blurEnabled": False,
     "preloadImageCount": 3,
+    "fullscreenToolbarSimpleMode": True,
+    "webtoonImageScale": 100,
+    "webtoonImageGap": 24,
+    "webtoonShowInfo": True,
+    "webtoonShowPageNumber": True,
+    "webtoonShowThumbnails": True,
     "analyzeColorsAfterLibraryUpdate": True,
     "manageThumbnailCache": True,
     "thumbnailCacheLimitMiB": 1024,
@@ -159,7 +165,21 @@ def normalize_web_config_file(data: Any) -> Dict[str, Any]:
             current.get("thumbnailHeight", DEFAULT_WEB_CONFIG["thumbnailSize"]),
         )
 
-    for key in ("analyzeColorsAfterLibraryUpdate", "manageThumbnailCache"):
+    for key in ("analyzeColorsAfterLibraryUpdate", "manageThumbnailCache", "fullscreenToolbarSimpleMode"):
+        value = normalized.get(key)
+        if isinstance(value, str):
+            normalized[key] = value.strip().lower() not in {"", "0", "false", "no", "off"}
+        else:
+            normalized[key] = bool(value)
+    for key, fallback, minimum, maximum in (
+        ("webtoonImageScale", 100, 30, 100),
+        ("webtoonImageGap", 24, 0, 300),
+    ):
+        try:
+            normalized[key] = max(minimum, min(maximum, int(normalized.get(key, fallback))))
+        except (TypeError, ValueError):
+            normalized[key] = fallback
+    for key in ("webtoonShowInfo", "webtoonShowPageNumber", "webtoonShowThumbnails"):
         value = normalized.get(key)
         if isinstance(value, str):
             normalized[key] = value.strip().lower() not in {"", "0", "false", "no", "off"}

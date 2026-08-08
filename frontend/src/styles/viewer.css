@@ -23,27 +23,186 @@
   .fullscreen-viewer__topbar {
     box-sizing: border-box;
     z-index: 10;
-    display: flex;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
     align-items: center;
-    justify-content: space-between;
-    gap: 1rem;
-    padding: 1rem var(--ui-overlay-gutter);
+    gap: 0.75rem;
+    padding: 0.75rem var(--ui-overlay-gutter);
     background: linear-gradient(to bottom, var(--viewer-surface), transparent);
   }
 
   .fullscreen-viewer__topbar-group {
     display: flex;
-    flex: 1 1 auto;
+    grid-column: 1;
     align-items: center;
     min-width: 0;
-    gap: 0.75rem;
-    flex-wrap: wrap;
+    gap: 0.5rem;
   }
 
   .fullscreen-viewer__topbar-actions {
     display: flex;
+    grid-column: 2;
+    width: fit-content;
+    max-width: min(72vw, calc(100vw - 8rem));
+    align-items: center;
+    gap: 0.375rem;
+    justify-content: space-between;
+    overflow: hidden;
+    border: 1px solid var(--viewer-border);
+    border-radius: 1rem;
+    padding: 0.375rem;
+    background: var(--viewer-surface-raised);
+    box-shadow: var(--viewer-shadow);
+    backdrop-filter: blur(18px) saturate(1.08);
+  }
+
+  .fullscreen-viewer__toolbar-center {
+    display: flex;
+    min-width: 0;
+    flex: 1 1 auto;
+    align-items: center;
+    gap: 0.375rem;
+    justify-content: safe center;
+    overflow-x: auto;
+    overscroll-behavior-inline: contain;
+    scrollbar-width: none;
+  }
+
+  .fullscreen-viewer__toolbar-center::-webkit-scrollbar {
+    display: none;
+  }
+
+  .fullscreen-viewer__toolbar-group,
+  .fullscreen-viewer__topbar-action-group {
+    display: inline-flex;
     flex-shrink: 0;
-    gap: 0.5rem;
+    align-items: center;
+    gap: 0.125rem;
+    border: 0;
+    border-radius: 0.625rem;
+    padding: 0.125rem;
+    background: var(--viewer-control);
+  }
+
+  .fullscreen-viewer__topbar-actions .viewer-icon-button {
+    width: 2.25rem;
+    min-width: 2.25rem;
+    height: 2.25rem;
+    min-height: 2.25rem;
+    border-radius: 0.5rem;
+  }
+
+  /* Keep the toolbar visually stable while the next image replaces the
+     current original. */
+  .fullscreen-viewer__topbar-actions.is-media-loading .viewer-icon-button,
+  .fullscreen-viewer__topbar-actions.is-media-loading .fullscreen-viewer__mode-button,
+  .fullscreen-viewer__topbar-actions.is-media-loading .fullscreen-viewer__zoom-value {
+    transition-duration: 0ms;
+  }
+
+  .fullscreen-viewer__topbar-actions:not(.is-simple) .fullscreen-viewer__mode-button {
+    width: 2.25rem;
+    min-width: 2.25rem;
+    min-height: 2.25rem;
+    padding-inline: 0;
+  }
+
+  .fullscreen-viewer__topbar-actions:not(.is-simple) .fullscreen-viewer__mode-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .fullscreen-viewer__zoom-controls {
+    display: inline-flex;
+    flex-shrink: 0;
+    align-items: center;
+    gap: 0.125rem;
+    border: 0;
+    border-radius: 0.625rem;
+    padding: 0.125rem;
+    background: var(--viewer-control);
+  }
+
+  .fullscreen-viewer__zoom-controls .viewer-icon-button {
+    width: 2.25rem;
+    min-width: 2.25rem;
+    height: 2.25rem;
+    min-height: 2.25rem;
+  }
+
+  .fullscreen-viewer__zoom-value {
+    min-width: 3.75rem;
+    min-height: 2.25rem;
+    border: 0;
+    border-radius: 0.5rem;
+    padding-inline: 0.5rem;
+    background: transparent;
+    color: var(--viewer-control-text);
+    cursor: pointer;
+    font-variant-numeric: tabular-nums;
+    font-size: 0.75rem;
+    font-weight: 700;
+    line-height: 1;
+    transition: background-color 150ms ease, color 150ms ease;
+  }
+
+  .fullscreen-viewer__zoom-value:hover {
+    background: var(--viewer-control-hover);
+  }
+
+  .fullscreen-viewer__mode-switcher {
+    display: inline-flex;
+    flex-shrink: 0;
+    align-items: center;
+    gap: 0.125rem;
+    border: 0;
+    border-radius: 0.625rem;
+    padding: 0.125rem;
+    background: var(--viewer-control);
+  }
+
+  .fullscreen-viewer__mode-button {
+    display: inline-flex;
+    min-width: 2.5rem;
+    min-height: 2.25rem;
+    align-items: center;
+    justify-content: center;
+    gap: 0.375rem;
+    border: 1px solid transparent;
+    border-radius: 0.5rem;
+    padding: 0 0.625rem;
+    background: transparent;
+    color: var(--viewer-control-text);
+    cursor: pointer;
+    font-size: 0.75rem;
+    font-weight: 700;
+    line-height: 1;
+    white-space: nowrap;
+    transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease, transform 150ms ease, box-shadow 150ms ease;
+  }
+
+  .fullscreen-viewer__mode-button:hover {
+    background: var(--viewer-control-hover);
+  }
+
+  .fullscreen-viewer__mode-button.is-active {
+    border-color: transparent;
+    background: var(--viewer-primary);
+    color: var(--viewer-primary-ink);
+  }
+
+  .fullscreen-viewer__mode-button.is-active:hover {
+    background: var(--viewer-primary-hover);
+    color: var(--viewer-primary-ink);
+  }
+
+  .fullscreen-viewer__mode-button:active {
+    transform: scale(0.96);
   }
 
   .fullscreen-viewer__counter,
@@ -56,24 +215,32 @@
   }
 
   .fullscreen-viewer__counter {
+    flex: 0 0 auto;
+    min-width: max-content;
+    white-space: nowrap;
     background: var(--viewer-control);
     color: var(--viewer-control-text);
+    font-variant-numeric: tabular-nums;
   }
 
   .fullscreen-viewer__title {
-    flex: 1 1 16rem;
+    flex: 1 1 auto;
     min-width: 0;
-    max-width: min(42rem, 55vw);
-    display: -webkit-box;
     overflow: hidden;
     color: var(--viewer-text);
     font-size: 0.875rem;
     font-weight: 600;
     line-height: 1.25;
-    overflow-wrap: anywhere;
-    text-wrap: pretty;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 2;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .fullscreen-viewer__close-button {
+    grid-column: 3;
+    justify-self: end;
+    background: var(--viewer-control);
+    box-shadow: 0 0 0 1px var(--viewer-border);
+    backdrop-filter: blur(12px);
   }
 
   .fullscreen-viewer__status {
@@ -112,6 +279,24 @@
     background: var(--viewer-control-hover);
   }
 
+  .viewer-icon-button.is-active {
+    background: var(--viewer-primary);
+    color: var(--viewer-primary-ink);
+    box-shadow: none;
+  }
+
+  .viewer-icon-button.is-active:hover {
+    background: var(--viewer-primary-hover);
+    color: var(--viewer-primary-ink);
+  }
+
+  .viewer-icon-button:disabled,
+  .fullscreen-viewer__zoom-value:disabled {
+    opacity: 0.42;
+    cursor: not-allowed;
+    transform: none;
+  }
+
   .viewer-icon-button:active,
   .viewer-nav-button:active {
     transform: scale(0.96);
@@ -119,22 +304,40 @@
 
   .viewer-icon-button:focus-visible,
   .viewer-nav-button:focus-visible,
+  .fullscreen-viewer__mode-button:focus-visible,
+  .fullscreen-viewer__zoom-value:focus-visible,
   .viewer-secondary-action:focus-visible,
   .viewer-primary-action:focus-visible,
-  .fullscreen-viewer__thumbnail:focus-visible {
+  .fullscreen-viewer__thumbnail:focus-visible,
+  .webtoon-thumbnails__item:focus-visible,
+  .webtoon-quick-toolbar__button:focus-visible,
+  .webtoon-quick-toolbar__page-input input:focus-visible,
+  .webtoon-header-reveal:focus-visible {
     outline: 2px solid var(--viewer-accent-hover);
     outline-offset: 2px;
   }
 
   .viewer-icon-button--danger {
     border: 0;
-    background: var(--viewer-danger);
-    color: white;
+    background: transparent;
+    color: var(--viewer-control-text);
   }
 
   .viewer-icon-button--danger:hover {
     border-color: transparent;
     background: var(--viewer-danger-hover);
+    color: white;
+  }
+
+  .fullscreen-viewer.is-checkerboard .fullscreen-viewer__stage {
+    background-color: var(--viewer-surface);
+    background-image:
+      linear-gradient(45deg, color-mix(in oklch, var(--viewer-control) 75%, transparent) 25%, transparent 25%),
+      linear-gradient(-45deg, color-mix(in oklch, var(--viewer-control) 75%, transparent) 25%, transparent 25%),
+      linear-gradient(45deg, transparent 75%, color-mix(in oklch, var(--viewer-control) 75%, transparent) 75%),
+      linear-gradient(-45deg, transparent 75%, color-mix(in oklch, var(--viewer-control) 75%, transparent) 75%);
+    background-position: 0 0, 0 0.75rem, 0.75rem -0.75rem, -0.75rem 0;
+    background-size: 1.5rem 1.5rem;
   }
 
   .fullscreen-viewer__stage {
@@ -145,7 +348,8 @@
     align-items: center;
     justify-content: center;
     overflow: hidden;
-    padding: 1rem;
+    padding-block: 0;
+    padding-inline: 1rem;
   }
 
   .viewer-nav-button {
@@ -192,7 +396,7 @@
   .fullscreen-viewer__media-stack {
     position: relative;
     display: grid;
-    align-self: center;
+    align-self: flex-start;
     width: min(90vw, 100%);
     height: min(85vh, 100%);
     max-width: 100%;
@@ -202,6 +406,15 @@
     overflow: hidden;
     place-items: center;
     isolation: isolate;
+  }
+
+  .fullscreen-viewer__media-stack.is-pannable {
+    cursor: grab;
+    touch-action: none;
+  }
+
+  .fullscreen-viewer__media-stack.is-panning {
+    cursor: grabbing;
   }
 
   .fullscreen-viewer__media-stack > .fullscreen-viewer__media {
@@ -214,12 +427,39 @@
     max-height: none;
     object-fit: contain;
     object-position: center;
+    pointer-events: none;
+    user-select: none;
+    transform-origin: center;
+    transition: transform 160ms ease;
   }
 
   .fullscreen-viewer__media--original {
     opacity: 0;
-    transition: opacity 180ms ease;
+    transition: opacity 180ms ease, transform 160ms ease;
   }
+
+  /* A locked zoom is a stable reading scale. Keep the original fade, but
+     reveal each newly selected image at that scale without interpolating
+     from the temporary pre-load scale. */
+  .fullscreen-viewer__media-stack.is-zoom-locked > .fullscreen-viewer__media {
+    transition-property: none;
+  }
+
+.fullscreen-viewer__media-stack.is-zoom-locked > .fullscreen-viewer__media--original {
+  transition: opacity 180ms ease;
+}
+
+/* During an image replacement, the media must switch at its final geometry.
+   This prevents the thumbnail and original from visibly cross-fading while
+   the zoom transform is being recalculated. */
+.fullscreen-viewer__media-stack.is-media-transition-suppressed > .fullscreen-viewer__media {
+  transition-property: none;
+  transition-duration: 0ms;
+}
+
+.fullscreen-viewer__media-stack.is-panning > .fullscreen-viewer__media {
+  transition-duration: 0ms;
+}
 
   .fullscreen-viewer__media--original.is-visible {
     opacity: 1;
@@ -458,10 +698,10 @@
   }
 
   .fullscreen-viewer__filmstrip-scroll {
-    display: flex;
+    display: block;
+    width: 100%;
+    min-width: 0;
     max-width: 100%;
-    align-items: center;
-    gap: 0.375rem;
     overflow-x: auto;
     overflow-y: hidden;
     padding: 0.25rem 0 0.5rem;
@@ -470,17 +710,31 @@
     scrollbar-width: thin;
   }
 
-  .fullscreen-viewer__boundary {
-    width: 2px;
-    height: 2.5rem;
+  .fullscreen-viewer__filmstrip-track {
+    position: relative;
+    min-width: 100%;
     flex-shrink: 0;
-    margin: auto 0.25rem;
+  }
+
+  .fullscreen-viewer__boundary,
+  .webtoon-thumbnails__boundary {
+    position: absolute;
+    margin: 0;
     border-radius: 999px;
     background: var(--viewer-accent);
     opacity: 0.6;
+    pointer-events: none;
   }
 
-  .fullscreen-viewer__thumbnail {
+  .fullscreen-viewer__boundary {
+    top: 50%;
+    width: 2px;
+    height: 3.5rem;
+    transform: translateY(-50%);
+  }
+
+  .fullscreen-viewer__thumbnail,
+  .webtoon-thumbnails__item {
     position: relative;
     width: 3.5rem;
     height: 3.5rem;
@@ -494,12 +748,19 @@
     transition: border-color 150ms ease, box-shadow 150ms ease, opacity 150ms ease, transform 150ms ease;
   }
 
-  .fullscreen-viewer__thumbnail:hover {
+  .fullscreen-viewer__thumbnail {
+    position: absolute;
+    inset-block-start: 0;
+  }
+
+  .fullscreen-viewer__thumbnail:hover,
+  .webtoon-thumbnails__item:hover {
     border-color: var(--viewer-accent-hover);
     opacity: 1;
   }
 
-  .fullscreen-viewer__thumbnail.is-active {
+  .fullscreen-viewer__thumbnail.is-active,
+  .webtoon-thumbnails__item.is-active {
     border-color: var(--viewer-accent);
     opacity: 1;
     transform: scale(1.05);
@@ -536,6 +797,79 @@
     line-height: 0.875rem;
   }
 
+  .fullscreen-viewer__shortcut-help {
+    position: absolute;
+    z-index: 35;
+    inset-block-start: 5rem;
+    inset-inline-end: var(--ui-overlay-gutter);
+    width: min(28rem, calc(100vw - 2rem));
+    max-height: calc(100dvh - 9rem);
+    overflow: auto;
+    border: 1px solid var(--viewer-border);
+    border-radius: 0.875rem;
+    padding: 0.75rem;
+    background: color-mix(in oklch, var(--viewer-surface-raised) 94%, transparent);
+    color: var(--viewer-text);
+    box-shadow: var(--viewer-shadow);
+    backdrop-filter: blur(16px);
+  }
+
+  .fullscreen-viewer__shortcut-help-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding-block-end: 0.5rem;
+  }
+
+  .fullscreen-viewer__shortcut-help-header h4 {
+    margin: 0;
+    font-size: 0.875rem;
+    font-weight: 700;
+    line-height: 1.25;
+  }
+
+  .fullscreen-viewer__shortcut-help-header .viewer-icon-button {
+    width: 2.25rem;
+    min-width: 2.25rem;
+    height: 2.25rem;
+    min-height: 2.25rem;
+  }
+
+  .fullscreen-viewer__shortcut-list {
+    display: grid;
+    margin: 0;
+  }
+
+  .fullscreen-viewer__shortcut-list > div {
+    display: grid;
+    grid-template-columns: minmax(8rem, 0.85fr) minmax(10rem, 1.15fr);
+    gap: 1rem;
+    align-items: baseline;
+    padding-block: 0.5rem;
+  }
+
+  .fullscreen-viewer__shortcut-list > div + div {
+    border-block-start: 1px solid var(--viewer-border);
+  }
+
+  .fullscreen-viewer__shortcut-list dt,
+  .fullscreen-viewer__shortcut-list dd {
+    margin: 0;
+    font-size: 0.75rem;
+    line-height: 1.35;
+  }
+
+  .fullscreen-viewer__shortcut-list dt {
+    color: var(--viewer-text-muted);
+  }
+
+  .fullscreen-viewer__shortcut-list dd {
+    color: var(--viewer-text);
+    font-variant-numeric: tabular-nums;
+    text-align: end;
+  }
+
   .fullscreen-viewer__footer {
     flex-shrink: 0;
     padding: 0.5rem 1.5rem;
@@ -545,9 +879,77 @@
     text-align: center;
   }
 
+  @media (max-width: 40rem) {
+    .fullscreen-viewer__topbar-actions {
+      justify-content: flex-start;
+      overflow-x: auto;
+      overscroll-behavior-inline: contain;
+      scrollbar-width: none;
+    }
+
+    .fullscreen-viewer__topbar-actions::-webkit-scrollbar {
+      display: none;
+    }
+
+    .fullscreen-viewer__toolbar-center {
+      display: contents;
+      overflow: visible;
+    }
+
+    .fullscreen-viewer__topbar-actions .viewer-icon-button {
+      width: var(--ui-icon-button-size);
+      min-width: var(--ui-icon-button-size);
+      height: var(--ui-icon-button-size);
+      min-height: var(--ui-icon-button-size);
+    }
+
+    .fullscreen-viewer__topbar-group .fullscreen-viewer__title,
+    .fullscreen-viewer__topbar-group .fullscreen-viewer__status {
+      display: none;
+    }
+
+    .fullscreen-viewer__mode-label {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip: rect(0 0 0 0);
+      clip-path: inset(50%);
+      white-space: nowrap;
+    }
+
+    .fullscreen-viewer__mode-button {
+      width: 2.75rem;
+      min-width: 2.75rem;
+      min-height: 2.75rem;
+      padding-inline: 0;
+    }
+
+    .fullscreen-viewer__shortcut-help {
+      inset-block-start: auto;
+      inset-inline: 0.75rem;
+      inset-block-end: 4rem;
+      width: auto;
+      max-height: min(65dvh, 32rem);
+    }
+
+    .fullscreen-viewer__shortcut-list > div {
+      grid-template-columns: 1fr;
+      gap: 0.125rem;
+    }
+
+    .fullscreen-viewer__shortcut-list dd {
+      text-align: start;
+    }
+
+    .fullscreen-viewer__footer {
+      display: none;
+    }
+  }
+
   @media (prefers-reduced-motion: reduce) {
     .fullscreen-viewer__stage,
-    .fullscreen-viewer__media--original {
+    .fullscreen-viewer__media-stack > .fullscreen-viewer__media {
       transition-duration: 0.01ms;
     }
   }

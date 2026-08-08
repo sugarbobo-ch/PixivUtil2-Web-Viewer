@@ -126,6 +126,48 @@ export const parseGridMetrics = (element: HTMLElement): GridMetrics | null => {
   };
 };
 
+export const MIN_VISIBLE_AREA_RATIO = 0.5;
+
+interface RectEdges {
+  top: number;
+  right: number;
+  bottom: number;
+  left: number;
+}
+
+export interface VisibleAreaMetrics {
+  area: number;
+  visibleArea: number;
+  visibleRatio: number;
+}
+
+/**
+ * Measure the part of an element that remains inside the effective viewport.
+ * This is intentionally area-based so a tall image with only a small strip
+ * visible cannot become the mode-switch anchor.
+ */
+export const getVisibleAreaMetrics = (
+  rect: Pick<DOMRect, 'top' | 'right' | 'bottom' | 'left' | 'width' | 'height'>,
+  viewport: RectEdges,
+): VisibleAreaMetrics => {
+  const visibleWidth = Math.max(
+    0,
+    Math.min(rect.right, viewport.right) - Math.max(rect.left, viewport.left),
+  );
+  const visibleHeight = Math.max(
+    0,
+    Math.min(rect.bottom, viewport.bottom) - Math.max(rect.top, viewport.top),
+  );
+  const area = Math.max(0, rect.width * rect.height);
+  const visibleArea = visibleWidth * visibleHeight;
+
+  return {
+    area,
+    visibleArea,
+    visibleRatio: area > 0 ? visibleArea / area : 0,
+  };
+};
+
 /**
  * Return the scrollTop that places an element's top edge at the scroll
  * container's top edge.  Using the two rectangles directly is important here:
@@ -148,4 +190,69 @@ export const scrollElementToContainerStart = (
   const top = getScrollTopForElement(container, element);
   container.scrollTo({ top, behavior });
   return top;
+};
+
+/**
+ * Return the first card in the uppermost visible grid row.
+ *
+ * The gallery is virtualized, so this intentionally works from the mounted
+ * cards instead of deriving an index from scrollTop. The upper-left card is
+ * used only when at least half of its visible area remains; this prevents a
+ * card with a small sliver below the sticky month header from becoming the
+ * transition anchor.
+ */
+export const getFirstVisibleGridCardIndex = (container: HTMLElement) => {
+  const containerRect = container.getBoundingClientRect();
+  const stickyHeaderBottom = Array.from(
+    container.querySelectorAll<HTMLElement>('.gallery-month-header'),
+  )
+    .map(header => header.getBoundingClientRect())
+    .filter(rect => rect.top <= containerRect.top + 1 && rect.bottom > containerRect.top + 1)
+    .reduce((bottom, rect) => Math.max(bottom, rect.bottom), containerRect.top);
+  const viewport = {
+    top: Math.min(containerRect.bottom, Math.max(containerRect.top, stickyHeaderBottom)),
+    right: containerRect.right,
+    bottom: containerRect.bottom,
+    left: containerRect.left,
+  };
+  const cards = Array.from(
+    container.querySelectorAll<HTMLElement>('[data-selection-card="true"][data-gallery-index]'),
+  );
+  const visibleCards = cards
+    .map(card => {
+      const rect = card.getBoundingClientRect();
+      return {
+        card,
+        rect,
+        ...getVisibleAreaMetrics(rect, viewport),
+      };
+    })
+    .filter(({ visibleArea, area }) => visibleArea > 0 && area > 0);
+  const mostlyVisibleCards = visibleCards.filter(
+    ({ visibleRatio }) => visibleRatio >= MIN_VISIBLE_AREA_RATIO,
+  );
+  const candidates = mostlyVisibleCards.length > 0
+    ? mostlyVisibleCards
+    : visibleCards;
+  if (candidates.length === 0) return null;
+
+  const uppermostTop = Math.min(...candidates.map(({ rect }) => rect.top));
+  const uppermostRow = candidates
+    .filter(({ rect }) => Math.abs(rect.top - uppermostTop) <= 1)
+    .sort((left, right) => left.rect.left - right.rect.left);
+  const index = Number(uppermostRow[0]?.card.dataset.galleryIndex);
+  return Number.isInteger(index) && index >= 0 ? index : null;
+};
+
+/**
+ * Align a grid card's row below its sticky month header.  Aligning the card
+ * itself to the container edge would leave it hidden behind that header.
+ */
+export const getGridRowScrollTop = (container: HTMLElement, card: HTMLElement) => {
+  const sectionHeader = card
+    .closest<HTMLElement>('.gallery-month-section')
+    ?.querySelector<HTMLElement>('.gallery-month-header');
+  const headerHeight = sectionHeader?.getBoundingClientRect().height ?? 0;
+  const sectionGap = 12;
+  return Math.max(0, getScrollTopForElement(container, card) - headerHeight - sectionGap);
 };

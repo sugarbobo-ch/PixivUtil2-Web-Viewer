@@ -8,6 +8,7 @@ import { getTimeFilterLabel } from '../utils/timeFilterLabels';
 import { CheckSquare, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, ArrowUpDown, Search, Filter, X, RotateCcw, List } from 'lucide-react';
 import { GalleryMonthSection } from './GalleryMonthSection';
 import { GalleryThumbnail } from './GalleryThumbnail';
+import { getGridRowScrollTop } from '../utils/galleryLayout';
 
 interface GalleryGridProps {
   images: ImageItem[];
@@ -44,6 +45,8 @@ interface GalleryGridProps {
   navigationMode?: 'idle' | 'click-scrolling' | 'scrubbing-preview' | 'scrubbing-settle' | 'scrubbing-commit';
   destinationMonthKey?: string | null;
   destinationGlobalIndex?: number | null;
+  restoreGlobalIndex?: number | null;
+  restoreRequestId?: number;
   isLoading?: boolean;
   isArtistLoading?: boolean;
   isArtistUpdating?: boolean;
@@ -137,6 +140,8 @@ export const GalleryGrid: React.FC<GalleryGridProps> = ({
   navigationMode = 'idle',
   destinationMonthKey = null,
   destinationGlobalIndex = null,
+  restoreGlobalIndex = null,
+  restoreRequestId = 0,
   isLoading = false,
   isArtistLoading = false,
   isArtistUpdating = false,
@@ -339,6 +344,45 @@ export const GalleryGrid: React.FC<GalleryGridProps> = ({
     scrollContainerRef.current = container;
     setScrollTick(tick => tick + 1);
   }, [getScrollContainer, images.length, groupMangaPosts]);
+
+  // A mode switch should reopen the grid with the active image's row at the
+  // top of the reading area.  The target may be outside the first virtual
+  // window, so GalleryMonthSection forces that row into the mounted range and
+  // this effect retries until the card is available.
+  React.useLayoutEffect(() => {
+    if (restoreGlobalIndex === null || restoreRequestId === 0) return undefined;
+
+    let frameId: number | null = null;
+    let attempts = 0;
+    let cancelled = false;
+
+    const restore = () => {
+      if (cancelled) return;
+
+      const root = galleryRootRef.current;
+      const container = getScrollContainer();
+      const target = root?.querySelector<HTMLElement>(
+        `[data-selection-card="true"][data-gallery-index="${restoreGlobalIndex}"],`
+        + `[data-selection-card="true"][data-gallery-indices~="${restoreGlobalIndex}"]`,
+      );
+
+      if (container && target) {
+        const top = getGridRowScrollTop(container, target);
+        if (Math.abs(container.scrollTop - top) > 0.5) {
+          container.scrollTo({ top, behavior: 'auto' });
+        }
+      }
+
+      attempts += 1;
+      if (attempts < 12) frameId = window.requestAnimationFrame(restore);
+    };
+
+    frameId = window.requestAnimationFrame(restore);
+    return () => {
+      cancelled = true;
+      if (frameId !== null) window.cancelAnimationFrame(frameId);
+    };
+  }, [getScrollContainer, restoreGlobalIndex, restoreRequestId]);
 
   React.useEffect(() => {
     const container = scrollContainerRef.current;
@@ -643,6 +687,9 @@ export const GalleryGrid: React.FC<GalleryGridProps> = ({
     label: groupedByMonth[mKey].label,
     count: groupedByMonth[mKey].items.length,
   }));
+  const restoreMonthKey = restoreGlobalIndex !== null
+    ? getMonthKeyForLayout(images[restoreGlobalIndex]?.created_date)
+    : null;
 
   return (
     <div
@@ -876,6 +923,7 @@ export const GalleryGrid: React.FC<GalleryGridProps> = ({
                 navigationMode={navigationMode}
                 destinationMonthKey={destinationMonthKey}
                 destinationGlobalIndex={destinationGlobalIndex}
+                restoreGlobalIndex={restoreMonthKey === mKey ? restoreGlobalIndex : null}
               />
             ))}
 
