@@ -126,15 +126,17 @@ def generate_thumbnail_once(thumb_path: str, generator) -> bool:
 
 DEFAULT_WEB_CONFIG = {
     "webTheme": "dark",
-    "defaultViewMode": "grid",
+    "defaultViewMode": "fullscreen",
     "thumbnailSize": 320,
     "itemsPerPage": 200,
     "autoOpenBrowser": True,
     "pixivConfigPath": "",
     "groupMangaPosts": False,
     "blurEnabled": False,
+    "demoMode": False,
     "preloadImageCount": 3,
     "fullscreenToolbarSimpleMode": True,
+    "fullscreenShowThumbnails": True,
     "webtoonImageScale": 100,
     "webtoonImageGap": 24,
     "webtoonShowInfo": True,
@@ -157,6 +159,11 @@ def normalize_web_config_file(data: Any) -> Dict[str, Any]:
     current.pop("mosaicEnabled", None)
 
     normalized = {**DEFAULT_WEB_CONFIG, **current}
+    # The preferred browsing mode is a reader mode only. Older configs used
+    # ``grid`` for the library entry screen; migrate that value to fullscreen.
+    normalized["defaultViewMode"] = (
+        "webtoon" if normalized.get("defaultViewMode") == "webtoon" else "fullscreen"
+    )
 
     # Preserve the old thumbnailWidth/thumbnailHeight settings during migration.
     if "thumbnailSize" not in current:
@@ -165,7 +172,14 @@ def normalize_web_config_file(data: Any) -> Dict[str, Any]:
             current.get("thumbnailHeight", DEFAULT_WEB_CONFIG["thumbnailSize"]),
         )
 
-    for key in ("analyzeColorsAfterLibraryUpdate", "manageThumbnailCache", "fullscreenToolbarSimpleMode"):
+    for key in (
+        "blurEnabled",
+        "demoMode",
+        "analyzeColorsAfterLibraryUpdate",
+        "manageThumbnailCache",
+        "fullscreenToolbarSimpleMode",
+        "fullscreenShowThumbnails",
+    ):
         value = normalized.get(key)
         if isinstance(value, str):
             normalized[key] = value.strip().lower() not in {"", "0", "false", "no", "off"}

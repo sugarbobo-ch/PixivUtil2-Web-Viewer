@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import { AlertTriangle, RefreshCw, Trash2 } from 'lucide-react';
+import { Button } from './ui/Button';
 
 type ConfirmModalVariant = 'danger' | 'primary';
 
@@ -63,7 +64,6 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({
   const HeaderIcon = isPrimary ? RefreshCw : AlertTriangle;
   const ActionIcon = isPrimary ? RefreshCw : Trash2;
   const iconClassName = isPrimary ? 'settings-modal__primary-icon' : 'settings-modal__danger-icon';
-  const actionClassName = isPrimary ? 'settings-modal__primary-button' : 'settings-modal__danger-button';
 
   return (
     <div
@@ -76,7 +76,7 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({
         aria-modal="true"
         aria-labelledby="confirm-modal-title"
         aria-describedby="confirm-modal-message"
-        className="settings-modal__confirm-panel w-full max-w-md space-y-4 rounded-2xl p-6 shadow-2xl"
+        className="settings-modal__confirm-panel w-full max-w-md space-y-4 rounded-2xl p-6"
       >
         <div className="flex items-center gap-3">
           <div className={`${iconClassName} rounded-lg p-2.5`}>
@@ -88,23 +88,23 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({
         <p id="confirm-modal-message" className="settings-modal__confirm-text text-sm leading-relaxed">{message}</p>
 
         <div className="flex items-center justify-end gap-3 border-t border-[var(--settings-border)] pt-3">
-          <button
+          <Button
             ref={cancelButtonRef}
             type="button"
             onClick={onCancel}
-            className="settings-modal__secondary-button min-h-11 rounded-xl px-4 py-2 text-xs font-semibold transition-[background-color,transform] active:scale-[0.96] focus-visible:outline-2 focus-visible:outline-offset-2"
+            variant="plain"
           >
             {cancelLabel}
-          </button>
+          </Button>
 
-          <button
+          <Button
             type="button"
             onClick={onConfirm}
-            className={`${actionClassName} inline-flex min-h-11 items-center gap-1.5 rounded-xl px-4 py-2 text-xs font-semibold transition-[background-color,transform] active:scale-[0.96] focus-visible:outline-2 focus-visible:outline-offset-2`}
+            variant={isPrimary ? 'primary' : 'danger'}
           >
             <ActionIcon className="w-4 h-4" aria-hidden="true" />
             <span>{confirmLabel}</span>
-          </button>
+          </Button>
         </div>
       </div>
     </div>

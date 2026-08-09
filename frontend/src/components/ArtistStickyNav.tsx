@@ -1,7 +1,8 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { ArrowUpDown, Check, ChevronDown, ChevronUp, ExternalLink, FilterX, List, Pencil, RefreshCw, Settings2 } from 'lucide-react';
+import { ArrowUpDown, Check, ExternalLink, FilterX, List, MoreHorizontal, Pencil, RefreshCw, Settings2 } from 'lucide-react';
 import { Artist } from '../types';
 import { fetchArtistSourceLinks } from '../utils/sourceLinks';
+import { Button, IconButton } from './ui/Button';
 
 type GallerySortMode = 'newest_month' | 'oldest_month' | 'oldest' | 'natural_name';
 
@@ -164,9 +165,9 @@ export const ArtistStickyNav: React.FC<ArtistStickyNavProps> = ({
   const hasPageSizeOptions = Boolean(itemsPerPage !== undefined && itemsPerPageOptions?.length && onItemsPerPageChange);
   const hasOptions = Boolean(onRequestUpdate || onOpenSettings || onToggleEditMode || onClearArtist || hasSortOptions || hasPageSizeOptions);
   const hasArtistActions = hasArtist && Boolean(onRequestUpdate || onOpenSettings);
+  const hasDesktopArtistOptions = hasArtist && Boolean(onRequestUpdate || onOpenSettings || onClearArtist);
   const hasViewOptions = hasSortOptions || hasPageSizeOptions;
   const hasTailActions = Boolean(onToggleEditMode || (hasArtist && onClearArtist));
-  const OptionsIcon = isOptionsOpen ? ChevronUp : ChevronDown;
 
   return (
     <nav className="artist-sticky-nav" aria-label="目前繪師">
@@ -180,7 +181,9 @@ export const ArtistStickyNav: React.FC<ArtistStickyNavProps> = ({
             href={pixivUrl}
             target="_blank"
             rel="noreferrer noopener"
-            className="artist-sticky-nav__artist-link"
+            className="ui-button artist-sticky-nav__artist-link"
+            data-variant="secondary"
+            data-size="md"
             aria-label={`在 Pixiv 開啟 ${displayName} @${verifiedMemberId}`}
             title={`在 Pixiv 開啟 ${displayName}`}
           >
@@ -198,25 +201,15 @@ export const ArtistStickyNav: React.FC<ArtistStickyNavProps> = ({
             href={fanboxUrl}
             target="_blank"
             rel="noreferrer noopener"
-            className="artist-sticky-nav__platform-link"
+            className="ui-button artist-sticky-nav__platform-link"
+            data-variant="secondary"
+            data-size="md"
             aria-label={`在 FANBOX 開啟 ${displayName}`}
             title={`在 FANBOX 開啟 ${displayName}`}
           >
             <span>FANBOX</span>
-            <ExternalLink className="h-3 w-3" aria-hidden="true" />
+            <ExternalLink aria-hidden="true" />
           </a>
-        )}
-        {hasArtist && onClearArtist && (
-          <button
-            type="button"
-            className="artist-sticky-nav__clear"
-            onClick={onClearArtist}
-            aria-label={`清除繪師篩選：${displayName}`}
-            title="清除繪師篩選"
-          >
-            <FilterX className="h-5 w-5" aria-hidden="true" />
-            <span>清除繪師篩選</span>
-          </button>
         )}
         {hasArtist && (isLoading || isUpdating) && (
           <span className="artist-sticky-nav__status" role="status" aria-live="polite">
@@ -224,47 +217,24 @@ export const ArtistStickyNav: React.FC<ArtistStickyNavProps> = ({
             {isUpdating ? '背景更新中…' : '載入作品中…'}
           </span>
         )}
-        {hasArtist && onRequestUpdate && (
-          <button
-            type="button"
-            className="artist-sticky-nav__manage artist-sticky-nav__manage--update"
-            onClick={onRequestUpdate}
-            disabled={isUpdating}
-            aria-label={`更新 ${displayName} 的作品資料`}
-            title="在背景更新圖片資料庫"
-          >
-            <RefreshCw className={`h-4 w-4 ${isUpdating ? 'is-active' : ''}`} aria-hidden="true" />
-            <span>更新</span>
-          </button>
-        )}
-        {hasArtist && onOpenSettings && (
-          <button
-            type="button"
-            className="artist-sticky-nav__manage artist-sticky-nav__manage--settings"
-            onClick={onOpenSettings}
-            aria-label={`開啟 ${displayName} 設定`}
-            title="繪師設定"
-          >
-            <Settings2 className="h-4 w-4" aria-hidden="true" />
-            <span>設定</span>
-          </button>
-        )}
         {hasOptions && (
-          <div className="artist-sticky-nav__options" ref={optionsRef}>
-            <button
+          <div className={`artist-sticky-nav__options${hasDesktopArtistOptions ? ' artist-sticky-nav__options--desktop' : ''}`} ref={optionsRef}>
+            <IconButton
               type="button"
               ref={optionsTriggerRef}
+              variant="ghost"
+              size="md"
               className="artist-sticky-nav__options-trigger"
               onClick={() => setIsOptionsOpen(open => !open)}
-              aria-label={hasArtist ? `開啟 ${displayName} 選單` : '開啟選項'}
+              aria-label={hasArtist ? `開啟 ${displayName} 更多操作` : '開啟更多選項'}
               aria-haspopup="menu"
               aria-expanded={isOptionsOpen}
               aria-controls="artist-sticky-nav-options-menu"
-              title="開啟選項"
+              title="開啟更多選項"
             >
-              <OptionsIcon className="h-5 w-5" aria-hidden="true" />
-              <span className="sr-only">開啟選項</span>
-            </button>
+              <MoreHorizontal className="h-5 w-5" aria-hidden="true" />
+              <span className="sr-only">開啟更多選項</span>
+            </IconButton>
             {isOptionsOpen && (
               <div
                 id="artist-sticky-nav-options-menu"
@@ -277,9 +247,12 @@ export const ArtistStickyNav: React.FC<ArtistStickyNavProps> = ({
                   <div className="artist-sticky-nav__options-group" role="group" aria-labelledby="artist-sticky-nav-artist-group-label">
                     <p id="artist-sticky-nav-artist-group-label" className="artist-sticky-nav__options-heading">繪師</p>
                     {hasArtist && onRequestUpdate && (
-                      <button
+                      <Button
                         type="button"
                         role="menuitem"
+                        variant="ghost"
+                        size="md"
+                        fullWidth
                         className="artist-sticky-nav__options-item"
                         onClick={() => {
                           setIsOptionsOpen(false);
@@ -289,12 +262,15 @@ export const ArtistStickyNav: React.FC<ArtistStickyNavProps> = ({
                       >
                         <RefreshCw className={`h-4 w-4 ${isUpdating ? 'is-active' : ''}`} aria-hidden="true" />
                         <span className="artist-sticky-nav__options-item-label">{isUpdating ? '更新中…' : '更新作品資料'}</span>
-                      </button>
+                      </Button>
                     )}
                     {hasArtist && onOpenSettings && (
-                      <button
+                      <Button
                         type="button"
                         role="menuitem"
+                        variant="ghost"
+                        size="md"
+                        fullWidth
                         className="artist-sticky-nav__options-item"
                         onClick={() => {
                           setIsOptionsOpen(false);
@@ -303,7 +279,7 @@ export const ArtistStickyNav: React.FC<ArtistStickyNavProps> = ({
                       >
                         <Settings2 className="h-4 w-4" aria-hidden="true" />
                         <span className="artist-sticky-nav__options-item-label">繪師設定</span>
-                      </button>
+                      </Button>
                     )}
                   </div>
                 )}
@@ -311,18 +287,21 @@ export const ArtistStickyNav: React.FC<ArtistStickyNavProps> = ({
                   <div className="artist-sticky-nav__options-separator" role="separator" />
                 )}
                 {hasViewOptions && (
-                  <div className="artist-sticky-nav__options-group" role="group" aria-labelledby="artist-sticky-nav-view-group-label">
+                  <div className="artist-sticky-nav__options-group artist-sticky-nav__options-group--view" role="group" aria-labelledby="artist-sticky-nav-view-group-label">
                     <p id="artist-sticky-nav-view-group-label" className="artist-sticky-nav__options-heading">瀏覽</p>
                     {hasSortOptions && (
                       <>
                         <p className="artist-sticky-nav__options-subheading">排序方式</p>
                         {sortOptions?.map(option => (
-                          <button
+                          <Button
                             key={option.value}
                             type="button"
                             role="menuitemradio"
                             aria-checked={option.value === sortMode}
-                            className={`artist-sticky-nav__options-item${option.value === sortMode ? ' is-selected' : ''}`}
+                            variant={option.value === sortMode ? 'primary' : 'ghost'}
+                            size="md"
+                            fullWidth
+                            className="artist-sticky-nav__options-item"
                             title={option.description}
                             onClick={() => {
                               setIsOptionsOpen(false);
@@ -332,7 +311,7 @@ export const ArtistStickyNav: React.FC<ArtistStickyNavProps> = ({
                             <ArrowUpDown className="h-4 w-4" aria-hidden="true" />
                             <span className="artist-sticky-nav__options-item-label">{option.label}</span>
                             <Check className="artist-sticky-nav__options-item-check" aria-hidden="true" />
-                          </button>
+                          </Button>
                         ))}
                       </>
                     )}
@@ -340,12 +319,15 @@ export const ArtistStickyNav: React.FC<ArtistStickyNavProps> = ({
                       <>
                         <p className="artist-sticky-nav__options-subheading">每頁顯示</p>
                         {itemsPerPageOptions?.map(option => (
-                          <button
+                          <Button
                             key={option.value}
                             type="button"
                             role="menuitemradio"
                             aria-checked={option.value === itemsPerPage}
-                            className={`artist-sticky-nav__options-item${option.value === itemsPerPage ? ' is-selected' : ''}`}
+                            variant={option.value === itemsPerPage ? 'primary' : 'ghost'}
+                            size="md"
+                            fullWidth
+                            className="artist-sticky-nav__options-item"
                             onClick={() => {
                               setIsOptionsOpen(false);
                               onItemsPerPageChange?.(option.value);
@@ -355,24 +337,27 @@ export const ArtistStickyNav: React.FC<ArtistStickyNavProps> = ({
                             <List className="h-4 w-4" aria-hidden="true" />
                             <span className="artist-sticky-nav__options-item-label">{option.label}</span>
                             <Check className="artist-sticky-nav__options-item-check" aria-hidden="true" />
-                          </button>
+                          </Button>
                         ))}
                       </>
                     )}
                   </div>
                 )}
                 {hasViewOptions && hasTailActions && (
-                  <div className="artist-sticky-nav__options-separator" role="separator" />
+                  <div className="artist-sticky-nav__options-separator artist-sticky-nav__options-separator--view" role="separator" />
                 )}
                 {hasTailActions && (
-                  <div className="artist-sticky-nav__options-group" role="group" aria-labelledby="artist-sticky-nav-actions-group-label">
+                  <div className="artist-sticky-nav__options-group artist-sticky-nav__options-group--actions" role="group" aria-labelledby="artist-sticky-nav-actions-group-label">
                     <p id="artist-sticky-nav-actions-group-label" className="artist-sticky-nav__options-heading">操作</p>
                     {onToggleEditMode && (
-                      <button
+                      <Button
                         type="button"
                         role="menuitemcheckbox"
                         aria-checked={isEditMode}
-                        className={`artist-sticky-nav__options-item${isEditMode ? ' is-active' : ''}`}
+                        variant={isEditMode ? 'primary' : 'ghost'}
+                        size="md"
+                        fullWidth
+                        className="artist-sticky-nav__options-item artist-sticky-nav__options-item--edit-mode"
                         onClick={() => {
                           setIsOptionsOpen(false);
                           onToggleEditMode();
@@ -380,12 +365,15 @@ export const ArtistStickyNav: React.FC<ArtistStickyNavProps> = ({
                       >
                         <Pencil className="h-4 w-4" aria-hidden="true" />
                         <span className="artist-sticky-nav__options-item-label">{isEditMode ? '結束編輯模式' : '編輯'}</span>
-                      </button>
+                      </Button>
                     )}
                     {hasArtist && onClearArtist && (
-                      <button
+                      <Button
                         type="button"
                         role="menuitem"
+                        variant="plain"
+                        size="sm"
+                        fullWidth
                         className="artist-sticky-nav__options-item"
                         onClick={() => {
                           setIsOptionsOpen(false);
@@ -394,7 +382,7 @@ export const ArtistStickyNav: React.FC<ArtistStickyNavProps> = ({
                       >
                         <FilterX className="h-4 w-4" aria-hidden="true" />
                         <span className="artist-sticky-nav__options-item-label">清除繪師篩選</span>
-                      </button>
+                      </Button>
                     )}
                   </div>
                 )}

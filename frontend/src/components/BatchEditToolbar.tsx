@@ -1,5 +1,6 @@
 import React from 'react';
 import { CheckSquare, Download, LoaderCircle, Square, Trash2, X } from 'lucide-react';
+import { Button, IconButton } from './ui/Button';
 
 interface BatchEditToolbarProps {
   selectedCount: number;
@@ -37,45 +38,49 @@ export const BatchEditToolbar: React.FC<BatchEditToolbarProps> = ({
       </div>
 
       <div className="batch-edit-toolbar__actions">
-        <button
+        <Button
           type="button"
           onClick={allSelected ? onDeselectAll : onSelectAll}
+          variant={allSelected ? 'primary' : 'secondary'}
           className={`batch-edit-toolbar__button batch-edit-toolbar__button--secondary${allSelected ? ' is-active' : ''}`}
           aria-pressed={allSelected}
         >
           {allSelected ? <CheckSquare aria-hidden="true" /> : <Square aria-hidden="true" />}
           <span>{allSelected ? '取消全選' : '全選'}</span>
-        </button>
+        </Button>
 
-        <button
+        <Button
           type="button"
           onClick={onDownloadSelected}
           disabled={selectedCount === 0 || isDownloading}
+          variant="primary"
           className="batch-edit-toolbar__button batch-edit-toolbar__button--primary"
         >
           {isDownloading ? <LoaderCircle className="batch-edit-toolbar__spinner" aria-hidden="true" /> : <Download aria-hidden="true" />}
           <span>{isDownloading ? '準備 ZIP…' : '下載 ZIP'}</span>
-        </button>
+        </Button>
 
-        <button
+        <Button
           type="button"
           onClick={onDeleteSelected}
           disabled={selectedCount === 0 || isDownloading}
+          variant="danger"
           className="batch-edit-toolbar__button batch-edit-toolbar__button--danger"
         >
           <Trash2 aria-hidden="true" />
           <span>移至回收區 ({selectedCount})</span>
-        </button>
+        </Button>
 
-        <button
+        <IconButton
           type="button"
           onClick={onCancel}
+          variant="ghost"
           className="batch-edit-toolbar__close"
           aria-label="取消編輯模式"
           title="取消編輯模式"
         >
           <X aria-hidden="true" />
-        </button>
+        </IconButton>
       </div>
 
       {downloadError && (

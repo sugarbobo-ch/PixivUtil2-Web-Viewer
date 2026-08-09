@@ -1,5 +1,5 @@
 import React from 'react';
-import { Calendar, Check, Film, Layers, Square, CheckSquare } from 'lucide-react';
+import { Calendar, Check, Copy, Film, Square, CheckSquare } from 'lucide-react';
 import { ImageItem, WorkGroup } from '../types';
 import { getItemGroupKey } from '../utils/grouping';
 import { buildThumbnailUrl } from '../utils/webConfig';
@@ -14,6 +14,7 @@ import {
 import { ImagePriority } from '../utils/imageLoadScheduler';
 import { GalleryThumbnail } from './GalleryThumbnail';
 import { MediaIssuePlaceholder } from './MediaIssuePlaceholder';
+import { Badge, Button } from './ui';
 
 export interface GalleryMonthGroup {
   key: string;
@@ -34,6 +35,7 @@ interface GalleryMonthSectionProps {
   handleCardClick: (event: React.MouseEvent<HTMLElement>, cardIds: number[], openCard: () => void) => void;
   handleCardKeyDown: (event: React.KeyboardEvent<HTMLElement>, cardIds: number[], openCard: () => void) => void;
   blurEnabled: boolean;
+  demoMode: boolean;
   scrollContainerRef: React.RefObject<HTMLElement | null>;
   scrollTick: number;
   navigationMode: 'idle' | 'click-scrolling' | 'scrubbing-preview' | 'scrubbing-settle' | 'scrubbing-commit';
@@ -79,6 +81,7 @@ export const GalleryMonthSection: React.FC<GalleryMonthSectionProps> = ({
   handleCardClick,
   handleCardKeyDown,
   blurEnabled,
+  demoMode,
   scrollContainerRef,
   scrollTick,
   navigationMode,
@@ -267,47 +270,57 @@ export const GalleryMonthSection: React.FC<GalleryMonthSectionProps> = ({
         onPointerDown={event => beginPointerGesture(event, card.key, card.ids)}
         onClick={event => handleCardClick(event, card.ids, openCard)}
         onKeyDown={event => handleCardKeyDown(event, card.ids, openCard)}
-        className={`gallery-card group relative aspect-square rounded-xl overflow-hidden bg-zinc-900 border border-zinc-800 transition-[border-color,box-shadow,transform,background-color] duration-200 cursor-pointer select-none ${
-          isSelected ? 'gallery-card--selected' : 'hover:border-zinc-700 hover:shadow-lg hover:shadow-indigo-500/10'
+        className={`gallery-card group relative aspect-square overflow-hidden rounded-lg cursor-pointer select-none ${
+          isSelected ? 'gallery-card--selected' : ''
         }${isEditMode ? ' gallery-card--editable' : ''}`}
       >
-        {card.item.media_status ? (
-          <MediaIssuePlaceholder message={card.item.media_error} />
-        ) : (
-          <GalleryThumbnail
-            src={buildThumbnailUrl(card.item, thumbnailSize)}
-            alt={card.item.title}
-            priority={priority}
-            loadEnabled={loadEnabled}
-            blurEnabled={blurEnabled}
-            dominantColor={card.item.dominant_color}
-          />
-        )}
+        <div className="gallery-card__media relative h-full min-w-0">
+          {card.item.media_status ? (
+            <MediaIssuePlaceholder message={card.item.media_error} />
+          ) : (
+            <GalleryThumbnail
+              src={buildThumbnailUrl(card.item, thumbnailSize)}
+              alt={card.item.title}
+              priority={priority}
+              loadEnabled={loadEnabled}
+              blurEnabled={blurEnabled}
+              demoMode={demoMode}
+              dominantColor={card.item.dominant_color}
+            />
+          )}
 
-        {card.workGroup && (
-          <div className="gallery-card__group-count viewer-group-badge absolute top-2 right-2 px-2 py-0.5 rounded-md font-bold text-xs flex items-center gap-1">
-            <Layers className="w-3.5 h-3.5" />
-            <span>{card.workGroup.items.length}P</span>
-          </div>
-        )}
+          {card.workGroup && (
+            <Badge variant="hud" size="xs" className="gallery-card__group-count">
+              <Copy className="w-3.5 h-3.5" aria-hidden="true" />
+              <span>{card.workGroup.items.length}</span>
+            </Badge>
+          )}
 
-        {isVideo && (
-          <div className="gallery-card__video-badge absolute top-2 right-2 p-1.5 rounded-full bg-black/60 backdrop-blur-md text-white">
-            <Film className="w-3.5 h-3.5" />
-          </div>
-        )}
+          {isVideo && (
+            <Badge variant="hud" size="sm" iconOnly className="gallery-card__video-badge">
+              <Film className="w-3.5 h-3.5" aria-hidden="true" />
+            </Badge>
+          )}
 
-        {isEditMode && (
-          <div className="absolute top-2 left-2 z-10">
-            <div className={`gallery-selection-indicator${isSelected ? ' is-selected' : ''}`} aria-hidden="true">
-              <Check className="w-4 h-4" />
+          {isEditMode && (
+            <div className="absolute inset-block-start-2 inset-inline-start-2 z-10">
+              <div className={`gallery-selection-indicator${isSelected ? ' is-selected' : ''}`} aria-hidden="true">
+                <Check className="w-4 h-4" />
+              </div>
             </div>
-          </div>
-        )}
+          )}
+        </div>
 
-        <div className="gallery-card__overlay pointer-events-none absolute inset-x-0 bottom-0 p-2.5 bg-gradient-to-t from-black/80 via-black/40 to-transparent opacity-0 group-hover:opacity-100 transition-opacity">
-          <p className="text-xs font-medium text-white truncate">{card.item.title || '無題'}</p>
-          <p className="text-[10px] text-zinc-400 truncate">{card.item.artist_name || `繪師 ID: ${card.item.member_id}`}</p>
+        <div
+          className="gallery-card__caption pointer-events-none absolute inset-inline-0 inset-block-end-0"
+          aria-hidden="true"
+        >
+          <p className="gallery-card__title" title={card.item.title || '無題'}>
+            {card.item.title || '無題'}
+          </p>
+          <p className="gallery-card__artist" title={card.item.artist_name || `繪師 ID: ${card.item.member_id}`}>
+            {card.item.artist_name || `繪師 ID: ${card.item.member_id}`}
+          </p>
         </div>
       </div>
     );
@@ -320,31 +333,33 @@ export const GalleryMonthSection: React.FC<GalleryMonthSectionProps> = ({
   return (
     <div ref={sectionRef} id={`month-section-${group.key}`} className="gallery-month-section space-y-3">
       <div
-        className="gallery-month-header sticky z-10 py-2 px-3.5 bg-zinc-900/90 backdrop-blur border border-zinc-800/80 rounded-xl flex items-center justify-between shadow-md"
-        style={{ top: '-1rem' }}
+        className="gallery-month-header sticky z-10 flex items-center justify-between rounded-lg"
+        style={{ top: 'calc(-1 * var(--gallery-grid-edge, 1rem))' }}
       >
-        <div className="gallery-month-header__title flex items-center gap-2 text-xs font-bold text-indigo-300">
-          <Calendar className="w-4 h-4 text-indigo-400" />
+        <div className="gallery-month-header__title flex items-center gap-2 text-xs font-bold">
+          <Calendar className="gallery-month-header__icon w-4 h-4" aria-hidden="true" />
           <span>{group.label}</span>
         </div>
         <div className="gallery-month-header__actions">
-          <span className="gallery-month-header__count gallery-month-header__count--full text-[11px] font-medium text-zinc-400">
+          <span className="gallery-month-header__count gallery-month-header__count--full">
             此月份共有 {group.items.length} 張作品
           </span>
-          <span className="gallery-month-header__count gallery-month-header__count--compact text-[11px] font-medium text-zinc-400" aria-hidden="true">
+          <span className="gallery-month-header__count gallery-month-header__count--compact" aria-hidden="true">
             {group.items.length} 張
           </span>
           {isEditMode && (
-            <button
+            <Button
               type="button"
               onClick={() => onSetSelection(monthIds, !isMonthSelected)}
+              variant={isMonthSelected ? 'primary' : 'secondary'}
+              size="sm"
               className={`gallery-month-select${isMonthSelected ? ' is-selected' : ''}`}
               aria-pressed={isMonthSelected}
               title={`${isMonthSelected ? '取消' : '選取'}目前頁面中的${group.label}作品`}
             >
               {isMonthSelected ? <CheckSquare aria-hidden="true" /> : <Square aria-hidden="true" />}
               <span>{isMonthSelected ? '取消本月' : '選取本月'}</span>
-            </button>
+            </Button>
           )}
         </div>
       </div>

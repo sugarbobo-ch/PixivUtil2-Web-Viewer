@@ -1,5 +1,6 @@
 import React from 'react';
 import { imageLoadScheduler, ImagePriority, useImageLoadPermission } from '../utils/imageLoadScheduler';
+import { DemoMediaBlock } from './DemoMediaBlock';
 
 interface GalleryThumbnailProps {
   src: string;
@@ -7,6 +8,7 @@ interface GalleryThumbnailProps {
   priority: ImagePriority;
   loadEnabled?: boolean;
   blurEnabled: boolean;
+  demoMode: boolean;
   dominantColor?: string;
 }
 
@@ -16,6 +18,7 @@ export const GalleryThumbnail: React.FC<GalleryThumbnailProps> = ({
   priority,
   loadEnabled = true,
   blurEnabled,
+  demoMode,
   dominantColor,
 }) => {
   const [loadState, setLoadState] = React.useState<'loading' | 'loaded' | 'error'>('loading');
@@ -24,9 +27,9 @@ export const GalleryThumbnail: React.FC<GalleryThumbnailProps> = ({
     priority,
     kind: 'thumbnail',
     owner: 'grid',
-    enabled: loadEnabled,
+    enabled: loadEnabled && !demoMode,
   });
-  const showCachedImage = !loadEnabled && imageLoadScheduler.isLoaded(src);
+  const showCachedImage = !demoMode && !loadEnabled && imageLoadScheduler.isLoaded(src);
   const shouldRenderImage = admitted || showCachedImage;
   const validatedDominantColor = /^#[0-9A-Fa-f]{6}$/.test(dominantColor ?? '')
     ? dominantColor
@@ -37,34 +40,40 @@ export const GalleryThumbnail: React.FC<GalleryThumbnailProps> = ({
 
   React.useEffect(() => {
     setLoadState('loading');
-  }, [src]);
+  }, [demoMode, src]);
 
   return (
     <div className={`gallery-thumbnail${loadState === 'loaded' ? ' is-ready' : ''}`} style={thumbnailStyle}>
-      {loadState !== 'loaded' && (
-        <div className="gallery-thumbnail__skeleton" aria-hidden="true" />
-      )}
-      {shouldRenderImage && (
-        <img
-          src={src}
-          alt={alt}
-          draggable={false}
-          loading={priority <= 1 ? 'eager' : 'lazy'}
-          decoding="async"
-          {...{ fetchpriority: priority <= 1 ? 'high' : 'low' }}
-          onLoad={() => {
-            imageLoadScheduler.markLoaded(src);
-            setLoadState('loaded');
-          }}
-          onError={() => {
-            imageLoadScheduler.markFinished(src, false);
-            setLoadState('error');
-          }}
-          className={`gallery-thumbnail__image w-full h-full object-cover ${loadState === 'loaded' ? 'is-loaded' : ''} ${blurEnabled ? 'blur-media blur-media--thumbnail' : 'transition-transform duration-300 group-hover:scale-105'}`}
-        />
-      )}
-      {loadState === 'error' && (
-        <span className="gallery-thumbnail__error" aria-hidden="true">縮圖載入失敗</span>
+      {demoMode ? (
+        <DemoMediaBlock dominantColor={dominantColor} className="gallery-thumbnail__demo-block" />
+      ) : (
+        <>
+          {loadState !== 'loaded' && (
+            <div className="gallery-thumbnail__skeleton" aria-hidden="true" />
+          )}
+          {shouldRenderImage && (
+            <img
+              src={src}
+              alt={alt}
+              draggable={false}
+              loading={priority <= 1 ? 'eager' : 'lazy'}
+              decoding="async"
+              {...{ fetchpriority: priority <= 1 ? 'high' : 'low' }}
+              onLoad={() => {
+                imageLoadScheduler.markLoaded(src);
+                setLoadState('loaded');
+              }}
+              onError={() => {
+                imageLoadScheduler.markFinished(src, false);
+                setLoadState('error');
+              }}
+              className={`gallery-thumbnail__image w-full h-full object-cover ${loadState === 'loaded' ? 'is-loaded' : ''} ${blurEnabled ? 'blur-media blur-media--thumbnail' : 'transition-transform duration-300 group-hover:scale-105'}`}
+            />
+          )}
+          {loadState === 'error' && (
+            <span className="gallery-thumbnail__error" aria-hidden="true">縮圖載入失敗</span>
+          )}
+        </>
       )}
     </div>
   );

@@ -1,0 +1,127 @@
+/* Shared badge primitive. Badges communicate status or metadata; they are
+   never interactive and always use a full pill radius. */
+.ui-badge {
+  --ui-badge-background: var(--neutral-control);
+  --ui-badge-border: var(--neutral-border);
+  --ui-badge-text: var(--neutral-text-1);
+
+  box-sizing: border-box;
+  display: inline-flex;
+  min-width: 0;
+  min-height: 1.5rem;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem;
+  border: 1px solid var(--ui-badge-border);
+  border-radius: 999px;
+  padding-block: 0.25rem;
+  padding-inline: 0.625rem;
+  background: var(--ui-badge-background);
+  color: var(--ui-badge-text);
+  font-size: var(--ui-font-caption);
+  font-weight: 600;
+  line-height: 1rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.ui-badge[data-size='xs'] {
+  min-height: 1.25rem;
+  padding-block: 0.125rem;
+  padding-inline: 0.5rem;
+}
+
+.ui-badge[data-size='md'] {
+  min-height: 1.75rem;
+  padding-inline: 0.75rem;
+}
+
+.ui-badge[data-variant='neutral'] {
+  --ui-badge-background: var(--neutral-control);
+  --ui-badge-border: var(--neutral-border);
+  --ui-badge-text: var(--neutral-text-1);
+}
+
+.ui-badge[data-variant='primary'] {
+  --ui-badge-background: color-mix(in oklch, var(--brand-default) 12%, var(--neutral-surface));
+  --ui-badge-border: color-mix(in oklch, var(--brand-default) 28%, var(--neutral-border));
+  --ui-badge-text: var(--brand-default);
+}
+
+.ui-badge[data-variant='hud'] {
+  --ui-badge-background: var(--viewer-hud-surface);
+  --ui-badge-border: var(--viewer-hud-border);
+  --ui-badge-text: var(--viewer-hud-text);
+}
+
+.ui-badge[data-variant='surface'] {
+  --ui-badge-background: color-mix(in oklch, var(--viewer-surface-raised) 92%, var(--viewer-control));
+  --ui-badge-border: var(--viewer-border);
+  --ui-badge-text: var(--viewer-text);
+}
+
+.ui-badge[data-variant='success'] {
+  --ui-badge-background: var(--status-success-soft);
+  --ui-badge-border: color-mix(in oklch, var(--status-success) 36%, var(--neutral-border));
+  --ui-badge-text: var(--status-success);
+}
+
+.ui-badge[data-variant='danger'] {
+  --ui-badge-background: var(--status-danger-soft);
+  --ui-badge-border: color-mix(in oklch, var(--status-danger) 36%, var(--neutral-border));
+  --ui-badge-text: var(--status-danger);
+}
+
+/* Keep legacy positioning classes from changing the shared geometry. */
+.ui-badge[data-variant] {
+  border-radius: 999px;
+}
+
+.ui-badge.ui-badge--icon {
+  width: 1.75rem;
+  min-width: 1.75rem;
+  height: 1.75rem;
+  min-height: 1.75rem;
+  padding: 0;
+  border-radius: 50%;
+}
+
+.ui-badge > svg {
+  width: 0.875rem;
+  height: 0.875rem;
+  flex: 0 0 auto;
+}
+
+/* Component scopes keep the same Badge API readable over viewer, modal and
+   settings surfaces in both appearances. */
+.gallery-grid-root .ui-badge,
+.manga-group-modal .ui-badge,
+.fullscreen-viewer .ui-badge {
+  --ui-badge-border: var(--viewer-border);
+}
+
+.settings-modal .ui-badge,
+.settings-modal__confirm-overlay .ui-badge,
+.recycle-bin-modal .ui-badge {
+  --ui-badge-background: var(--settings-control);
+  --ui-badge-border: var(--settings-border-soft);
+  --ui-badge-text: var(--settings-text);
+}
+
+.settings-modal .ui-badge[data-variant='primary'] {
+  --ui-badge-background: var(--settings-accent-soft);
+  --ui-badge-border: color-mix(in oklch, var(--settings-accent) 28%, var(--settings-border));
+  --ui-badge-text: var(--settings-accent-ink);
+}
+
+.settings-modal .ui-badge[data-variant='success'] {
+  --ui-badge-background: var(--settings-success-soft);
+  --ui-badge-border: color-mix(in oklch, var(--settings-success) 36%, var(--settings-border-soft));
+  --ui-badge-text: var(--settings-success);
+}
+
+@media (max-width: 48rem) {
+  .ui-badge {
+    font-size: var(--ui-font-caption-mobile);
+  }
+}

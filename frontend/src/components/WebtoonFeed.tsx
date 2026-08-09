@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { ImageItem, WebConfig } from '../types';
 import { MediaIssuePlaceholder } from './MediaIssuePlaceholder';
+import { DemoMediaBlock } from './DemoMediaBlock';
 import { buildThumbnailUrl } from '../utils/webConfig';
 import { getGroupPageNumbers, getItemGroupKey } from '../utils/grouping';
 import {
@@ -23,6 +24,7 @@ import {
   useImageLoadPermission,
 } from '../utils/imageLoadScheduler';
 import { getScrollTopForElement } from '../utils/galleryLayout';
+import { Badge, IconButton, Input } from './ui';
 
 type WebtoonSettingsPatch = Partial<Pick<
   WebConfig,
@@ -32,6 +34,7 @@ type WebtoonSettingsPatch = Partial<Pick<
 interface WebtoonFeedProps {
   images: ImageItem[];
   blurEnabled?: boolean;
+  demoMode?: boolean;
   initialIndex?: number | null;
   initialRequestId?: number;
   thumbnailSize: number;
@@ -45,6 +48,8 @@ interface WebtoonFeedProps {
   totalImages?: number;
   currentPage?: number;
   totalPages?: number;
+  mobileToolbarOpen?: boolean;
+  isMobileViewport?: boolean;
   onPageChange?: (page: number, anchorIndex?: number) => void;
   onSettingsChange?: (patch: WebtoonSettingsPatch) => void;
 }
@@ -125,6 +130,7 @@ interface WebtoonMediaProps {
   pageNumber: number;
   thumbnailSize: number;
   blurEnabled: boolean;
+  demoMode: boolean;
   isNearCurrent: boolean;
 }
 
@@ -134,6 +140,7 @@ const WebtoonMedia = React.memo<WebtoonMediaProps>(({
   pageNumber,
   thumbnailSize,
   blurEnabled,
+  demoMode,
   isNearCurrent,
 }) => {
   const isVideo = isVideoItem(item);
@@ -150,14 +157,14 @@ const WebtoonMedia = React.memo<WebtoonMediaProps>(({
     priority: isNearCurrent ? 1 : 2,
     kind: 'thumbnail',
     owner: 'webtoon',
-    enabled: !isVideo && !item.media_status,
+    enabled: !demoMode && !isVideo && !item.media_status,
   });
   const originalAdmitted = useImageLoadPermission({
     url: mediaUrl,
     priority: isNearCurrent ? 0 : 1,
     kind: 'original',
     owner: 'webtoon',
-    enabled: !isVideo && !item.media_status && isNearCurrent,
+    enabled: !demoMode && !isVideo && !item.media_status && isNearCurrent,
   });
 
   React.useEffect(() => {
@@ -176,6 +183,17 @@ const WebtoonMedia = React.memo<WebtoonMediaProps>(({
     return (
       <div className="webtoon-feed__media-frame webtoon-feed__media-frame--issue">
         <MediaIssuePlaceholder message={item.media_error} />
+      </div>
+    );
+  }
+
+  if (demoMode) {
+    return (
+      <div
+        className="webtoon-feed__media-frame webtoon-feed__media-frame--demo"
+        style={{ aspectRatio: String(aspectRatio) }}
+      >
+        <DemoMediaBlock dominantColor={item.dominant_color} />
       </div>
     );
   }
@@ -256,7 +274,9 @@ interface WebtoonThumbnailRailProps {
   currentIndex: number;
   thumbnailSize: number;
   pageNumbers: number[];
+  pageTotals: number[];
   blurEnabled: boolean;
+  demoMode: boolean;
   onSelect: (index: number) => void;
 }
 
@@ -269,7 +289,9 @@ interface WebtoonThumbnailItemProps {
   top: number;
   height: number;
   pageNumber: number;
+  pageTotal: number;
   blurEnabled: boolean;
+  demoMode: boolean;
   onSelect: (index: number) => void;
   onAspectRatioChange: (index: number, aspectRatio: number) => void;
   onMoveFocus: (index: number, direction: -1 | 1) => void;
@@ -285,7 +307,9 @@ const WebtoonThumbnailItem: React.FC<WebtoonThumbnailItemProps> = ({
   top,
   height,
   pageNumber,
+  pageTotal,
   blurEnabled,
+  demoMode,
   onSelect,
   onAspectRatioChange,
   onMoveFocus,
@@ -299,7 +323,7 @@ const WebtoonThumbnailItem: React.FC<WebtoonThumbnailItemProps> = ({
     priority: isActive ? 0 : isNearCurrent ? 1 : 2,
     kind: 'thumbnail',
     owner: 'webtoon',
-    enabled: !item.media_status,
+    enabled: !demoMode && !item.media_status,
   });
 
   return (
@@ -321,8 +345,8 @@ const WebtoonThumbnailItem: React.FC<WebtoonThumbnailItemProps> = ({
           onRestoreFocus(index);
         }
       }}
-      aria-label={`跳到第 ${pageNumber} 頁`}
-      aria-current={isActive ? 'true' : undefined}
+      aria-label={`跳到第 ${pageNumber} / ${pageTotal} 頁`}
+      aria-current={isActive ? 'page' : undefined}
       tabIndex={isActive ? 0 : -1}
       className={`webtoon-thumbnails__item${isActive ? ' is-active' : ''}`}
       style={{
@@ -334,6 +358,8 @@ const WebtoonThumbnailItem: React.FC<WebtoonThumbnailItemProps> = ({
       <span className="webtoon-thumbnails__image-frame">
         {item.media_status ? (
           <MediaIssuePlaceholder message={item.media_error} compact />
+        ) : demoMode ? (
+          <DemoMediaBlock dominantColor={item.dominant_color} />
         ) : admitted ? (
           <img
             src={url}
@@ -356,7 +382,14 @@ const WebtoonThumbnailItem: React.FC<WebtoonThumbnailItemProps> = ({
           <span className="webtoon-thumbnails__placeholder" aria-hidden="true" />
         )}
       </span>
-      <span className="webtoon-thumbnails__index">{pageNumber}</span>
+      <Badge
+        variant="hud"
+        size="xs"
+        className="webtoon-thumbnails__index"
+        aria-hidden="true"
+      >
+        {pageNumber} / {pageTotal}
+      </Badge>
     </button>
   );
 };
@@ -366,7 +399,9 @@ const WebtoonThumbnailRail: React.FC<WebtoonThumbnailRailProps> = ({
   currentIndex,
   thumbnailSize,
   pageNumbers,
+  pageTotals,
   blurEnabled,
+  demoMode,
   onSelect,
 }) => {
   const railRef = React.useRef<HTMLDivElement | null>(null);
@@ -503,11 +538,11 @@ const WebtoonThumbnailRail: React.FC<WebtoonThumbnailRailProps> = ({
     if (Math.abs(nextScrollTop - rail.scrollTop) > 0.5) {
       rail.scrollTo({ top: nextScrollTop, behavior: 'auto' });
     }
-    // Do not include layoutVersion here. Thumbnail aspect-ratio updates are
-    // already anchored in handleAspectRatioChange; re-running this effect for
-    // every measurement would snap a manually scrolled rail back to the old
-    // active item.
-  }, [currentIndex, images]);
+    // Thumbnail aspect-ratio updates are already anchored in
+    // handleAspectRatioChange. Re-run only when the rail geometry changes so
+    // returning from the mobile layout can reveal the current active image
+    // without snapping the rail during ordinary scrolling.
+  }, [currentIndex, images, railHeight, railWidth]);
 
   const focusThumbnail = React.useCallback((index: number) => {
     const safeIndex = clamp(Math.floor(index), 0, Math.max(0, images.length - 1));
@@ -605,7 +640,9 @@ const WebtoonThumbnailRail: React.FC<WebtoonThumbnailRailProps> = ({
                   top={thumbnailLayout.offsets[index] ?? THUMBNAIL_EDGE_PADDING}
                   height={thumbnailLayout.heights[index] ?? THUMBNAIL_MIN_HEIGHT}
                   pageNumber={pageNumbers[index] ?? index + 1}
+                  pageTotal={pageTotals[index] ?? Math.max(1, images.length)}
                   blurEnabled={blurEnabled}
+                  demoMode={demoMode}
                   onSelect={onSelect}
                   onAspectRatioChange={handleAspectRatioChange}
                   onMoveFocus={moveFocus}
@@ -623,8 +660,6 @@ const WebtoonThumbnailRail: React.FC<WebtoonThumbnailRailProps> = ({
 interface WebtoonQuickToolbarProps {
   currentIndex: number;
   imageCount: number;
-  currentPageNumber: number;
-  totalPageNumbers: number;
   imageScale: number;
   imageGap: number;
   showInfo: boolean;
@@ -637,16 +672,16 @@ interface WebtoonQuickToolbarProps {
   onSettingsChange: (patch: WebtoonSettingsPatch) => void;
   onPageChange?: (page: number) => void;
   isScrolling: boolean;
+  mobileToolbarOpen: boolean;
+  isMobileViewport: boolean;
   onReveal: () => void;
   onPointerEnter: (event: React.PointerEvent<HTMLDivElement>) => void;
-  onPointerLeave: () => void;
+  onPointerLeave: (event: React.PointerEvent<HTMLDivElement>) => void;
 }
 
 const WebtoonQuickToolbar: React.FC<WebtoonQuickToolbarProps> = ({
   currentIndex,
   imageCount,
-  currentPageNumber,
-  totalPageNumbers,
   imageScale,
   imageGap,
   showInfo,
@@ -659,6 +694,8 @@ const WebtoonQuickToolbar: React.FC<WebtoonQuickToolbarProps> = ({
   onSettingsChange,
   onPageChange,
   isScrolling,
+  mobileToolbarOpen,
+  isMobileViewport,
   onReveal,
   onPointerEnter,
   onPointerLeave,
@@ -666,7 +703,8 @@ const WebtoonQuickToolbar: React.FC<WebtoonQuickToolbarProps> = ({
   const [pageInput, setPageInput] = React.useState(String(currentPage));
   const [isHelpOpen, setIsHelpOpen] = React.useState(false);
   const previousScrollingRef = React.useRef(isScrolling);
-  const helpIsVisible = isHelpOpen && isScrolling;
+  const toolbarIsCollapsed = isScrolling && !mobileToolbarOpen;
+  const helpIsVisible = isHelpOpen && toolbarIsCollapsed;
 
   React.useEffect(() => setPageInput(String(currentPage)), [currentPage]);
 
@@ -686,16 +724,18 @@ const WebtoonQuickToolbar: React.FC<WebtoonQuickToolbarProps> = ({
 
   return (
     <div
-      className={`webtoon-quick-toolbar__hit-area${isScrolling ? ' is-scrolling' : ''}`}
-      onPointerLeave={() => {
+      id="webtoon-mobile-quick-settings"
+      className={`webtoon-quick-toolbar__hit-area${toolbarIsCollapsed ? ' is-scrolling' : ''}${mobileToolbarOpen ? ' is-mobile-open' : ''}`}
+      onPointerLeave={event => {
         setIsHelpOpen(false);
-        onPointerLeave();
+        onPointerLeave(event);
       }}
     >
-      <div className={`webtoon-quick-toolbar__controls${isScrolling ? ' is-scrolling' : ''}`}>
-        {isScrolling && (
-          <button
+      <div className={`webtoon-quick-toolbar__controls${toolbarIsCollapsed ? ' is-scrolling' : ''}`}>
+        {toolbarIsCollapsed && (
+          <IconButton
             type="button"
+            variant={helpIsVisible ? 'primary' : 'secondary'}
             className={`webtoon-quick-toolbar__button webtoon-quick-toolbar__help-trigger${helpIsVisible ? ' is-active' : ''}`}
             onClick={event => {
               event.stopPropagation();
@@ -707,65 +747,69 @@ const WebtoonQuickToolbar: React.FC<WebtoonQuickToolbarProps> = ({
             title="顯示條漫快捷鍵"
           >
             <CircleHelp aria-hidden="true" />
-          </button>
+          </IconButton>
         )}
 
         <div
-        className={`webtoon-quick-toolbar${isScrolling ? ' is-scrolling' : ''}`}
+        className={`webtoon-quick-toolbar${toolbarIsCollapsed ? ' is-scrolling' : ''}`}
         onPointerEnter={onPointerEnter}
       role="toolbar"
       aria-label="條漫快捷設定"
     >
-      <div className="webtoon-quick-toolbar__group" aria-label="圖片導覽">
-        <button type="button" onClick={onPrevious} disabled={currentIndex <= 0 && currentPage <= 1} className="webtoon-quick-toolbar__button" aria-label="上一張圖片" title="上一張圖片（↑ / ← / J）">
+      <div className="webtoon-quick-toolbar__group webtoon-quick-toolbar__group--navigation" aria-label="圖片導覽">
+        <IconButton type="button" onClick={onPrevious} disabled={currentIndex <= 0 && currentPage <= 1} variant="secondary" className="webtoon-quick-toolbar__button" aria-label="上一張圖片" title="上一張圖片（↑ / ← / J）">
           <ChevronUp aria-hidden="true" />
-        </button>
-        <span className="webtoon-quick-toolbar__counter" aria-live="polite">{currentPageNumber} / {totalPageNumbers}</span>
-        <button type="button" onClick={onNext} disabled={currentIndex >= imageCount - 1 && currentPage >= totalPages} className="webtoon-quick-toolbar__button" aria-label="下一張圖片" title="下一張圖片（↓ / → / K）">
+        </IconButton>
+        <IconButton type="button" onClick={onNext} disabled={currentIndex >= imageCount - 1 && currentPage >= totalPages} variant="secondary" className="webtoon-quick-toolbar__button" aria-label="下一張圖片" title="下一張圖片（↓ / → / K）">
           <ChevronDown aria-hidden="true" />
-        </button>
+        </IconButton>
       </div>
 
-      <div className="webtoon-quick-toolbar__group" aria-label="圖片寬度">
-        <button type="button" onClick={() => onSettingsChange({ webtoonImageScale: clamp(imageScale - QUICK_SCALE_STEP, 30, 100) })} className="webtoon-quick-toolbar__button" aria-label="縮小圖片" title="縮小圖片（每次 10%，[）">
+      <div className="webtoon-quick-toolbar__group webtoon-quick-toolbar__group--scale" aria-label="圖片寬度">
+        <IconButton type="button" onClick={() => onSettingsChange({ webtoonImageScale: clamp(imageScale - QUICK_SCALE_STEP, 30, 100) })} variant="secondary" className="webtoon-quick-toolbar__button" aria-label="縮小圖片" title="縮小圖片（每次 10%，[）">
           <Minus aria-hidden="true" />
-        </button>
+        </IconButton>
         <span className="webtoon-quick-toolbar__value">{imageScale}%</span>
-        <button type="button" onClick={() => onSettingsChange({ webtoonImageScale: clamp(imageScale + QUICK_SCALE_STEP, 30, 100) })} className="webtoon-quick-toolbar__button" aria-label="放大圖片" title="放大圖片（每次 10%，]）">
+        <IconButton type="button" onClick={() => onSettingsChange({ webtoonImageScale: clamp(imageScale + QUICK_SCALE_STEP, 30, 100) })} variant="secondary" className="webtoon-quick-toolbar__button" aria-label="放大圖片" title="放大圖片（每次 10%，]）">
           <Plus aria-hidden="true" />
-        </button>
+        </IconButton>
       </div>
 
       <div className="webtoon-quick-toolbar__group" aria-label="圖片間距">
-        <button type="button" onClick={() => onSettingsChange({ webtoonImageGap: clamp(imageGap - QUICK_GAP_STEP, 0, 300) })} className="webtoon-quick-toolbar__button" aria-label="縮小圖片間距" title="縮小圖片間距（每次 8px）">
+        <IconButton type="button" onClick={() => onSettingsChange({ webtoonImageGap: clamp(imageGap - QUICK_GAP_STEP, 0, 300) })} variant="secondary" className="webtoon-quick-toolbar__button" aria-label="縮小圖片間距" title="縮小圖片間距（每次 8px）">
           <Minus aria-hidden="true" />
-        </button>
+        </IconButton>
         <span className="webtoon-quick-toolbar__value">{imageGap}px</span>
-        <button type="button" onClick={() => onSettingsChange({ webtoonImageGap: clamp(imageGap + QUICK_GAP_STEP, 0, 300) })} className="webtoon-quick-toolbar__button" aria-label="增加圖片間距" title="增加圖片間距（每次 8px）">
+        <IconButton type="button" onClick={() => onSettingsChange({ webtoonImageGap: clamp(imageGap + QUICK_GAP_STEP, 0, 300) })} variant="secondary" className="webtoon-quick-toolbar__button" aria-label="增加圖片間距" title="增加圖片間距（每次 8px）">
           <Plus aria-hidden="true" />
-        </button>
+        </IconButton>
       </div>
 
       <div className="webtoon-quick-toolbar__group webtoon-quick-toolbar__group--display" aria-label="顯示設定">
-        <button type="button" onClick={() => onSettingsChange({ webtoonShowInfo: !showInfo })} aria-pressed={showInfo} className={`webtoon-quick-toolbar__button${showInfo ? ' is-active' : ''}`} aria-label={showInfo ? '隱藏圖片資訊' : '顯示圖片資訊'} title={showInfo ? '隱藏圖片資訊（I）' : '顯示圖片資訊（I）'}>
-          {showInfo ? <Eye aria-hidden="true" /> : <EyeOff aria-hidden="true" />}
-        </button>
-        <button type="button" onClick={() => onSettingsChange({ webtoonShowPageNumber: !showPageNumber })} aria-pressed={showPageNumber} className={`webtoon-quick-toolbar__button${showPageNumber ? ' is-active' : ''}`} aria-label={showPageNumber ? '隱藏頁碼' : '顯示頁碼'} title={showPageNumber ? '隱藏頁碼（P）' : '顯示頁碼（P）'}>
+        {!isMobileViewport && (
+          <IconButton type="button" onClick={() => onSettingsChange({ webtoonShowInfo: !showInfo })} aria-pressed={showInfo} variant={showInfo ? 'primary' : 'secondary'} className={`webtoon-quick-toolbar__button${showInfo ? ' is-active' : ''}`} aria-label={showInfo ? '隱藏圖片資訊' : '顯示圖片資訊'} title={showInfo ? '隱藏圖片資訊（I）' : '顯示圖片資訊（I）'}>
+            {showInfo ? <Eye aria-hidden="true" /> : <EyeOff aria-hidden="true" />}
+          </IconButton>
+        )}
+        <IconButton type="button" onClick={() => onSettingsChange({ webtoonShowPageNumber: !showPageNumber })} aria-pressed={showPageNumber} variant={showPageNumber ? 'primary' : 'secondary'} className={`webtoon-quick-toolbar__button${showPageNumber ? ' is-active' : ''}`} aria-label={showPageNumber ? '隱藏頁碼' : '顯示頁碼'} title={showPageNumber ? '隱藏頁碼（P）' : '顯示頁碼（P）'}>
           <Hash aria-hidden="true" />
-        </button>
-        <button type="button" onClick={() => onSettingsChange({ webtoonShowThumbnails: !showThumbnails })} aria-pressed={showThumbnails} className={`webtoon-quick-toolbar__button${showThumbnails ? ' is-active' : ''}`} aria-label={showThumbnails ? '隱藏縮圖導覽' : '顯示縮圖導覽'} title={showThumbnails ? '隱藏縮圖導覽（T）' : '顯示縮圖導覽（T）'}>
-          <PanelLeft aria-hidden="true" />
-        </button>
+        </IconButton>
+        {!isMobileViewport && (
+          <IconButton type="button" onClick={() => onSettingsChange({ webtoonShowThumbnails: !showThumbnails })} aria-pressed={showThumbnails} variant={showThumbnails ? 'primary' : 'secondary'} className={`webtoon-quick-toolbar__button${showThumbnails ? ' is-active' : ''}`} aria-label={showThumbnails ? '隱藏縮圖導覽' : '顯示縮圖導覽'} title={showThumbnails ? '隱藏縮圖導覽（T）' : '顯示縮圖導覽（T）'}>
+            <PanelLeft aria-hidden="true" />
+          </IconButton>
+        )}
       </div>
 
       {totalPages > 1 && (
         <div className="webtoon-quick-toolbar__group webtoon-quick-toolbar__pagination" aria-label="資料頁面">
-          <button type="button" onClick={() => onPageChange?.(currentPage - 1)} disabled={currentPage <= 1} className="webtoon-quick-toolbar__button" aria-label="上一資料頁" title="上一資料頁">
+          <IconButton type="button" onClick={() => onPageChange?.(currentPage - 1)} disabled={currentPage <= 1} variant="secondary" className="webtoon-quick-toolbar__button" aria-label="上一資料頁" title="上一資料頁">
             <ChevronLeft aria-hidden="true" />
-          </button>
+          </IconButton>
           <label className="webtoon-quick-toolbar__page-input">
             <span className="sr-only">資料頁</span>
-            <input
+            <Input
+              controlSize="xs"
               type="number"
               min={1}
               max={totalPages}
@@ -782,15 +826,16 @@ const WebtoonQuickToolbar: React.FC<WebtoonQuickToolbarProps> = ({
             />
             <span>/ {totalPages}</span>
           </label>
-          <button type="button" onClick={() => onPageChange?.(currentPage + 1)} disabled={currentPage >= totalPages} className="webtoon-quick-toolbar__button" aria-label="下一資料頁" title="下一資料頁">
+          <IconButton type="button" onClick={() => onPageChange?.(currentPage + 1)} disabled={currentPage >= totalPages} variant="secondary" className="webtoon-quick-toolbar__button" aria-label="下一資料頁" title="下一資料頁">
             <ChevronRight aria-hidden="true" />
-          </button>
+          </IconButton>
         </div>
       )}
 
-      {isScrolling && (
-        <button
+      {toolbarIsCollapsed && (
+        <IconButton
           type="button"
+          variant="secondary"
           className="webtoon-quick-toolbar__button webtoon-quick-toolbar__reveal"
           onClick={() => {
             setIsHelpOpen(false);
@@ -800,7 +845,7 @@ const WebtoonQuickToolbar: React.FC<WebtoonQuickToolbarProps> = ({
           title="展開條漫快捷設定"
         >
           <Settings2 aria-hidden="true" />
-        </button>
+        </IconButton>
       )}
     </div>
       </div>
@@ -808,7 +853,7 @@ const WebtoonQuickToolbar: React.FC<WebtoonQuickToolbarProps> = ({
         <div id="webtoon-shortcuts-help" className="webtoon-quick-toolbar__help-popover" role="note">
           <strong>條漫快捷鍵</strong>
           <span>↑/↓、←/→、J/K 翻頁</span>
-          <span>[ ] 比例 · I 資訊 · P 頁碼 · T 縮圖 · E 編輯</span>
+          <span>[ ] 比例 · I 資訊 · P 頁碼 · T 縮圖</span>
         </div>
       )}
       </div>
@@ -818,6 +863,7 @@ const WebtoonQuickToolbar: React.FC<WebtoonQuickToolbarProps> = ({
 export const WebtoonFeed: React.FC<WebtoonFeedProps> = ({
   images,
   blurEnabled = false,
+  demoMode = false,
   initialIndex = null,
   initialRequestId = 0,
   thumbnailSize,
@@ -831,6 +877,8 @@ export const WebtoonFeed: React.FC<WebtoonFeedProps> = ({
   totalImages = images.length,
   currentPage = 1,
   totalPages = 1,
+  mobileToolbarOpen = false,
+  isMobileViewport = false,
   onPageChange,
   onSettingsChange,
 }) => {
@@ -839,7 +887,6 @@ export const WebtoonFeed: React.FC<WebtoonFeedProps> = ({
   const alignFrameRef = React.useRef<number | null>(null);
   const alignToIndexRef = React.useRef<(index: number, behavior?: ScrollBehavior) => void>(() => undefined);
   const initialAnchorLockRef = React.useRef<{ index: number; requestId: number } | null>(null);
-  const touchStartRef = React.useRef<{ x: number; y: number } | null>(null);
   const [heightVersion, setHeightVersion] = React.useState(0);
   const [scrollTop, setScrollTop] = React.useState(0);
   const [viewportHeight, setViewportHeight] = React.useState(720);
@@ -872,6 +919,12 @@ export const WebtoonFeed: React.FC<WebtoonFeedProps> = ({
   }, [cancelToolbarCollapse]);
 
   const handleToolbarPointerEnter = React.useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.pointerType === 'touch') {
+      toolbarPointerInsideRef.current = false;
+      cancelToolbarCollapse();
+      return;
+    }
+
     toolbarPointerInsideRef.current = true;
     const target = event.target instanceof Element ? event.target : null;
     if (target?.closest('button, input, select, textarea')) {
@@ -881,7 +934,13 @@ export const WebtoonFeed: React.FC<WebtoonFeedProps> = ({
     revealToolbar();
   }, [cancelToolbarCollapse, revealToolbar]);
 
-  const handleToolbarPointerLeave = React.useCallback(() => {
+  const handleToolbarPointerLeave = React.useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.pointerType === 'touch') {
+      toolbarPointerInsideRef.current = false;
+      cancelToolbarCollapse();
+      return;
+    }
+
     toolbarPointerInsideRef.current = false;
     cancelToolbarCollapse();
     toolbarCollapseTimerRef.current = window.setTimeout(() => {
@@ -1138,7 +1197,9 @@ export const WebtoonFeed: React.FC<WebtoonFeedProps> = ({
           currentIndex={activeIndex}
           thumbnailSize={thumbnailSize}
           pageNumbers={pageNumberState.pageNumbers}
+          pageTotals={pageNumberState.pageTotals}
           blurEnabled={blurEnabled}
+          demoMode={demoMode}
           onSelect={index => {
             initialAnchorLockRef.current = null;
             alignToIndex(index);
@@ -1150,28 +1211,13 @@ export const WebtoonFeed: React.FC<WebtoonFeedProps> = ({
         ref={feedRef}
         className="webtoon-feed"
         aria-label="條漫閱讀區"
-        onTouchStart={event => {
-          const touch = event.touches[0];
-          if (touch) touchStartRef.current = { x: touch.clientX, y: touch.clientY };
-        }}
-        onTouchEnd={event => {
-          const start = touchStartRef.current;
-          const touch = event.changedTouches[0];
-          touchStartRef.current = null;
-          if (!start || !touch) return;
-          const deltaX = touch.clientX - start.x;
-          const deltaY = touch.clientY - start.y;
-          if (Math.abs(deltaY) < 72 || Math.abs(deltaY) < Math.abs(deltaX) * 1.2) return;
-          // A long swipe is an explicit page gesture; ordinary short swipes
-          // keep the browser's native continuous scrolling behavior.
-          navigate(deltaY < 0 ? 1 : -1);
-        }}
       >
         <div className="webtoon-feed__virtual-list" style={{ height: `${metrics.totalHeight}px` }}>
           {Array.from({ length: Math.max(0, virtualEnd - virtualStart) }, (_, offset) => {
             const index = virtualStart + offset;
             const item = images[index];
             const pageNumber = pageNumberState.pageNumbers[index] ?? pageOffset + index + 1;
+            const pageTotal = pageNumberState.pageTotals[index] ?? pageNumberState.totalPages;
             return (
               <article
                 key={item.image_id}
@@ -1189,11 +1235,27 @@ export const WebtoonFeed: React.FC<WebtoonFeedProps> = ({
                       <strong>{item.title || '未命名作品'}</strong>
                       <span>{item.artist_name || `繪師 ID: ${item.member_id}`}</span>
                     </div>
-                    {showPageNumber && <span className="webtoon-feed__info-page">第 {pageNumber} 頁</span>}
+                    {showPageNumber && (
+                      <Badge
+                        variant="surface"
+                        size="sm"
+                        className="webtoon-feed__info-page"
+                        aria-label={`第 ${pageNumber} / ${pageTotal} 頁`}
+                      >
+                        {pageNumber} / {pageTotal}
+                      </Badge>
+                    )}
                   </header>
                 )}
                 {showPageNumber && !showInfo && (
-                  <span className="webtoon-feed__page-badge">{pageNumber}</span>
+                  <Badge
+                    variant="hud"
+                    size="sm"
+                    className="webtoon-feed__page-badge"
+                    aria-label={`第 ${pageNumber} / ${pageTotal} 頁`}
+                  >
+                    {pageNumber} / {pageTotal}
+                  </Badge>
                 )}
                 <div className="webtoon-feed__media-wrap">
                   <WebtoonMedia
@@ -1202,6 +1264,7 @@ export const WebtoonFeed: React.FC<WebtoonFeedProps> = ({
                     pageNumber={pageNumber}
                     thumbnailSize={thumbnailSize}
                     blurEnabled={blurEnabled}
+                    demoMode={demoMode}
                     isNearCurrent={Math.abs(index - activeIndex) <= 3}
                   />
                 </div>
@@ -1214,8 +1277,6 @@ export const WebtoonFeed: React.FC<WebtoonFeedProps> = ({
       <WebtoonQuickToolbar
         currentIndex={activeIndex}
         imageCount={images.length}
-        currentPageNumber={pageNumberState.pageNumbers[activeIndex] ?? pageOffset + activeIndex + 1}
-        totalPageNumbers={pageNumberState.pageTotals[activeIndex] ?? pageNumberState.totalPages}
         imageScale={imageScale}
         imageGap={imageGap}
         showInfo={showInfo}
@@ -1228,6 +1289,8 @@ export const WebtoonFeed: React.FC<WebtoonFeedProps> = ({
         onSettingsChange={patch => onSettingsChange?.(patch)}
         onPageChange={page => onPageChange?.(page, 0)}
         isScrolling={isScrolling}
+        mobileToolbarOpen={mobileToolbarOpen}
+        isMobileViewport={isMobileViewport}
         onReveal={revealToolbar}
         onPointerEnter={handleToolbarPointerEnter}
         onPointerLeave={handleToolbarPointerLeave}

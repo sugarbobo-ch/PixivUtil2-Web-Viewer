@@ -11,6 +11,14 @@ import {
 } from 'lucide-react';
 import { Artist, MonthItem } from '../types';
 import { getTimeFilterLabel } from '../utils/timeFilterLabels';
+import {
+  getYearFromTimeFilter,
+  hasCompleteYearSelection,
+  isYearTimeFilter,
+  normalizeSelectedMonths,
+} from '../utils/timeFilters';
+import { Button, IconButton, Input } from './ui';
+import { SidebarSectionHeader } from './ui/SidebarSectionHeader';
 
 interface SidebarProps {
   isOpen: boolean;
@@ -44,6 +52,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [artistFilter, setArtistFilter] = useState('');
   const [isMonthSectionOpen, setIsMonthSectionOpen] = useState(true);
   const [expandedYears, setExpandedYears] = useState<Record<string, boolean>>({});
+  const [isActiveFiltersExpanded, setIsActiveFiltersExpanded] = useState(false);
 
   const filteredArtists = artists.filter(a =>
     a.name.toLowerCase().includes(artistFilter.toLowerCase())
@@ -51,6 +60,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   const activeArtistObj = artists.find(a => a.member_id === selectedArtist);
   const isAnyFilterActive = selectedMonths.length > 0 || selectedArtist !== null || searchQuery !== '';
+  const activeFilterCount =
+    selectedMonths.length +
+    (selectedArtist !== null ? 1 : 0) +
+    (searchQuery !== '' ? 1 : 0);
 
   const [monthSortAsc, setMonthSortAsc] = useState(false);
 
@@ -73,12 +86,46 @@ export const Sidebar: React.FC<SidebarProps> = ({
     setExpandedYears(prev => ({ ...prev, [year]: !prev[year] }));
   };
 
+  const toggleYearSelection = (year: string) => {
+    setSelectedMonths(previous => {
+      const normalized = normalizeSelectedMonths(previous);
+      if (normalized.includes(year)) {
+        return normalized.filter(value => value !== year);
+      }
+
+      const withoutYear = normalized.filter(value => getYearFromTimeFilter(value) !== year);
+      return normalizeSelectedMonths([...withoutYear, year]);
+    });
+  };
+
   const toggleMonthSelection = (target: string) => {
-    setSelectedMonths(previous =>
-      previous.includes(target)
-        ? previous.filter(month => month !== target)
-        : [...previous, target]
-    );
+    const year = getYearFromTimeFilter(target);
+    if (!year) return;
+
+    setSelectedMonths(previous => {
+      const normalized = normalizeSelectedMonths(previous);
+      if (normalized.includes(year)) {
+        const siblingMonths = yearGroupMap[year]?.months.map(month => month.month) ?? [];
+        const withoutYear = normalized.filter(value => getYearFromTimeFilter(value) !== year);
+        return normalizeSelectedMonths([
+          ...withoutYear,
+          ...siblingMonths.filter(month => month !== target),
+        ]);
+      }
+
+      const next = normalized.includes(target)
+        ? normalized.filter(month => month !== target)
+        : [...normalized, target];
+      return normalizeSelectedMonths(next);
+    });
+  };
+
+  const toggleTimeFilterSelection = (target: string) => {
+    if (isYearTimeFilter(target)) {
+      toggleYearSelection(target);
+      return;
+    }
+    toggleMonthSelection(target);
   };
 
   const handleResetFilters = () => {
@@ -96,71 +143,111 @@ export const Sidebar: React.FC<SidebarProps> = ({
       <div className="app-sidebar__header flex items-center justify-between">
         <div className="app-sidebar__heading flex items-center gap-2">
           <Filter className="app-sidebar__section-icon w-4 h-4" />
-          <h2 className="text-sm font-semibold text-zinc-200">篩選條件</h2>
+          <h2 className="app-sidebar__title text-sm font-semibold">篩選條件</h2>
         </div>
-        <button
+        <IconButton
           type="button"
           onClick={onClose}
-          className="app-sidebar__close transition-colors"
+          className="app-sidebar__close"
           aria-label="關閉篩選側欄"
         >
           <X className="h-5 w-5" aria-hidden="true" />
-        </button>
+        </IconButton>
       </div>
 
       {/* Active Compound Filter Badges */}
       {isAnyFilterActive && (
-        <div className="app-sidebar__active-filters p-3 space-y-2">
-          <div className="flex items-center justify-between">
-            <span className="text-[11px] font-semibold text-indigo-300">目前組合複選中</span>
-            <button
-              type="button"
-              onClick={handleResetFilters}
-              className="app-sidebar__reset text-[11px] flex items-center gap-1 hover:underline"
-            >
-              <RotateCcw className="w-3 h-3" /> 重設所有
-            </button>
-          </div>
+        <div
+          className={`app-sidebar__active-filters ${activeFilterCount > 3
+            ? (isActiveFiltersExpanded ? 'is-expanded' : 'is-collapsed')
+            : ''
+          }`}
+        >
+          <SidebarSectionHeader
+            className="app-sidebar__section-header--active-filters"
+            title="目前篩選"
+            count={`${activeFilterCount} 項`}
+            actions={(
+              <Button
+                type="button"
+                variant="plain"
+                size="sm"
+                onClick={handleResetFilters}
+                className="app-sidebar__auxiliary-action"
+              >
+                <RotateCcw className="w-3 h-3" /> 重設所有
+              </Button>
+            )}
+          />
 
-          <div className="flex flex-wrap gap-1.5 text-xs">
+          {activeFilterCount > 3 && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="app-sidebar__active-filters-toggle"
+              aria-controls="sidebar-active-filter-chips"
+              aria-expanded={isActiveFiltersExpanded}
+              onClick={() => setIsActiveFiltersExpanded(previous => !previous)}
+            >
+              <span>{isActiveFiltersExpanded ? '收合條件' : '查看全部條件'}</span>
+              <ChevronDown aria-hidden="true" />
+            </Button>
+          )}
+
+          <div
+            id="sidebar-active-filter-chips"
+            className="app-sidebar__active-filters-chips"
+            aria-label="已套用的篩選條件"
+          >
             {searchQuery && setSearchQuery && (
               <span className="app-sidebar__filter-chip">
-                關鍵字: "{searchQuery}"
-                <button
+                <span className="app-sidebar__filter-chip-label" title={`關鍵字: "${searchQuery}"`}>
+                  關鍵字: "{searchQuery}"
+                </span>
+                <IconButton
                   type="button"
+                  variant="ghost"
+                  size="xs"
                   className="app-sidebar__filter-chip-remove"
                   aria-label="移除搜尋條件"
                   onClick={() => setSearchQuery('')}
                 >
                   <X aria-hidden="true" />
-                </button>
+                </IconButton>
               </span>
             )}
             {selectedArtist !== null && (
               <span className="app-sidebar__filter-chip">
-                繪師: {activeArtistObj?.name || selectedArtist}
-                <button
+                <span className="app-sidebar__filter-chip-label" title={`繪師: ${activeArtistObj?.name || selectedArtist}`}>
+                  繪師: {activeArtistObj?.name || selectedArtist}
+                </span>
+                <IconButton
                   type="button"
+                  variant="ghost"
+                  size="xs"
                   className="app-sidebar__filter-chip-remove"
                   aria-label="移除繪師條件"
                   onClick={() => setSelectedArtist(null)}
                 >
                   <X aria-hidden="true" />
-                </button>
+                </IconButton>
               </span>
             )}
 
             {selectedMonths.map(mStr => (
               <span key={mStr} className="app-sidebar__filter-chip">
-                {getTimeFilterLabel(mStr)}: {mStr}
-                <button
+                <span className="app-sidebar__filter-chip-label">{getTimeFilterLabel(mStr)}: {mStr}</span>
+                <IconButton
                   type="button"
+                  variant="ghost"
+                  size="xs"
                   className="app-sidebar__filter-chip-remove"
                   aria-label="移除月份條件"
-                  onClick={() => toggleMonthSelection(mStr)}
+                  onClick={() => toggleTimeFilterSelection(mStr)}
                 >
                   <X aria-hidden="true" />
-                </button>
+                </IconButton>
               </span>
             ))}
           </div>
@@ -171,23 +258,25 @@ export const Sidebar: React.FC<SidebarProps> = ({
       <div className="app-sidebar__body flex-1 flex flex-col min-h-0 p-3 space-y-4 overflow-hidden">
         {/* 1. ARTIST SELECTION SECTION */}
         <div className="app-sidebar__section app-sidebar__section--artists flex-1 flex flex-col min-h-0">
-          <div className="app-sidebar__section-heading flex items-center justify-between mb-2 text-xs font-semibold text-zinc-400 uppercase tracking-wider">
-            <div className="flex items-center gap-2">
-              <User className="app-sidebar__section-icon w-4 h-4" />
-              <span>繪師列表 ({artists.length})</span>
-            </div>
-            {selectedArtist !== null && (
-              <button
+          <SidebarSectionHeader
+            icon={<User className="app-sidebar__section-icon w-4 h-4" />}
+            title="繪師列表"
+            count={`(${artists.length})`}
+            actions={selectedArtist !== null ? (
+              <Button
                 type="button"
+                variant="plain"
+                size="sm"
                 onClick={() => setSelectedArtist(null)}
-                className="app-sidebar__action text-[11px] hover:underline"
+                className="app-sidebar__auxiliary-action"
               >
                 取消選擇
-              </button>
-            )}
-          </div>
+              </Button>
+            ) : undefined}
+          />
 
-          <input
+          <Input
+            controlSize="sm"
             type="text"
             value={artistFilter}
             onChange={(e) => setArtistFilter(e.target.value)}
@@ -203,29 +292,33 @@ export const Sidebar: React.FC<SidebarProps> = ({
               </div>
             ) : (
               <>
-                <button
+                <Button
                   type="button"
                   onClick={() => setSelectedArtist(null)}
+                  variant={selectedArtist === null ? 'primary' : 'ghost'}
+                  fullWidth
                   className={`app-sidebar__artist-option w-full flex items-center justify-between px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
                     selectedArtist === null ? 'is-selected' : ''
                   }`}
                 >
                   <span>全部繪師</span>
                   {selectedArtist === null && <Check className="w-3.5 h-3.5" />}
-                </button>
+                </Button>
 
                 {filteredArtists.map((a) => (
-                  <button
+                  <Button
                     key={a.member_id}
                     type="button"
                     onClick={() => setSelectedArtist(a.member_id === selectedArtist ? null : a.member_id)}
+                    variant={selectedArtist === a.member_id ? 'primary' : 'ghost'}
+                    fullWidth
                     className={`app-sidebar__artist-option w-full flex items-center justify-between px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
                       selectedArtist === a.member_id ? 'is-selected' : ''
                     }`}
                   >
                     <span className="truncate max-w-[140px] text-left">{a.name || `ID: ${a.member_id}`}</span>
                     <span className="text-[11px] opacity-70">({a.artwork_count})</span>
-                  </button>
+                  </Button>
                 ))}
               </>
             )}
@@ -233,108 +326,129 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
 
         {/* 2. MULTI-SELECTABLE YEAR -> MONTH ACCORDION SECTION */}
-        <div className="app-sidebar__section app-sidebar__section--months border-t border-zinc-800 pt-3 shrink-0">
-          <div className="app-sidebar__section-heading flex items-center justify-between mb-2 text-xs font-semibold text-zinc-400 uppercase tracking-wider">
-            <button
-              type="button"
-              onClick={() => setIsMonthSectionOpen(!isMonthSectionOpen)}
-              className="app-sidebar__section-toggle flex items-center gap-2 cursor-pointer"
-              aria-expanded={isMonthSectionOpen}
-            >
-              <Calendar className="app-sidebar__section-icon w-4 h-4" />
-              <span>時間複選 ({selectedMonths.length > 0 ? `已選 ${selectedMonths.length} 項` : '全部'})</span>
-            </button>
-
-            <div className="flex items-center gap-1.5">
-              <button
-                type="button"
-                onClick={() => setMonthSortAsc(!monthSortAsc)}
-                className="app-sidebar__sort-button text-[10px] px-1.5 py-0.5 rounded transition-colors"
-                title={monthSortAsc ? "目前為舊到新 (點擊切換為新到舊)" : "目前為新到舊 (點擊切換為舊到新)"}
-              >
-                {monthSortAsc ? '舊到新 ↑' : '新到舊 ↓'}
-              </button>
-              <button
-                type="button"
-                onClick={() => setIsMonthSectionOpen(!isMonthSectionOpen)}
-                className="app-sidebar__section-toggle-button text-zinc-400 hover:text-zinc-200"
-                aria-label={isMonthSectionOpen ? '收合時間篩選' : '展開時間篩選'}
-              >
-                {isMonthSectionOpen ? <ChevronDown className="h-5 w-5" /> : <ChevronRight className="h-5 w-5" />}
-              </button>
-            </div>
-          </div>
+        <div className="app-sidebar__section app-sidebar__section--months pt-3 shrink-0">
+          <SidebarSectionHeader
+            className={`app-sidebar__section-heading--months ${
+              selectedMonths.length > 0 ? 'app-sidebar__section-heading--has-selection' : ''
+            }`}
+            icon={<Calendar className="app-sidebar__section-icon w-4 h-4" />}
+            title="時間複選"
+            count={`（${selectedMonths.length > 0 ? `已選 ${selectedMonths.length} 項` : '全部'}）`}
+            titleButtonProps={{
+              type: "button",
+              onClick: () => setIsMonthSectionOpen(previous => !previous),
+              variant: "ghost",
+              size: "sm",
+              className: "app-sidebar__section-toggle app-sidebar__section-toggle--months",
+              "aria-expanded": isMonthSectionOpen,
+            }}
+            actions={(
+              <>
+                <Button
+                  type="button"
+                  onClick={() => setMonthSortAsc(!monthSortAsc)}
+                  variant="plain"
+                  size="sm"
+                  className="app-sidebar__auxiliary-action"
+                  title={monthSortAsc ? "目前為舊到新 (點擊切換為新到舊)" : "目前為新到舊 (點擊切換為舊到新)"}
+                >
+                  {monthSortAsc ? '舊到新 ↑' : '新到舊 ↓'}
+                </Button>
+                <IconButton
+                  type="button"
+                  onClick={() => setIsMonthSectionOpen(previous => !previous)}
+                  variant="ghost"
+                  size="md"
+                  className="app-sidebar__section-toggle-button"
+                  aria-label={isMonthSectionOpen ? '收合時間篩選' : '展開時間篩選'}
+                >
+                  {isMonthSectionOpen ? <ChevronDown className="h-5 w-5" /> : <ChevronRight className="h-5 w-5" />}
+                </IconButton>
+              </>
+            )}
+          />
 
           {isMonthSectionOpen && (
             <div className="app-sidebar__list app-sidebar__month-list space-y-1.5 max-h-56 overflow-y-auto overscroll-contain pr-1 rounded-xl p-1.5 text-xs">
-              <button
+              <Button
                 type="button"
                 onClick={() => setSelectedMonths([])}
+                variant={selectedMonths.length === 0 ? 'primary' : 'ghost'}
+                fullWidth
                 className={`app-sidebar__month-reset w-full flex items-center justify-between px-3 py-1.5 rounded-lg font-medium transition-colors ${
                   selectedMonths.length === 0 ? 'is-selected' : ''
                 }`}
               >
                 <span>不限時間 (全部)</span>
                 {selectedMonths.length === 0 && <Check className="w-3.5 h-3.5" />}
-              </button>
+              </Button>
 
               {/* Year Accordions */}
               {sortedYears.map((year) => {
                 const isExpanded = expandedYears[year] ?? (selectedMonths.some(m => m.startsWith(year)) || sortedYears[0] === year);
-                const isYearSelected = selectedMonths.includes(year);
+                const isYearSelected = selectedMonths.includes(year) || hasCompleteYearSelection(selectedMonths, year);
                 const group = yearGroupMap[year];
                 const sortedGroupMonths = [...group.months].sort((a, b) =>
                   monthSortAsc ? a.month.localeCompare(b.month) : b.month.localeCompare(a.month)
                 );
 
                 return (
-                  <div key={year} className="app-sidebar__year-card rounded-lg overflow-hidden">
+                  <div key={year} className="app-sidebar__year-card overflow-hidden">
                     {/* Year Header */}
                     <div className={`app-sidebar__year-header flex items-center justify-between px-2.5 py-1.5 cursor-pointer transition-colors ${
-                      isYearSelected ? 'app-sidebar__year-header--selected' : 'hover:bg-zinc-800/60 text-zinc-200'
+                      isYearSelected ? 'app-sidebar__year-header--selected' : 'app-sidebar__year-header--idle'
                     }`}>
-                      <button
+                      <Button
                         type="button"
                         onClick={() => toggleYearExpanded(year)}
+                        variant="ghost"
+                        size="sm"
                         className="app-sidebar__year-expander flex items-center gap-1.5 flex-1 font-semibold"
                         aria-expanded={isExpanded}
                       >
-                        {isExpanded ? <ChevronDown className="w-3.5 h-3.5 text-zinc-400" /> : <ChevronRight className="w-3.5 h-3.5 text-zinc-400" />}
-                        <span>{year} 年</span>
-                        <span className="text-[11px] font-normal text-zinc-400">({group.totalCount})</span>
-                      </button>
+                        {isExpanded ? <ChevronDown className="app-sidebar__year-expander-icon w-3.5 h-3.5" /> : <ChevronRight className="app-sidebar__year-expander-icon w-3.5 h-3.5" />}
+                        <span className="app-sidebar__year-label">
+                          <span className="app-sidebar__year-label-year">{year} 年</span>
+                          <span className="app-sidebar__year-count text-[11px] font-normal">({group.totalCount})</span>
+                        </span>
+                      </Button>
 
-                      <button
+                      <Button
                         type="button"
-                        onClick={() => toggleMonthSelection(year)}
-                        className={`app-sidebar__year-toggle text-[11px] px-2 py-0.5 rounded transition-colors ${
+                        onClick={() => toggleYearSelection(year)}
+                        variant={isYearSelected ? 'primary' : 'secondary'}
+                        size="sm"
+                        className={`app-sidebar__year-toggle text-[11px] px-2 py-0.5 transition-colors ${
                           isYearSelected ? 'is-selected' : ''
                         }`}
                         title={`複選/取消複選 ${year} 全年作品`}
                       >
                         {isYearSelected ? '已選全年' : '複選全年'}
-                      </button>
+                      </Button>
                     </div>
 
                     {/* Expanded Month Grid */}
                     {isExpanded && (
                       <div className="app-sidebar__months-grid grid grid-cols-2 gap-1 p-1.5">
                         {sortedGroupMonths.map((m) => {
-                          const isMonthSelected = selectedMonths.includes(m.month);
+                          const isMonthSelected = isYearSelected || selectedMonths.includes(m.month);
                           const monthNum = m.month.split('-')[1] || m.month;
 
                           return (
-                            <button
+                            <Button
                               key={m.month}
                               type="button"
                               onClick={() => toggleMonthSelection(m.month)}
+                              variant={isMonthSelected ? 'primary' : 'secondary'}
+                              size="sm"
+                              fullWidth
                               className={`app-sidebar__month-button flex items-center justify-between px-2 py-1 rounded text-[11px] font-medium transition-colors ${
                                 isMonthSelected ? 'is-selected' : ''
                               }`}
                             >
                               <span>{monthNum} 月</span>
                               <span className="opacity-70 text-[10px]">({m.count})</span>
-                            </button>
+                            </Button>
                           );
                         })}
                       </div>

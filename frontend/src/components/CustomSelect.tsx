@@ -1,5 +1,6 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type FocusEvent, type KeyboardEvent, type ReactNode } from 'react';
 import { Check, ChevronDown } from 'lucide-react';
+import { Button } from './ui/Button';
 
 export interface CustomSelectOption<T extends string | number> {
   value: T;
@@ -243,16 +244,17 @@ export function CustomSelect<T extends string | number>({
   return (
     <div
       ref={rootRef}
-      className={`select-control-wrap custom-select ${menuPlacement === 'end' ? 'is-end' : ''} ${verticalPlacement === 'up' ? 'is-up' : ''} ${className ?? ''}`}
+      className={`ui-select-wrap custom-select ${menuPlacement === 'end' ? 'is-end' : ''} ${verticalPlacement === 'up' ? 'is-up' : ''} ${className ?? ''}`}
       style={style}
       data-open={isOpen ? 'true' : 'false'}
       onBlur={handleRootBlur}
     >
-      <button
+      <Button
         ref={triggerRef}
         id={controlId}
         type="button"
-        className={`select-control custom-select__trigger ${buttonClassName ?? ''}`}
+        variant="secondary"
+        className={`ui-select-trigger custom-select__trigger ${buttonClassName ?? ''}`}
         aria-label={ariaLabel}
         aria-haspopup="listbox"
         aria-expanded={isOpen}
@@ -269,8 +271,8 @@ export function CustomSelect<T extends string | number>({
         <span className={`custom-select__value ${selectedOption ? '' : 'is-placeholder'}`}>
           {selectedOption?.label ?? placeholder}
         </span>
-        <ChevronDown className="select-control-icon" aria-hidden="true" strokeWidth={2} />
-      </button>
+        <ChevronDown className="ui-select-icon" aria-hidden="true" strokeWidth={2} />
+      </Button>
 
       {isOpen && (
         <div

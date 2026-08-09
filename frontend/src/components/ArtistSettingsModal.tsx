@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Eye, Settings2, Trash2, X } from 'lucide-react';
 import { Artist } from '../types';
 import { ConfirmModal } from './ConfirmModal';
+import { Button, IconButton } from './ui/Button';
 
 interface ArtistSettingsModalProps {
   isOpen: boolean;
@@ -97,7 +98,7 @@ export const ArtistSettingsModal: React.FC<ArtistSettingsModalProps> = ({
         }}
       >
         <section
-          className="settings-modal__panel flex w-full max-w-xl flex-col overflow-hidden rounded-2xl shadow-2xl"
+          className="settings-modal__panel flex w-full max-w-xl flex-col overflow-hidden rounded-2xl"
           role="dialog"
           aria-modal="true"
           aria-labelledby="artist-settings-title"
@@ -111,9 +112,9 @@ export const ArtistSettingsModal: React.FC<ArtistSettingsModalProps> = ({
                 繪師設定：{artistName}
               </h2>
             </div>
-            <button type="button" onClick={onClose} className="settings-modal__close" aria-label="關閉繪師設定" title="關閉繪師設定">
+            <IconButton type="button" onClick={onClose} variant="ghost" className="settings-modal__close" aria-label="關閉繪師設定" title="關閉繪師設定">
               <X className="h-5 w-5" aria-hidden="true" />
-            </button>
+            </IconButton>
           </header>
 
           <div className="settings-modal__content space-y-5 p-6">
@@ -133,31 +134,31 @@ export const ArtistSettingsModal: React.FC<ArtistSettingsModalProps> = ({
             </div>
 
             <div className="grid gap-3 sm:grid-cols-2">
-              <button
+              <Button
                 type="button"
                 onClick={() => setAction('hide')}
                 disabled={loading}
-                className="settings-modal__secondary-button inline-flex min-h-11 items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold"
+                variant="secondary"
               >
                 <Eye className="h-4 w-4" aria-hidden="true" />
                 隱藏此繪師
-              </button>
-              <button
+              </Button>
+              <Button
                 type="button"
                 onClick={() => setAction('trash')}
                 disabled={loading}
-                className="settings-modal__danger-button inline-flex min-h-11 items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold"
+                variant="danger"
               >
                 <Trash2 className="h-4 w-4" aria-hidden="true" />
                 刪除全部作品（移到回收區）
-              </button>
+              </Button>
             </div>
           </div>
 
           <footer className="settings-modal__footer flex justify-end px-6 py-4">
-            <button type="button" onClick={onClose} className="settings-modal__secondary-button min-h-11 rounded-xl px-4 py-2 text-sm font-semibold">
+            <Button type="button" onClick={onClose} variant="plain">
               關閉
-            </button>
+            </Button>
           </footer>
         </section>
       </div>

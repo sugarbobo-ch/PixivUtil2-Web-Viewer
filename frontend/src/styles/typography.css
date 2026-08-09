@@ -1,0 +1,60 @@
+/* Shared readability floor. Keep this file last so Tailwind's tiny utility
+   sizes cannot silently reduce the project-wide UI minimum. */
+body {
+  font-size: 1rem;
+  line-height: 1.5;
+}
+
+.text-xs {
+  font-size: var(--ui-font-min);
+  line-height: 1.35;
+}
+
+[class~="text-[9px]"],
+[class~="text-[10px]"],
+[class~="text-[11px]"],
+[class~="text-[12px]"] {
+  font-size: var(--ui-font-caption);
+  line-height: 1.35;
+}
+
+button[class~="text-[9px]"],
+button[class~="text-[10px]"],
+button[class~="text-[11px]"],
+button[class~="text-[12px]"] {
+  font-size: var(--ui-font-min);
+}
+
+@media (max-width: 40rem) {
+  :root {
+    --ui-font-min: var(--ui-font-min-mobile);
+    --ui-font-caption: var(--ui-font-caption-mobile);
+  }
+
+  .text-xs,
+  .text-sm {
+    font-size: var(--ui-font-min-mobile);
+    line-height: 1.4;
+  }
+
+  [class~="text-[9px]"],
+  [class~="text-[10px]"],
+  [class~="text-[11px]"],
+  [class~="text-[12px]"] {
+    font-size: var(--ui-font-caption-mobile);
+    line-height: 1.4;
+  }
+
+  button[class~="text-[9px]"],
+  button[class~="text-[10px]"],
+  button[class~="text-[11px]"],
+  button[class~="text-[12px]"] {
+    font-size: var(--ui-font-min-mobile);
+  }
+
+  body input[class],
+  body select[class],
+  body textarea[class] {
+    font-size: var(--ui-font-input-mobile);
+  }
+}

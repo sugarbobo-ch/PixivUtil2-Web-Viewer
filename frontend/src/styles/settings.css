@@ -10,7 +10,6 @@
   border: 1px solid var(--settings-border);
   background: var(--settings-surface);
   color: var(--settings-text);
-  box-shadow: var(--settings-shadow);
 }
 
 .settings-modal__header,
@@ -24,46 +23,16 @@
   color: var(--settings-text);
 }
 
-.settings-modal .select-control-wrap {
-  --select-surface: var(--settings-control);
-  --select-surface-hover: var(--settings-control-hover);
-  --select-border: var(--settings-control-border);
-  --select-border-hover: var(--settings-accent-hover);
-  --select-text: var(--settings-text);
-  --select-focus: var(--settings-accent);
-  --select-icon-surface: transparent;
-  --select-option-surface: var(--settings-control);
-  --select-menu-surface: var(--settings-surface-raised);
-  --select-menu-border: var(--settings-border);
-  --select-option-hover: var(--settings-control-hover);
-  --select-option-selected: var(--settings-control-hover);
-  --select-option-muted: var(--settings-text-muted);
-}
-
-.settings-modal .select-control {
-  border-color: var(--settings-control-border);
-  background-color: var(--settings-control);
-  color: var(--settings-text);
-}
-
-.settings-modal .select-control:hover {
-  border-color: var(--settings-control-border);
-  background-color: var(--settings-control-hover);
-}
-
-.settings-modal .select-control:focus-visible {
-  border-color: var(--settings-accent);
-  outline-color: var(--settings-accent);
-  box-shadow: 0 0 0 4px color-mix(in oklch, var(--settings-accent) 18%, transparent), 0 4px 12px color-mix(in oklch, var(--settings-accent) 14%, transparent);
-}
-
 .settings-modal__close {
-  color: var(--settings-text-muted);
+  flex: 0 0 auto;
 }
 
-.settings-modal__close:hover {
-  background: var(--settings-control-hover);
-  color: var(--settings-text);
+.settings-modal .settings-modal__close.ui-button {
+  /* Match header icon controls: neutral text on hover, never the settings
+     accent. The higher-specificity scope keeps the shared primitive rule. */
+  --ui-button-surface-hover: var(--settings-control-hover);
+  --ui-button-surface-press: var(--settings-control-press);
+  --ui-button-hover-text: var(--settings-text);
 }
 
 .settings-modal__message {
@@ -71,14 +40,14 @@
 }
 
 .settings-modal__message.is-success {
-  border-color: color-mix(in oklch, var(--settings-success) 28%, transparent);
-  background: color-mix(in oklch, var(--settings-success) 12%, transparent);
+  border-color: color-mix(in srgb, var(--settings-success) 36%, var(--settings-border));
+  background: var(--settings-success-soft);
   color: var(--settings-success);
 }
 
 .settings-modal__message.is-error {
-  border-color: color-mix(in oklch, var(--settings-danger) 28%, transparent);
-  background: color-mix(in oklch, var(--settings-danger) 12%, transparent);
+  border-color: color-mix(in srgb, var(--settings-danger) 36%, var(--settings-border));
+  background: var(--settings-danger-soft);
   color: var(--settings-danger);
 }
 
@@ -98,31 +67,17 @@
 }
 
 .settings-modal__tab.is-selected {
-  border-color: var(--settings-accent);
-  color: var(--settings-accent-ink);
+  border-color: transparent;
+  background: var(--settings-primary);
+  color: var(--settings-primary-ink);
 }
 
-.settings-modal__control {
-  border: 1px solid var(--settings-control-border);
-  background: var(--settings-control);
-  color: var(--settings-text);
-}
-
-.settings-modal__control::placeholder {
-  color: var(--settings-text-subtle);
-}
-
-.settings-modal__control:hover {
-  background: var(--settings-control-hover);
-}
-
-.settings-modal__control:focus-visible,
 .settings-modal__checkbox:focus-visible,
 .settings-modal__tab:focus-visible,
-.settings-modal__section-tab:focus-visible,
-.settings-modal__secondary-button:focus-visible {
+.settings-modal__section-tab:focus-visible {
   border-color: var(--settings-accent);
-  outline-color: var(--settings-accent);
+  outline: 4px solid var(--brand-focus-ring);
+  outline-offset: 2px;
 }
 
 .settings-modal__checkbox {
@@ -138,13 +93,12 @@
 }
 
 .settings-modal__check-row:hover,
-.settings-modal__field-card:hover,
-.settings-modal__backup-card:hover {
+.settings-modal__check-row:focus-within {
   background: var(--settings-control-hover);
 }
 
 .settings-modal__heading {
-  color: var(--settings-accent-ink);
+  color: var(--settings-text);
 }
 
 .settings-modal__description,
@@ -171,7 +125,7 @@
 }
 
 .settings-modal__code {
-  color: var(--settings-accent-ink);
+  color: var(--settings-text-subtle);
 }
 
 .settings-modal__field-card,
@@ -187,28 +141,25 @@
   color: var(--settings-text);
 }
 
-.settings-modal__artist-card {
-  box-shadow: 0 1px 2px oklch(0 0 0 / 0.06);
-}
-
 .settings-modal__artist-management {
   padding-bottom: 1.25rem;
   border-bottom: 1px solid var(--settings-border-soft);
 }
 
 .settings-modal__info-card {
-  border: 1px solid color-mix(in oklch, var(--settings-accent) 30%, var(--settings-border));
-  background: var(--settings-accent-soft);
+  padding-block: 0 1.5rem;
+  border: 0;
+  border-bottom: 1px solid var(--settings-border-soft);
+  border-radius: 0;
+  background: transparent;
 }
 
-.settings-modal__info-title,
+.settings-modal__info-title {
+  color: var(--settings-text);
+}
+
 .settings-modal__info-description {
-  color: var(--settings-accent-ink);
-}
-
-.settings-modal__badge {
-  background: color-mix(in oklch, var(--settings-accent) 16%, transparent);
-  color: var(--settings-accent-ink);
+  color: var(--settings-text-muted);
 }
 
 .settings-modal__section-tabs {
@@ -226,6 +177,7 @@
 }
 
 .settings-modal__section-tab.is-selected {
+  border-color: transparent;
   background: var(--settings-primary);
   color: var(--settings-primary-ink);
 }
@@ -235,28 +187,12 @@
   background: var(--settings-surface-soft);
 }
 
-.settings-modal__secondary-button {
-  background: var(--settings-control);
-  color: var(--settings-text);
-}
-
-.settings-modal__secondary-button:hover {
-  background: var(--settings-control-hover);
-}
-
-.settings-modal__secondary-button:disabled,
-.settings-modal__primary-button:disabled,
-.settings-modal__success-button:disabled {
-  cursor: not-allowed;
-  opacity: 0.52;
-}
-
 .settings-modal__confirm-overlay {
   background: var(--settings-overlay);
   backdrop-filter: blur(4px);
 }
 
-/* Refined settings surface: spacing and elevation carry the hierarchy, while
+/* Refined settings surface: spacing, borders, and surface contrast carry the hierarchy, while
    the accent is reserved for selected and actionable states. */
 .settings-modal {
   background: var(--settings-overlay);
@@ -267,7 +203,6 @@
 .settings-modal__panel {
   border-radius: 1.25rem;
   background: var(--settings-surface);
-  box-shadow: var(--settings-shadow);
 }
 
 .settings-modal__header {
@@ -293,44 +228,15 @@
   color: var(--settings-text-muted);
 }
 
-.settings-modal__close {
-  box-sizing: border-box;
-  display: inline-flex;
-  width: var(--ui-icon-button-size);
-  min-width: var(--ui-icon-button-size);
-  height: var(--ui-icon-button-size);
-  min-height: var(--ui-icon-button-size);
-  align-items: center;
-  justify-content: center;
-  border: 0;
-  border-radius: var(--ui-icon-button-radius);
-  padding: 0;
-  background: transparent;
-  transition: background-color 150ms cubic-bezier(0.2, 0, 0, 1), color 150ms cubic-bezier(0.2, 0, 0, 1), transform 150ms cubic-bezier(0.2, 0, 0, 1);
-}
-
-.settings-modal__close:hover {
-  border-color: transparent;
-}
-
-.settings-modal__close svg,
 .settings-modal__title-icon svg {
   width: var(--ui-icon-button-icon-size);
   height: var(--ui-icon-button-icon-size);
 }
 
-.settings-modal__close:active,
-.settings-modal__secondary-button:active {
-  transform: scale(0.96);
-}
-
-.settings-modal__close:focus-visible,
-.settings-modal__secondary-button:focus-visible,
 .settings-modal__tab:focus-visible,
 .settings-modal__section-tab:focus-visible {
-  outline: 2px solid var(--settings-accent);
+  outline: 4px solid var(--brand-focus-ring);
   outline-offset: 2px;
-  box-shadow: 0 0 0 4px color-mix(in oklch, var(--settings-accent) 16%, transparent);
 }
 
 .settings-modal__message {
@@ -354,14 +260,13 @@
   border-radius: 0.75rem;
   padding: 0.625rem 0.875rem;
   background: transparent;
-  transition: background-color 150ms cubic-bezier(0.2, 0, 0, 1), border-color 150ms cubic-bezier(0.2, 0, 0, 1), color 150ms cubic-bezier(0.2, 0, 0, 1), box-shadow 150ms cubic-bezier(0.2, 0, 0, 1);
+  transition: background-color 150ms cubic-bezier(0.2, 0, 0, 1), border-color 150ms cubic-bezier(0.2, 0, 0, 1), color 150ms cubic-bezier(0.2, 0, 0, 1);
 }
 
 .settings-modal__tab.is-selected {
   border-color: transparent;
   background: var(--settings-primary);
   color: var(--settings-primary-ink);
-  box-shadow: 0 0.35rem 0.9rem color-mix(in oklch, var(--settings-primary) 24%, transparent);
 }
 
 .settings-modal__content {
@@ -375,31 +280,13 @@
 .settings-modal__check-row,
 .settings-modal__info-card,
 .settings-modal__empty {
-  box-shadow: 0 1px 2px oklch(0 0 0 / 0.06);
-  transition: background-color 150ms cubic-bezier(0.2, 0, 0, 1), border-color 150ms cubic-bezier(0.2, 0, 0, 1), box-shadow 150ms cubic-bezier(0.2, 0, 0, 1), transform 150ms cubic-bezier(0.2, 0, 0, 1);
+  transition: background-color 150ms cubic-bezier(0.2, 0, 0, 1), border-color 150ms cubic-bezier(0.2, 0, 0, 1), transform 150ms cubic-bezier(0.2, 0, 0, 1);
 }
 
-.settings-modal__field-card:hover,
-.settings-modal__backup-card:hover {
-  border-color: color-mix(in oklch, var(--settings-accent) 24%, var(--settings-border-soft));
-  box-shadow: 0 0.4rem 1rem color-mix(in oklch, var(--settings-accent) 8%, transparent);
-}
-
-.settings-modal__check-row:hover {
-  border-color: color-mix(in oklch, var(--settings-accent) 28%, var(--settings-border-soft));
-  box-shadow: 0 0.35rem 0.9rem color-mix(in oklch, var(--settings-accent) 7%, transparent);
-}
-
-.settings-modal__control {
-  min-height: 2.75rem;
-  border-radius: 0.75rem;
-  transition: background-color 150ms cubic-bezier(0.2, 0, 0, 1), border-color 150ms cubic-bezier(0.2, 0, 0, 1), box-shadow 150ms cubic-bezier(0.2, 0, 0, 1), color 150ms cubic-bezier(0.2, 0, 0, 1);
-}
-
-.settings-modal__control:focus-visible {
-  outline: 2px solid var(--settings-accent);
-  outline-offset: 2px;
-  box-shadow: 0 0 0 4px color-mix(in oklch, var(--settings-accent) 16%, transparent);
+.settings-modal__check-row:hover,
+.settings-modal__check-row:focus-within {
+  border-color: var(--settings-border-soft);
+  background: var(--settings-control-hover);
 }
 
 .settings-modal__section-tabs {
@@ -423,78 +310,6 @@
   border-color: transparent;
   background: var(--settings-primary);
   color: var(--settings-primary-ink);
-  box-shadow: 0 0.35rem 0.9rem color-mix(in oklch, var(--settings-primary) 24%, transparent);
-}
-
-.settings-modal__secondary-button {
-  min-height: 2.75rem;
-  border: 1px solid var(--settings-control-border);
-  border-radius: 0.75rem;
-  transition: background-color 150ms cubic-bezier(0.2, 0, 0, 1), border-color 150ms cubic-bezier(0.2, 0, 0, 1), color 150ms cubic-bezier(0.2, 0, 0, 1), transform 150ms cubic-bezier(0.2, 0, 0, 1);
-}
-
-.settings-modal__secondary-button:hover {
-  border-color: var(--settings-accent);
-}
-
-.settings-modal__primary-button,
-.settings-modal__success-button {
-  min-height: 2.75rem;
-  border: 1px solid transparent;
-  transition: background-color 150ms cubic-bezier(0.2, 0, 0, 1), border-color 150ms cubic-bezier(0.2, 0, 0, 1), color 150ms cubic-bezier(0.2, 0, 0, 1), transform 150ms cubic-bezier(0.2, 0, 0, 1), box-shadow 150ms cubic-bezier(0.2, 0, 0, 1);
-}
-
-.settings-modal__primary-button {
-  background: var(--settings-primary);
-  color: var(--settings-primary-ink);
-  box-shadow: 0 0.35rem 0.9rem color-mix(in oklch, var(--settings-primary) 22%, transparent);
-}
-
-.settings-modal__primary-button:hover {
-  background: var(--settings-primary-hover);
-}
-
-.settings-modal__success-button {
-  background: var(--settings-success);
-  color: var(--settings-primary-ink);
-  box-shadow: 0 0.35rem 0.9rem color-mix(in oklch, var(--settings-success) 18%, transparent);
-}
-
-.settings-modal__success-button:hover {
-  background: color-mix(in oklch, var(--settings-success) 86%, var(--settings-text));
-}
-
-.dark .settings-modal__success-button {
-  background: var(--settings-primary);
-  box-shadow: 0 0.35rem 0.9rem color-mix(in oklch, var(--settings-primary) 18%, transparent);
-}
-
-.dark .settings-modal__success-button:hover {
-  background: var(--settings-primary-hover);
-}
-
-.settings-modal__primary-button:focus-visible,
-.settings-modal__success-button:focus-visible {
-  outline: 2px solid var(--settings-accent);
-  outline-offset: 2px;
-  box-shadow: 0 0 0 4px color-mix(in oklch, var(--settings-accent) 18%, transparent);
-}
-
-.settings-modal__primary-button:active,
-.settings-modal__success-button:active {
-  transform: scale(0.96);
-}
-
-.settings-modal__backup-badge {
-  border: 1px solid var(--settings-border-soft);
-  background: var(--settings-surface-muted);
-  color: var(--settings-text-muted);
-}
-
-.settings-modal__backup-badge.is-ready {
-  border-color: color-mix(in oklch, var(--settings-success) 30%, transparent);
-  background: color-mix(in oklch, var(--settings-success) 14%, transparent);
-  color: var(--settings-success);
 }
 
 .settings-modal__library-section + .settings-modal__library-section {
@@ -533,7 +348,7 @@
   transform-origin: center;
 }
 
-.settings-modal__primary-button .settings-modal__library-status-icon {
+.settings-modal .ui-button[data-variant='primary'] .settings-modal__library-status-icon {
   color: inherit;
 }
 
@@ -587,43 +402,19 @@
   color: var(--settings-text-muted);
 }
 
-.settings-modal__danger-button {
-  border: 1px solid var(--settings-danger);
-  background: var(--settings-danger);
-  color: var(--settings-danger-ink);
-  box-shadow: 0 0.25rem 0.65rem color-mix(in oklch, var(--settings-danger) 28%, transparent);
-}
-
-.settings-modal__danger-button:hover {
-  border-color: var(--settings-danger-hover);
-  background: var(--settings-danger-hover);
-}
-
-.settings-modal__danger-button:focus-visible {
-  border-color: var(--settings-danger-hover);
-  outline: 2px solid var(--settings-danger);
-  outline-offset: 2px;
-  box-shadow: 0 0 0 4px color-mix(in oklch, var(--settings-danger) 16%, transparent);
-}
-
-.settings-modal__danger-button:disabled {
-  cursor: not-allowed;
-  opacity: 0.52;
-}
-
 .settings-modal__danger-icon {
-  background: color-mix(in oklch, var(--settings-danger) 12%, var(--settings-surface-soft));
+  background: color-mix(in srgb, var(--settings-danger) 12%, var(--settings-surface-soft));
   color: var(--settings-danger);
 }
 
 .settings-modal__primary-icon {
-  background: color-mix(in oklch, var(--settings-primary) 12%, var(--settings-surface-soft));
+  background: color-mix(in srgb, var(--settings-primary) 12%, var(--settings-surface-soft));
   color: var(--settings-primary);
 }
 
 .settings-modal__danger-note {
-  border: 1px solid color-mix(in oklch, var(--settings-danger) 28%, var(--settings-border-soft));
-  background: color-mix(in oklch, var(--settings-danger) 8%, var(--settings-surface-soft));
+  border: 1px solid color-mix(in srgb, var(--settings-danger) 28%, var(--settings-border-soft));
+  background: var(--settings-danger-soft);
   color: var(--settings-danger);
 }
 
@@ -656,10 +447,17 @@
   outline-color: oklch(1 0 0 / 0.1);
 }
 
-.settings-modal__input-icon,
 .settings-modal__muted-icon,
 .settings-modal__empty-text {
   color: var(--settings-text-muted);
+}
+
+.settings-modal__search-field {
+  position: relative;
+}
+
+.settings-modal__search-field > .ui-input-wrap {
+  width: 100%;
 }
 
 .settings-modal__empty-title,
@@ -729,7 +527,7 @@
     padding-block: 1rem;
   }
 
-  .settings-modal__footer > button {
+  .settings-modal__footer > .ui-button {
     flex: 1 1 0%;
     justify-content: center;
   }
@@ -743,12 +541,7 @@
   .settings-modal__check-row,
   .settings-modal__info-card,
   .settings-modal__empty,
-  .settings-modal__control,
   .settings-modal__section-tab,
-  .settings-modal__secondary-button,
-  .settings-modal__danger-button,
-  .settings-modal__primary-button,
-  .settings-modal__success-button,
   .settings-modal__library-progress-bar {
     transition-duration: 0.01ms;
   }
@@ -761,12 +554,442 @@
     animation: none;
   }
 
-  .settings-modal__section-tab:active,
-  .settings-modal__secondary-button:active,
-  .settings-modal__danger-button:active,
-  .settings-modal__primary-button:active,
-  .settings-modal__success-button:active,
-  .settings-modal__close:active {
+  .settings-modal__section-tab:active {
     transform: none;
+  }
+}
+
+.settings-modal__tabs {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  margin-inline: 0;
+  padding-block: 0;
+  padding-inline: var(--ui-overlay-gutter);
+  overflow-x: auto;
+  border: 0;
+  border-bottom: 1px solid var(--settings-border);
+  border-radius: 0;
+  background: var(--settings-surface);
+  scrollbar-width: none;
+}
+
+.settings-modal__tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.settings-modal__tab {
+  min-height: 3.25rem;
+  flex: 0 0 auto;
+  align-items: center;
+  border: 0;
+  border-bottom: 3px solid transparent;
+  border-radius: 0;
+  padding-block: 0.75rem 0.625rem;
+  padding-inline: 1rem;
+  background: transparent;
+  color: var(--settings-text-muted);
+  transition: background-color 150ms cubic-bezier(0.2, 0, 0, 1), border-color 150ms cubic-bezier(0.2, 0, 0, 1), color 150ms cubic-bezier(0.2, 0, 0, 1), transform 150ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.settings-modal__tab:hover:not(.is-selected) {
+  border-bottom-color: transparent;
+  background: transparent;
+  color: var(--settings-text);
+}
+
+.settings-modal__tab.is-selected {
+  border-color: transparent;
+  border-bottom-color: var(--settings-primary);
+  background: transparent;
+  color: var(--settings-text);
+}
+
+.settings-modal__tab.is-selected:hover {
+  border-bottom-color: var(--settings-primary);
+  background: transparent;
+  color: var(--settings-text);
+}
+
+.settings-modal__tab.is-selected:active {
+  border-bottom-color: var(--settings-primary);
+  background: transparent;
+  color: var(--settings-text);
+}
+
+.settings-modal__tab:active,
+.settings-modal__section-tab:active {
+  transform: scale(0.98);
+}
+
+.settings-modal__tab:focus-visible,
+.settings-modal__section-tab:focus-visible {
+  border-color: transparent;
+  outline: 3px solid var(--brand-focus-ring);
+  outline-offset: 2px;
+}
+
+.settings-modal__section-tabs {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  display: flex;
+  align-items: stretch;
+  flex-wrap: nowrap;
+  gap: 0;
+  padding: 0;
+  overflow-x: auto;
+  border: 0;
+  border-bottom: 1px solid var(--settings-border);
+  border-radius: 0;
+  background: transparent;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-x;
+}
+
+.settings-modal__section-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.settings-modal__section-tab {
+  min-height: 3rem;
+  flex: 0 0 auto;
+  white-space: nowrap;
+  border: 0;
+  border-bottom: 3px solid transparent;
+  border-radius: 0;
+  padding-block: 0.625rem 0.5rem;
+  padding-inline: 0.875rem;
+  background: transparent;
+  color: var(--settings-text-muted);
+  transition: background-color 150ms cubic-bezier(0.2, 0, 0, 1), border-color 150ms cubic-bezier(0.2, 0, 0, 1), color 150ms cubic-bezier(0.2, 0, 0, 1), transform 150ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.settings-modal__section-tab:hover:not(.is-selected) {
+  border-bottom-color: transparent;
+  background: transparent;
+  color: var(--settings-text);
+}
+
+.settings-modal__section-tab.is-selected {
+  border-color: transparent;
+  border-bottom-color: var(--settings-primary);
+  background: transparent;
+  color: var(--settings-text);
+}
+
+.settings-modal__section-tab.is-selected:hover {
+  border-bottom-color: var(--settings-primary);
+  background: transparent;
+  color: var(--settings-text);
+}
+
+.settings-modal__section-tab.is-selected:active {
+  border-bottom-color: var(--settings-primary);
+  background: transparent;
+  color: var(--settings-text);
+}
+
+.settings-modal__tab.is-selected:focus-visible,
+.settings-modal__section-tab.is-selected:focus-visible {
+  border-bottom-color: var(--settings-primary);
+}
+
+.settings-modal__config-section + .settings-modal__config-section {
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--settings-border-soft);
+}
+
+.settings-modal__switch {
+  appearance: none;
+  position: relative;
+  width: 2.25rem;
+  min-width: 2.25rem;
+  height: 1.25rem;
+  margin: 0;
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: 999px;
+  background: var(--settings-text-subtle);
+  cursor: pointer;
+  transition: background-color 150ms cubic-bezier(0.2, 0, 0, 1), border-color 150ms cubic-bezier(0.2, 0, 0, 1), transform 150ms cubic-bezier(0.2, 0, 0, 1), opacity 150ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.settings-modal__check-row > .settings-modal__switch {
+  align-self: center;
+}
+
+.settings-modal__check-row.items-start > .settings-modal__switch {
+  align-self: flex-start;
+}
+
+.settings-modal__switch::after {
+  content: '';
+  position: absolute;
+  inset-block-start: 0.125rem;
+  inset-inline-start: 0.125rem;
+  width: 1rem;
+  height: 1rem;
+  border-radius: 999px;
+  background: var(--brand-ink);
+  transition: transform 150ms cubic-bezier(0.2, 0, 0, 1), background-color 150ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.settings-modal__switch:checked {
+  background: var(--settings-primary);
+}
+
+.settings-modal__switch:checked::after {
+  transform: translateX(1rem);
+}
+
+:dir(rtl) .settings-modal__switch:checked::after {
+  transform: translateX(-1rem);
+}
+
+.settings-modal__switch:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--settings-text-subtle) 82%, var(--settings-text));
+}
+
+.settings-modal__switch:checked:hover:not(:disabled) {
+  background: var(--settings-primary-hover);
+}
+
+.settings-modal__switch:active:not(:disabled) {
+  transform: scale(0.96);
+}
+
+.settings-modal__switch:focus-visible {
+  outline: 3px solid var(--brand-focus-ring);
+  outline-offset: 2px;
+}
+
+.settings-modal__switch:disabled {
+  cursor: default;
+  opacity: var(--ui-disabled-opacity);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-modal__tab,
+  .settings-modal__section-tab,
+  .settings-modal__switch {
+    transition: none;
+  }
+
+  .settings-modal__tab:active,
+  .settings-modal__section-tab:active,
+  .settings-modal__switch:active {
+    transform: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .settings-modal__switch {
+    appearance: auto;
+    width: 1.25rem;
+    min-width: 1.25rem;
+    height: 1.25rem;
+    border: 1px solid ButtonText;
+    border-radius: 0.25rem;
+    background: Canvas;
+  }
+
+  .settings-modal__switch::after {
+    display: none;
+  }
+}
+
+/* Keep modal geometry in one place so the JSX only describes structure. */
+.settings-modal {
+  padding: var(--ui-overlay-gutter);
+}
+
+.settings-modal__panel {
+  width: min(100%, 64rem);
+  max-height: min(calc(100dvh - 2rem), 52rem);
+  border-radius: 1.25rem;
+}
+
+.settings-modal__header {
+  min-height: 4.5rem;
+  padding-block: 1rem;
+  padding-inline: var(--ui-overlay-gutter);
+}
+
+.settings-modal__header > :first-child {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.settings-modal__message {
+  min-height: 3rem;
+  padding-block: 0.75rem;
+  padding-inline: var(--ui-overlay-gutter);
+  border-bottom: 1px solid var(--settings-border);
+}
+
+.settings-modal__content {
+  min-width: 0;
+  padding: 1.5rem;
+}
+
+.settings-modal__footer {
+  min-height: 4.5rem;
+  padding-block: 1rem;
+  padding-inline: var(--ui-overlay-gutter);
+}
+
+.settings-modal__tab,
+.settings-modal__section-tab {
+  font-size: var(--ui-font-min);
+  line-height: 1.375rem;
+}
+
+.settings-modal__field-card,
+.settings-modal__backup-card,
+.settings-modal__empty {
+  border-radius: 1rem;
+}
+
+.settings-modal__check-row {
+  border-radius: 0.75rem;
+}
+
+.settings-modal__config-section + .settings-modal__config-section,
+.settings-modal__library-section + .settings-modal__library-section {
+  padding-top: 2rem;
+  border-top: 0;
+}
+
+.settings-modal__display-section {
+  min-width: 0;
+}
+
+.settings-modal__display-section + .settings-modal__display-section {
+  padding-top: 2rem;
+}
+
+/* Config values should use the whole control column instead of their intrinsic
+   content width, especially for long JSON and path values. */
+.settings-modal__field-card .ui-input,
+.settings-modal__field-card .ui-textarea,
+.settings-modal__field-card .ui-input-wrap,
+.settings-modal__field-card .ui-select-wrap {
+  width: 100%;
+}
+
+/* Keep category labels compact while making the full label readable. The tab
+   row remains horizontally scrollable when the section list grows. */
+.settings-modal__section-label {
+  display: inline-flex;
+  max-width: 100%;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.125rem;
+  line-height: 1.2;
+  text-align: start;
+}
+
+.settings-modal__section-label-en,
+.settings-modal__section-label-zh {
+  display: block;
+  white-space: nowrap;
+}
+
+.settings-modal__section-tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-align: start;
+}
+
+.settings-modal__section-tabs {
+  scrollbar-width: thin;
+  scrollbar-color: var(--settings-control-border) transparent;
+  scroll-padding-inline: 0.5rem;
+  overscroll-behavior: contain;
+}
+
+.settings-modal__section-tabs::-webkit-scrollbar {
+  display: block;
+  height: 0.375rem;
+}
+
+.settings-modal__section-tabs::-webkit-scrollbar-track {
+  background: var(--settings-surface-muted);
+}
+
+.settings-modal__section-tabs::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: var(--settings-control-border);
+}
+
+.settings-modal__section-tabs::-webkit-scrollbar-thumb:hover {
+  background: var(--settings-accent);
+}
+
+.settings-modal__section-tabs-shell {
+  display: flex;
+  min-width: 0;
+  align-items: stretch;
+  gap: 0.5rem;
+}
+
+.settings-modal__section-tabs-shell > .settings-modal__section-tabs-control {
+  flex: 0 0 auto;
+  align-self: center;
+}
+
+.settings-modal .ui-button.ui-button--icon {
+  --ui-button-surface-hover: var(--settings-control-hover);
+  --ui-button-surface-press: var(--settings-control-press);
+  --ui-button-muted-text: var(--settings-text-muted);
+  --ui-button-hover-text: var(--settings-text);
+}
+
+.settings-modal__section-tabs-shell > .settings-modal__section-tabs {
+  flex: 1 1 auto;
+}
+
+@media (max-width: 48rem) {
+  .settings-modal {
+    padding: 0.75rem;
+  }
+
+  .settings-modal__panel {
+    max-height: calc(100dvh - 1.5rem);
+    border-radius: 1rem;
+  }
+
+  .settings-modal__header,
+  .settings-modal__content,
+  .settings-modal__footer {
+    padding-inline: 1rem;
+  }
+}
+
+@media (max-width: 30rem) {
+  .settings-modal {
+    padding: 0.5rem;
+  }
+
+  .settings-modal__panel {
+    max-height: calc(100dvh - 1rem);
+    border-radius: 0.875rem;
+  }
+
+  .settings-modal__header {
+    min-height: 3.75rem;
+    padding-block: 0.75rem;
+  }
+
+  .settings-modal__content {
+    padding-block: 1rem;
+  }
+
+  .settings-modal__footer > .ui-button {
+    flex: 1 1 0%;
+    justify-content: center;
   }
 }

@@ -1,0 +1,686 @@
+/* Shared form controls. Component scopes only replace semantic tokens or
+   layout; geometry, focus, disabled, and responsive type stay here. */
+.ui-input-wrap,
+.ui-input,
+.ui-textarea,
+.ui-select-wrap {
+  --ui-field-surface: var(--neutral-control);
+  --ui-field-surface-hover: var(--neutral-control-hover);
+  --ui-field-surface-press: var(--neutral-control-press);
+  --ui-field-border: var(--neutral-border);
+  --ui-field-border-hover: var(--brand-hover);
+  --ui-field-border-focus: var(--brand-default);
+  --ui-field-text: var(--neutral-text-1);
+  --ui-field-placeholder: var(--neutral-text-3);
+  --ui-field-focus: var(--brand-focus-ring);
+  --ui-field-option-surface: var(--neutral-control);
+  --ui-field-menu-surface: var(--neutral-surface-raised);
+  --ui-field-menu-border: var(--neutral-border);
+  --ui-field-option-hover: var(--neutral-control-hover);
+  --ui-field-option-selected: var(--brand-default);
+  --ui-field-option-selected-hover: var(--brand-hover);
+  --ui-field-option-selected-press: var(--brand-press);
+  --ui-field-option-selected-ink: var(--brand-ink);
+  --ui-field-option-muted: var(--neutral-text-3);
+}
+
+/* Gallery context-bar selects stay on the viewer semantic surface so their
+   trigger and menu match the adjacent gallery controls in both themes. */
+.gallery-context-shell .ui-select-wrap {
+  --ui-field-surface: var(--viewer-control);
+  --ui-field-surface-hover: var(--viewer-control-hover);
+  --ui-field-border: var(--viewer-border);
+  --ui-field-border-hover: var(--viewer-accent-hover);
+  --ui-field-border-focus: var(--viewer-focus);
+  --ui-field-text: var(--viewer-control-text);
+  --ui-field-placeholder: var(--viewer-text-muted);
+  --ui-field-focus: var(--viewer-focus-ring);
+  --ui-field-option-surface: var(--viewer-control);
+  --ui-field-menu-surface: var(--viewer-surface-raised);
+  --ui-field-menu-border: var(--viewer-border);
+  --ui-field-option-hover: var(--viewer-control-hover);
+  --ui-field-option-selected: var(--viewer-primary);
+  --ui-field-option-selected-hover: var(--viewer-primary-hover);
+  --ui-field-option-selected-press: var(--viewer-primary-press);
+  --ui-field-option-selected-ink: var(--viewer-primary-ink);
+  --ui-field-option-muted: var(--viewer-text-muted);
+  --ui-field-icon: var(--viewer-text-muted);
+  --ui-field-icon-focus: var(--viewer-accent-hover);
+}
+
+.ui-input,
+.ui-textarea,
+.ui-select {
+  box-sizing: border-box;
+  min-width: 0;
+  min-height: var(--ui-field-height);
+  border: 1px solid var(--ui-field-border);
+  border-radius: var(--ui-field-radius);
+  padding-block: 0.625rem;
+  padding-inline: 0.875rem;
+  background: var(--ui-field-surface);
+  color: var(--ui-field-text);
+  font: inherit;
+  font-size: var(--ui-font-min);
+  line-height: 1.375rem;
+  transition: background-color 150ms cubic-bezier(0.2, 0, 0, 1),
+    border-color 150ms cubic-bezier(0.2, 0, 0, 1),
+    color 150ms cubic-bezier(0.2, 0, 0, 1),
+    opacity 150ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.ui-input-wrap {
+  position: relative;
+  display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
+  vertical-align: top;
+}
+
+.ui-input-wrap > .ui-input {
+  width: 100%;
+}
+
+.ui-input::placeholder,
+.ui-textarea::placeholder {
+  color: var(--ui-field-placeholder);
+}
+
+.ui-input[type='search']::-webkit-search-cancel-button,
+.ui-input[type='search']::-webkit-search-decoration {
+  appearance: none;
+}
+
+.ui-input[type='search']::-ms-clear {
+  display: none;
+}
+
+.ui-input:hover:not(:disabled),
+.ui-textarea:hover:not(:disabled),
+.ui-select:hover:not(:disabled) {
+  border-color: var(--ui-field-border-hover);
+  background: var(--ui-field-surface-hover);
+}
+
+.ui-input:focus-visible,
+.ui-textarea:focus-visible,
+.ui-select:focus-visible {
+  border-color: var(--ui-field-border-focus);
+  outline: 3px solid var(--ui-field-focus);
+  outline-offset: 2px;
+}
+
+.ui-input:disabled,
+.ui-textarea:disabled,
+.ui-select:disabled {
+  cursor: not-allowed;
+  opacity: var(--ui-disabled-opacity);
+}
+
+.ui-input[data-size='xs'],
+.ui-textarea[data-size='xs'],
+.ui-select[data-size='xs'] {
+  min-height: 2.25rem;
+  padding-block: 0.375rem;
+  padding-inline: 0.625rem;
+}
+
+.ui-input[data-size='sm'],
+.ui-textarea[data-size='sm'],
+.ui-select[data-size='sm'] {
+  min-height: 2.5rem;
+  padding-block: 0.5rem;
+  padding-inline: 0.75rem;
+}
+
+.ui-input[data-size='lg'],
+.ui-textarea[data-size='lg'],
+.ui-select[data-size='lg'] {
+  min-height: 3rem;
+  padding-block: 0.75rem;
+  padding-inline: 1rem;
+}
+
+.ui-input-wrap--has-leading-icon,
+.ui-input-wrap--clearable {
+  width: 100%;
+}
+
+.ui-input-wrap--has-leading-icon > .ui-input {
+  padding-inline-start: 2.75rem;
+}
+
+.ui-input-wrap--has-leading-icon[data-size='xs'] > .ui-input {
+  padding-inline-start: 2.25rem;
+}
+
+.ui-input-wrap--has-leading-icon[data-size='sm'] > .ui-input {
+  padding-inline-start: 2.5rem;
+}
+
+.ui-input-wrap--has-leading-icon[data-size='lg'] > .ui-input {
+  padding-inline-start: 3rem;
+}
+
+.ui-input-wrap--clearable > .ui-input {
+  padding-inline-end: 2.75rem;
+}
+
+.ui-input-wrap--clearable[data-size='xs'] > .ui-input {
+  padding-inline-end: 2.25rem;
+}
+
+.ui-input-wrap--clearable[data-size='sm'] > .ui-input {
+  padding-inline-end: 2.5rem;
+}
+
+.ui-input-wrap--clearable[data-size='lg'] > .ui-input {
+  padding-inline-end: 3rem;
+}
+
+.ui-input__leading-icon {
+  position: absolute;
+  inset-inline-start: 0.875rem;
+  top: 50%;
+  z-index: 1;
+  display: inline-flex;
+  width: 1rem;
+  height: 1rem;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  color: var(--ui-field-icon, var(--ui-field-placeholder));
+  transform: translateY(-50%);
+  transition: color 150ms cubic-bezier(0.2, 0, 0, 1), opacity 150ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.ui-input__leading-icon > svg {
+  width: 1rem;
+  height: 1rem;
+}
+
+.ui-input-wrap--has-leading-icon[data-size='xs'] .ui-input__leading-icon {
+  inset-inline-start: 0.625rem;
+}
+
+.ui-input-wrap--has-leading-icon[data-size='sm'] .ui-input__leading-icon {
+  inset-inline-start: 0.75rem;
+}
+
+.ui-input-wrap--has-leading-icon[data-size='lg'] .ui-input__leading-icon {
+  inset-inline-start: 1rem;
+}
+
+.ui-input-wrap--has-leading-icon:focus-within .ui-input__leading-icon {
+  color: var(--ui-field-icon-focus, var(--ui-field-border-focus));
+}
+
+.ui-input-wrap--has-leading-icon[data-disabled='true'] .ui-input__leading-icon {
+  opacity: var(--ui-disabled-opacity);
+}
+
+.ui-input__clear-button {
+  --ui-button-surface-hover: var(--ui-field-surface-hover);
+  --ui-button-surface-press: var(--ui-field-surface-press);
+  --ui-button-muted-text: var(--ui-field-placeholder);
+  --ui-button-hover-text: var(--ui-field-text);
+  --ui-button-focus: var(--ui-field-focus);
+
+  position: absolute;
+  inset-inline-end: 0.375rem;
+  inset-block-start: 50%;
+  z-index: 2;
+  color: var(--ui-field-placeholder);
+  translate: 0 -50%;
+}
+
+.ui-input-wrap--clearable[data-size='xs'] .ui-input__clear-button {
+  inset-inline-end: 0.25rem;
+}
+
+.ui-input-wrap--clearable[data-size='lg'] .ui-input__clear-button {
+  inset-inline-end: 0.5rem;
+}
+
+.ui-input__clear-button:hover:not(:disabled),
+.ui-input__clear-button:active:not(:disabled) {
+  color: var(--ui-field-text);
+}
+
+.ui-textarea {
+  display: block;
+  resize: vertical;
+}
+
+.ui-select-wrap {
+  position: relative;
+  display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
+  color: var(--ui-field-text);
+}
+
+.ui-select {
+  width: 100%;
+  appearance: none;
+  padding-inline-end: 2.75rem;
+  color-scheme: light;
+  cursor: pointer;
+}
+
+.ui-select option {
+  background: var(--ui-field-option-surface);
+  color: var(--ui-field-text);
+}
+
+.ui-select-icon {
+  position: absolute;
+  inset-inline-end: 0.75rem;
+  top: 50%;
+  width: 1rem;
+  height: 1rem;
+  pointer-events: none;
+  color: var(--ui-field-icon, var(--ui-field-text));
+  transform: translateY(-50%);
+  transition: color 150ms cubic-bezier(0.2, 0, 0, 1), transform 180ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.ui-select-wrap:hover .ui-select-icon,
+.ui-select-wrap:focus-within .ui-select-icon {
+  color: var(--ui-field-icon-focus, var(--ui-field-border-focus));
+}
+
+.ui-button.ui-select-trigger {
+  width: 100%;
+  min-height: var(--ui-field-height);
+  justify-content: flex-start;
+  border-color: var(--ui-field-border);
+  border-radius: var(--ui-field-radius);
+  padding-inline: 0.875rem;
+  background: var(--ui-field-surface);
+  color: var(--ui-field-text);
+  font-size: var(--ui-font-min);
+  font-weight: 550;
+  text-align: start;
+}
+
+.ui-button.ui-select-trigger:hover:not(:disabled) {
+  border-color: var(--ui-field-border-hover);
+  background: var(--ui-field-surface-hover);
+  color: var(--ui-field-text);
+}
+
+.ui-button.ui-select-trigger:focus-visible,
+.ui-button.ui-select-trigger[aria-expanded='true'] {
+  border-color: var(--ui-field-border-focus);
+  outline: 3px solid var(--ui-field-focus);
+  outline-offset: 2px;
+}
+
+.ui-button.ui-select-trigger[aria-expanded='true'] {
+  background: var(--ui-field-option-hover);
+}
+
+.ui-button.ui-select-trigger[aria-expanded='true'] .ui-select-icon {
+  color: var(--ui-field-icon-focus, var(--ui-field-border-focus));
+  transform: rotate(180deg);
+}
+
+.ui-select-trigger > .ui-select-icon {
+  position: static;
+  width: 1rem;
+  height: 1rem;
+  flex: 0 0 auto;
+  margin-inline-start: auto;
+  transform: none;
+  transform-origin: center;
+}
+
+.ui-select-wrap:hover .ui-select-trigger > .ui-select-icon,
+.ui-select-wrap:focus-within .ui-select-trigger > .ui-select-icon {
+  color: var(--ui-field-icon-focus, var(--ui-field-border-focus));
+}
+
+.custom-select__leading {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+}
+
+.custom-select__value {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.custom-select__value.is-placeholder {
+  color: var(--ui-field-option-muted);
+}
+
+.custom-select__menu {
+  position: absolute;
+  inset-block-start: calc(100% + 0.5rem);
+  inset-inline-start: 0;
+  z-index: 80;
+  display: grid;
+  gap: 0.125rem;
+  min-width: max(100%, 15rem);
+  max-width: min(30rem, calc(100vw - 1.5rem));
+  max-height: min(24rem, 50vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0.25rem;
+  border: 1px solid var(--ui-field-menu-border);
+  border-radius: 0.875rem;
+  background: var(--ui-field-menu-surface);
+  color: var(--ui-field-text);
+  backdrop-filter: blur(18px) saturate(1.12);
+  scrollbar-color: var(--ui-field-border) transparent;
+  scrollbar-width: thin;
+  animation: custom-select-menu-in 140ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.custom-select.is-end .custom-select__menu {
+  inset-inline-start: auto;
+  inset-inline-end: 0;
+}
+
+.custom-select.is-up .custom-select__menu {
+  inset-block-start: auto;
+  inset-block-end: calc(100% + 0.5rem);
+  animation-name: custom-select-menu-in-up;
+}
+
+.custom-select__menu:focus-visible {
+  outline: 2px solid var(--ui-field-focus);
+  outline-offset: 2px;
+}
+
+.custom-select__option {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 1.5rem;
+  align-items: center;
+  width: 100%;
+  min-height: 2.75rem;
+  gap: 0.625rem;
+  border: 1px solid transparent;
+  border-radius: 0.625rem;
+  padding: 0.5rem 0.75rem;
+  color: var(--ui-field-text);
+  cursor: pointer;
+  transition: background-color 120ms cubic-bezier(0.2, 0, 0, 1),
+    border-color 120ms cubic-bezier(0.2, 0, 0, 1),
+    color 120ms cubic-bezier(0.2, 0, 0, 1),
+    transform 120ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.custom-select__option:hover,
+.custom-select__option[data-active='true'] {
+  border-color: transparent;
+  background: var(--ui-field-option-hover);
+}
+
+.custom-select__option[data-selected='true'] {
+  border-color: transparent;
+  background: var(--ui-field-option-selected);
+  color: var(--ui-field-option-selected-ink);
+}
+
+.custom-select__option[data-selected='true'][data-active='true'],
+.custom-select__option[data-selected='true']:hover {
+  border-color: transparent;
+  background: var(--ui-field-option-selected-hover);
+  color: var(--ui-field-option-selected-ink);
+}
+
+.custom-select__option[data-selected='true']:active {
+  background: var(--ui-field-option-selected-press);
+  color: var(--ui-field-option-selected-ink);
+}
+
+.custom-select__option:active {
+  transform: scale(0.96);
+}
+
+.custom-select__option-copy {
+  display: grid;
+  min-width: 0;
+  gap: 0.125rem;
+}
+
+.custom-select__option-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--ui-font-min);
+  font-weight: 650;
+  line-height: 1.25rem;
+}
+
+.custom-select__option-description {
+  overflow: hidden;
+  color: var(--ui-field-option-muted);
+  font-size: var(--ui-font-caption);
+  line-height: 1.15rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.custom-select__option[data-selected='true'] .custom-select__option-description {
+  color: var(--ui-field-option-selected-ink);
+  opacity: 0.78;
+}
+
+.custom-select__option-check {
+  display: grid;
+  place-items: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  color: transparent;
+}
+
+.custom-select__option[data-selected='true'] .custom-select__option-check {
+  color: var(--ui-field-option-selected-ink);
+}
+
+.custom-select__option-check svg {
+  width: 0.875rem;
+  height: 0.875rem;
+}
+
+/* Semantic token scopes keep the same control geometry on each surface. */
+.app-header .ui-input-wrap,
+.app-header .ui-input {
+  --ui-field-surface: var(--header-control);
+  --ui-field-surface-hover: var(--header-control-hover);
+  --ui-field-surface-press: var(--header-control-press);
+  --ui-field-border: var(--header-border);
+  --ui-field-border-hover: var(--header-accent-hover);
+  --ui-field-border-focus: var(--header-focus);
+  --ui-field-text: var(--header-control-text);
+  --ui-field-placeholder: var(--header-control-muted);
+  --ui-field-focus: var(--header-focus-ring);
+  --ui-field-icon: var(--header-control-muted);
+  --ui-field-icon-focus: var(--header-control-text);
+}
+
+.app-sidebar .ui-input-wrap,
+.app-sidebar .ui-input {
+  --ui-field-surface: var(--sidebar-control);
+  --ui-field-surface-hover: var(--sidebar-control-hover);
+  --ui-field-surface-press: var(--sidebar-control-hover);
+  --ui-field-border: var(--sidebar-control-border);
+  --ui-field-border-hover: var(--sidebar-accent);
+  --ui-field-border-focus: var(--sidebar-accent);
+  --ui-field-text: var(--sidebar-text);
+  --ui-field-placeholder: var(--sidebar-text-muted);
+  --ui-field-focus: var(--sidebar-focus-ring);
+  --ui-field-icon: var(--sidebar-text-muted);
+  --ui-field-icon-focus: var(--sidebar-text);
+}
+
+.settings-modal .ui-input-wrap,
+.settings-modal .ui-input,
+.settings-modal .ui-textarea,
+.settings-modal .ui-select-wrap {
+  --ui-field-surface: var(--settings-control);
+  --ui-field-surface-hover: var(--settings-control-hover);
+  --ui-field-surface-press: var(--settings-control-press);
+  --ui-field-border: var(--settings-control-border);
+  --ui-field-border-hover: var(--settings-accent-hover);
+  --ui-field-border-focus: var(--settings-accent);
+  --ui-field-text: var(--settings-text);
+  --ui-field-placeholder: var(--settings-text-subtle);
+  --ui-field-focus: var(--brand-focus-ring);
+  --ui-field-option-surface: var(--settings-control);
+  --ui-field-menu-surface: var(--settings-surface-raised);
+  --ui-field-menu-border: var(--settings-border);
+  --ui-field-option-hover: var(--settings-control-hover);
+  --ui-field-option-selected: var(--settings-primary);
+  --ui-field-option-selected-hover: var(--settings-primary-hover);
+  --ui-field-option-selected-press: var(--settings-primary-press);
+  --ui-field-option-selected-ink: var(--settings-primary-ink);
+  --ui-field-option-muted: var(--settings-text-muted);
+  --ui-field-icon: var(--settings-text-muted);
+  --ui-field-icon-focus: var(--settings-accent-ink);
+}
+
+.recycle-bin-modal .ui-input-wrap,
+.recycle-bin-modal .ui-input,
+.recycle-bin-modal .ui-select-wrap {
+  --ui-field-surface: var(--settings-control);
+  --ui-field-surface-hover: var(--settings-control-hover);
+  --ui-field-surface-press: var(--settings-control-press);
+  --ui-field-border: var(--settings-control-border);
+  --ui-field-border-hover: var(--settings-accent-hover);
+  --ui-field-border-focus: var(--settings-accent);
+  --ui-field-text: var(--settings-text);
+  --ui-field-placeholder: var(--settings-text-subtle);
+  --ui-field-focus: var(--brand-focus-ring);
+  --ui-field-option-surface: var(--settings-control);
+  --ui-field-icon: var(--settings-text-muted);
+  --ui-field-icon-focus: var(--settings-accent-ink);
+}
+
+.gallery-grid-root .ui-input-wrap,
+.gallery-grid-root .ui-input,
+.webtoon-quick-toolbar .ui-input-wrap,
+.webtoon-quick-toolbar .ui-input {
+  --ui-field-surface: var(--viewer-surface-muted);
+  --ui-field-surface-hover: var(--viewer-control-hover);
+  --ui-field-surface-press: var(--viewer-control-press);
+  --ui-field-border: var(--viewer-border);
+  --ui-field-border-hover: var(--viewer-primary);
+  --ui-field-border-focus: var(--viewer-primary);
+  --ui-field-text: var(--viewer-text);
+  --ui-field-placeholder: var(--viewer-text-muted);
+  --ui-field-focus: var(--viewer-focus-ring);
+  --ui-field-icon: var(--viewer-text-muted);
+  --ui-field-icon-focus: var(--viewer-primary);
+}
+
+@keyframes custom-select-menu-in {
+  from {
+    opacity: 0;
+    transform: translateY(-0.25rem) scale(0.98);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes custom-select-menu-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(0.25rem) scale(0.98);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.dark .ui-select {
+  color-scheme: dark;
+}
+
+@media (max-width: 40rem) {
+  .ui-input,
+  .ui-textarea,
+  .ui-select {
+    font-size: var(--ui-font-input-mobile);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ui-input,
+  .ui-textarea,
+  .ui-select,
+  .ui-select-icon,
+  .ui-input__leading-icon,
+  .ui-select-trigger,
+  .custom-select__menu,
+  .custom-select__option {
+    transition-duration: 0.01ms;
+  }
+
+  .custom-select__menu,
+  .custom-select__option:active,
+  .ui-select-trigger:active {
+    transform: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .ui-input,
+  .ui-textarea,
+  .ui-select {
+    background: Canvas;
+    color: CanvasText;
+    border-color: ButtonBorder;
+  }
+
+  .ui-select {
+    color-scheme: normal;
+  }
+
+  .ui-select-icon {
+    color: ButtonText;
+  }
+
+  .ui-input__leading-icon {
+    color: ButtonText;
+  }
+
+  .ui-input__clear-button {
+    color: ButtonText;
+  }
+
+  .custom-select__menu {
+    background: Canvas;
+    color: CanvasText;
+    border-color: ButtonBorder;
+    forced-color-adjust: auto;
+  }
+
+  .custom-select__option,
+  .custom-select__option[data-selected='true'],
+  .custom-select__option[data-active='true'] {
+    color: CanvasText;
+    background: Canvas;
+    border-color: transparent;
+  }
+
+  .custom-select__option:hover,
+  .custom-select__option[data-selected='true'][data-active='true'] {
+    color: HighlightText;
+    background: Highlight;
+    border-color: Highlight;
+  }
+}

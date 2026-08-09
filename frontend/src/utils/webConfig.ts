@@ -19,15 +19,19 @@ const toBoolean = (value: unknown, fallback: boolean): boolean => {
   return Boolean(value);
 };
 
+export const normalizeDominantColor = (value: unknown): string | undefined => {
+  if (typeof value !== 'string') return undefined;
+  const color = value.trim();
+  return /^#[0-9A-Fa-f]{6}$/.test(color) ? color : undefined;
+};
+
 export const normalizeWebConfig = (value: WebConfigInput | null | undefined): WebConfig => {
   const source = value ?? {};
   const legacyThumbnailSize = source.thumbnailWidth ?? source.thumbnailHeight;
 
   const normalizedConfig: WebConfig = {
     webTheme: source.webTheme === 'light' ? 'light' : DEFAULT_WEB_CONFIG.webTheme,
-    defaultViewMode: source.defaultViewMode === 'fullscreen' || source.defaultViewMode === 'webtoon'
-      ? source.defaultViewMode
-      : DEFAULT_WEB_CONFIG.defaultViewMode,
+    defaultViewMode: source.defaultViewMode === 'webtoon' ? 'webtoon' : 'fullscreen',
     thumbnailSize: clampInteger(source.thumbnailSize ?? legacyThumbnailSize, DEFAULT_WEB_CONFIG.thumbnailSize, 16, 4096),
     itemsPerPage: clampInteger(source.itemsPerPage, DEFAULT_WEB_CONFIG.itemsPerPage, 1, 5000),
     autoOpenBrowser: toBoolean(source.autoOpenBrowser, DEFAULT_WEB_CONFIG.autoOpenBrowser),
@@ -36,10 +40,15 @@ export const normalizeWebConfig = (value: WebConfigInput | null | undefined): We
       source.blurEnabled ?? source.mosaicEnabled,
       DEFAULT_WEB_CONFIG.blurEnabled,
     ),
+    demoMode: toBoolean(source.demoMode, DEFAULT_WEB_CONFIG.demoMode),
     preloadImageCount: clampInteger(source.preloadImageCount, DEFAULT_WEB_CONFIG.preloadImageCount, 0, 10),
     fullscreenToolbarSimpleMode: toBoolean(
       source.fullscreenToolbarSimpleMode,
       DEFAULT_WEB_CONFIG.fullscreenToolbarSimpleMode,
+    ),
+    fullscreenShowThumbnails: toBoolean(
+      source.fullscreenShowThumbnails,
+      DEFAULT_WEB_CONFIG.fullscreenShowThumbnails,
     ),
     webtoonImageScale: clampInteger(
       source.webtoonImageScale,

@@ -3,7 +3,6 @@ import {
   ChevronRight,
   Eye,
   EyeOff,
-  Grid,
   Layers,
   Maximize2,
   Moon,
@@ -12,13 +11,14 @@ import {
   Sun,
   X,
 } from 'lucide-react';
-import { ThemeMode, ViewMode } from '../types';
+import { ThemeMode, ViewerMode } from '../types';
+import { Button, IconButton } from './ui/Button';
 
 interface MobileMenuDrawerProps {
   isOpen: boolean;
   onClose: () => void;
-  viewMode: ViewMode;
-  setViewMode: (mode: ViewMode) => void;
+  preferredViewerMode: ViewerMode;
+  onSelectPreferredViewerMode: (mode: ViewerMode) => void;
   theme: ThemeMode;
   setTheme: (theme: ThemeMode) => void;
   onOpenSettings: () => void;
@@ -31,8 +31,8 @@ interface MobileMenuDrawerProps {
 export const MobileMenuDrawer: React.FC<MobileMenuDrawerProps> = ({
   isOpen,
   onClose,
-  viewMode,
-  setViewMode,
+  preferredViewerMode,
+  onSelectPreferredViewerMode,
   theme,
   setTheme,
   onOpenSettings,
@@ -85,8 +85,8 @@ export const MobileMenuDrawer: React.FC<MobileMenuDrawerProps> = ({
 
   if (!isOpen) return null;
 
-  const selectViewMode = (mode: ViewMode) => {
-    setViewMode(mode);
+  const selectPreferredViewerMode = (mode: ViewerMode) => {
+    onSelectPreferredViewerMode(mode);
     onClose();
   };
 
@@ -108,53 +108,49 @@ export const MobileMenuDrawer: React.FC<MobileMenuDrawerProps> = ({
       >
         <div className="app-mobile-menu__header">
           <h2 id="mobile-menu-title">功能選單</h2>
-          <button
+          <IconButton
             type="button"
             onClick={onClose}
+            variant="ghost"
             className="app-mobile-menu__close"
             aria-label="關閉功能選單"
             title="關閉功能選單"
             ref={closeButtonRef}
           >
             <X className="h-5 w-5" aria-hidden="true" />
-          </button>
+          </IconButton>
         </div>
 
         <div className="app-mobile-menu__body">
           <section className="app-mobile-menu__section" aria-labelledby="mobile-menu-view-title">
             <div className="app-mobile-menu__section-heading">
-              <h3 id="mobile-menu-view-title">檢視模式</h3>
-              <span>選擇內容呈現方式</span>
+              <h3 id="mobile-menu-view-title">偏好瀏覽模式</h3>
+              <span>選擇偏好的內容呈現方式</span>
             </div>
 
-            <div className="app-mobile-menu__view-modes" role="group" aria-label="檢視模式">
-              <button
+            <div className="app-mobile-menu__view-modes" role="group" aria-label="偏好瀏覽模式">
+              <Button
                 type="button"
-                onClick={() => selectViewMode('grid')}
-                aria-pressed={viewMode === 'grid'}
-                className={`app-mobile-menu__view-button ${viewMode === 'grid' ? 'is-selected' : ''}`}
-              >
-                <Grid className="h-5 w-5" aria-hidden="true" />
-                <span>網格</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => selectViewMode('fullscreen')}
-                aria-pressed={viewMode === 'fullscreen'}
-                className={`app-mobile-menu__view-button ${viewMode === 'fullscreen' ? 'is-selected' : ''}`}
+                onClick={() => selectPreferredViewerMode('fullscreen')}
+                aria-pressed={preferredViewerMode === 'fullscreen'}
+                variant={preferredViewerMode === 'fullscreen' ? 'primary' : 'ghost'}
+                size="lg"
+                className={`app-mobile-menu__view-button ${preferredViewerMode === 'fullscreen' ? 'is-selected' : ''}`}
               >
                 <Maximize2 className="h-5 w-5" aria-hidden="true" />
                 <span>全螢幕</span>
-              </button>
-              <button
+              </Button>
+              <Button
                 type="button"
-                onClick={() => selectViewMode('webtoon')}
-                aria-pressed={viewMode === 'webtoon'}
-                className={`app-mobile-menu__view-button ${viewMode === 'webtoon' ? 'is-selected' : ''}`}
+                onClick={() => selectPreferredViewerMode('webtoon')}
+                aria-pressed={preferredViewerMode === 'webtoon'}
+                variant={preferredViewerMode === 'webtoon' ? 'primary' : 'ghost'}
+                size="lg"
+                className={`app-mobile-menu__view-button ${preferredViewerMode === 'webtoon' ? 'is-selected' : ''}`}
               >
                 <ScrollText className="h-5 w-5" aria-hidden="true" />
                 <span>條漫</span>
-              </button>
+              </Button>
             </div>
           </section>
 
@@ -166,10 +162,13 @@ export const MobileMenuDrawer: React.FC<MobileMenuDrawerProps> = ({
 
             <div className="app-mobile-menu__item-list">
               {onToggleGroupMangaPosts && (
-                <button
+                <Button
                   type="button"
                   onClick={onToggleGroupMangaPosts}
                   aria-pressed={groupMangaPosts}
+                  variant={groupMangaPosts ? 'primary' : 'secondary'}
+                  size="lg"
+                  fullWidth
                   className={`app-mobile-menu__item app-mobile-menu__item--toggle ${groupMangaPosts ? 'is-on' : 'is-off'}`}
                 >
                   <span className="app-mobile-menu__item-icon" aria-hidden="true"><Layers className="h-4 w-4" /></span>
@@ -178,13 +177,16 @@ export const MobileMenuDrawer: React.FC<MobileMenuDrawerProps> = ({
                     <small>{groupMangaPosts ? '目前已開啟' : '將相關頁面合併顯示'}</small>
                   </span>
                   <span className={`app-mobile-menu__item-status ${groupMangaPosts ? 'is-on' : 'is-off'}`}>{groupMangaPosts ? '開啟' : '關閉'}</span>
-                </button>
+                </Button>
               )}
               {onToggleBlur && (
-                <button
+                <Button
                   type="button"
                   onClick={onToggleBlur}
                   aria-pressed={blurEnabled}
+                  variant={blurEnabled ? 'primary' : 'secondary'}
+                  size="lg"
+                  fullWidth
                   className={`app-mobile-menu__item app-mobile-menu__item--toggle ${blurEnabled ? 'is-on' : 'is-off'}`}
                 >
                   <span className="app-mobile-menu__item-icon" aria-hidden="true">
@@ -195,7 +197,7 @@ export const MobileMenuDrawer: React.FC<MobileMenuDrawerProps> = ({
                     <small>{blurEnabled ? '敏感縮圖目前已遮罩' : '顯示原始縮圖'}</small>
                   </span>
                   <span className={`app-mobile-menu__item-status ${blurEnabled ? 'is-on' : 'is-off'}`}>{blurEnabled ? '開啟' : '關閉'}</span>
-                </button>
+                </Button>
               )}
             </div>
           </section>
@@ -206,9 +208,12 @@ export const MobileMenuDrawer: React.FC<MobileMenuDrawerProps> = ({
             </div>
 
             <div className="app-mobile-menu__item-list">
-              <button
+              <Button
                 type="button"
                 onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+                variant="secondary"
+                size="lg"
+                fullWidth
                 className="app-mobile-menu__item"
                 aria-label={theme === 'dark' ? '切換至亮色模式' : '切換至暗色模式'}
               >
@@ -220,13 +225,16 @@ export const MobileMenuDrawer: React.FC<MobileMenuDrawerProps> = ({
                   <small>切換介面配色</small>
                 </span>
                 <ChevronRight className="app-mobile-menu__item-chevron h-4 w-4" aria-hidden="true" />
-              </button>
-              <button
+              </Button>
+              <Button
                 type="button"
                 onClick={() => {
                   onClose();
                   onOpenSettings();
                 }}
+                variant="secondary"
+                size="lg"
+                fullWidth
                 className="app-mobile-menu__item"
               >
                 <span className="app-mobile-menu__item-icon" aria-hidden="true"><Settings className="h-4 w-4" /></span>
@@ -235,7 +243,7 @@ export const MobileMenuDrawer: React.FC<MobileMenuDrawerProps> = ({
                   <small>調整 Web Viewer 偏好</small>
                 </span>
                 <ChevronRight className="app-mobile-menu__item-chevron h-4 w-4" aria-hidden="true" />
-              </button>
+              </Button>
             </div>
           </section>
         </div>

@@ -13,6 +13,10 @@ import './styles/sidebar.css'
 import './styles/navigation.css'
 import './styles/webtoon.css'
 import './styles/recycle-bin.css'
+import './styles/typography.css'
+import './styles/buttons.css'
+import './styles/controls.css'
+import './styles/badges.css'
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

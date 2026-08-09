@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { FolderOpen, LoaderCircle } from 'lucide-react';
 import { PixivPathFieldMetadata } from '../pixivConfigMetadata';
 import { openSystemPicker } from '../utils/systemPicker';
+import { Button, Input } from './ui';
 
 interface PathPickerFieldProps {
   id: string;
@@ -13,7 +14,6 @@ interface PathPickerFieldProps {
   onChange: (value: string) => void;
   onClear?: () => void;
   clearLabel?: string;
-  inputClassName: string;
 }
 
 const modeLabel: Record<PixivPathFieldMetadata['mode'], string> = {
@@ -32,7 +32,6 @@ export const PathPickerField: React.FC<PathPickerFieldProps> = ({
   onChange,
   onClear,
   clearLabel = '清除選擇',
-  inputClassName,
 }) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -56,7 +55,8 @@ export const PathPickerField: React.FC<PathPickerFieldProps> = ({
   return (
     <div className="min-w-0 space-y-1.5">
       <div className="flex min-w-0 items-stretch gap-2">
-        <input
+        <Input
+          controlSize="md"
           id={id}
           type="text"
           value={value}
@@ -66,30 +66,32 @@ export const PathPickerField: React.FC<PathPickerFieldProps> = ({
           aria-invalid={!!error}
           autoComplete="off"
           spellCheck={false}
-          className={`${inputClassName} min-w-0 flex-1 font-mono text-xs`}
+          className="min-w-0 flex-1 font-mono"
         />
-        <button
+        <Button
           type="button"
           onClick={handlePick}
           disabled={loading}
+          variant="secondary"
           aria-label={`${modeLabel[metadata.mode]}：${label || id}`}
-          className="settings-modal__secondary-button inline-flex min-h-11 shrink-0 items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold focus-visible:outline-2 focus-visible:outline-offset-2"
+          className="shrink-0"
         >
           {loading ? <LoaderCircle className="settings-modal__picker-spinner h-4 w-4" aria-hidden="true" /> : <FolderOpen className="h-4 w-4" aria-hidden="true" />}
           <span className="hidden sm:inline">{loading ? '開啟中…' : modeLabel[metadata.mode]}</span>
-        </button>
+        </Button>
         {onClear && (
-          <button
+          <Button
             type="button"
             onClick={() => {
               setError(null);
               onClear();
             }}
             disabled={loading || !value}
-            className="settings-modal__secondary-button inline-flex min-h-11 shrink-0 items-center rounded-lg px-3 py-2 text-xs font-semibold focus-visible:outline-2 focus-visible:outline-offset-2"
+            variant="plain"
+            className="shrink-0"
           >
             {clearLabel}
-          </button>
+          </Button>
         )}
       </div>
       {error && <p id={errorId} className="settings-modal__field-error text-xs leading-5" role="alert">{error}</p>}

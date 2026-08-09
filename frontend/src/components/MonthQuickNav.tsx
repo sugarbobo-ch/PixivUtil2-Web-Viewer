@@ -522,7 +522,7 @@ export const MonthQuickNav: React.FC<MonthQuickNavProps> = ({ items, sectionKeys
         aria-valuenow={hoveredIndex >= 0 ? hoveredIndex : activeIndex}
         aria-valuetext={displayItem.label}
         aria-describedby="month-quick-nav-panel"
-        className="viewer-month-index__rail group flex cursor-pointer items-center justify-center px-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-950"
+        className="viewer-month-index__rail group flex cursor-pointer items-center justify-center focus-visible:outline-none"
         onMouseEnter={() => {
           setPopupTopAtIndex(activeIndex);
           setIsOpen(true);
@@ -574,12 +574,12 @@ export const MonthQuickNav: React.FC<MonthQuickNavProps> = ({ items, sectionKeys
 
       <div
         id="month-quick-nav-panel"
-        className="viewer-month-index__panel rounded-2xl border border-zinc-800/90 bg-zinc-900/95 px-3.5 py-3 text-zinc-100 shadow-2xl shadow-black/40 backdrop-blur-xl"
+        className="viewer-month-index__panel rounded-2xl px-3.5 py-3 backdrop-blur-xl"
         style={{ '--month-index-popup-top': popupTop } as React.CSSProperties}
         aria-hidden="true"
       >
-        <p className="viewer-month-index__panel-kicker text-[10px] font-medium uppercase tracking-[0.18em] text-indigo-300/80">作品時間</p>
-        <p className="viewer-month-index__panel-label mt-1 text-sm font-semibold text-zinc-100">{displayItem.label}</p>
+        <p className="viewer-month-index__panel-kicker text-[10px] font-medium uppercase tracking-[0.18em]">作品時間</p>
+        <p className="viewer-month-index__panel-label mt-1 text-sm font-semibold">{displayItem.label}</p>
         <p className="viewer-month-index__panel-meta">{displayItem.count} 張作品</p>
       </div>
 

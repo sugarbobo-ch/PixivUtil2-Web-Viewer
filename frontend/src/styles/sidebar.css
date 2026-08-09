@@ -5,7 +5,6 @@
   border-inline-end: 1px solid var(--sidebar-border);
   background: var(--sidebar-surface);
   color: var(--sidebar-text);
-  box-shadow: 0.75rem 0 2rem oklch(0 0 0 / 0.1);
 }
 
 .app-sidebar__backdrop {
@@ -26,21 +25,154 @@
   min-width: 0;
 }
 
+.app-sidebar__title {
+  color: var(--sidebar-text);
+}
+
+.app-sidebar__section-header {
+  display: flex;
+  min-width: 0;
+  min-height: 2rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-block-end: 0.375rem;
+  color: var(--sidebar-text-muted);
+  letter-spacing: 0.035em;
+}
+
+.app-sidebar__section-header--active-filters {
+  margin-block-end: 0;
+}
+
+.app-sidebar__section-header-title,
+.app-sidebar__section-header-title-control {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--sidebar-text-muted);
+  font-size: var(--ui-font-min);
+  font-weight: 600;
+  line-height: 1.4;
+  letter-spacing: 0.035em;
+}
+
+.app-sidebar__section-header-title {
+  flex: 1 1 auto;
+}
+
+.app-sidebar__section-header-title-control {
+  flex: 1 1 auto;
+  justify-content: flex-start;
+  overflow: hidden;
+  text-align: start;
+}
+
+.app-sidebar .ui-button.app-sidebar__section-header-title-control {
+  font-size: var(--ui-font-min);
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.app-sidebar__section-header-title-text {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--sidebar-text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-sidebar__section-header-count {
+  flex: 0 0 auto;
+  color: var(--sidebar-text-muted);
+  font-size: var(--ui-font-caption);
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+  line-height: 1.25;
+  white-space: nowrap;
+}
+
+.app-sidebar__section-header-actions {
+  display: flex;
+  min-width: 0;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.375rem;
+}
+
+.app-sidebar__active-filters-chips {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+}
+
+.app-sidebar__active-filters-toggle {
+  display: inline-flex;
+  min-height: var(--ui-icon-button-size);
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  border: 1px solid var(--sidebar-control-border);
+  border-radius: 0.625rem;
+  padding-inline: 0.75rem;
+  background: var(--sidebar-control);
+  color: var(--sidebar-text-secondary);
+  cursor: pointer;
+  font-size: var(--ui-font-min);
+  font-weight: 650;
+  line-height: 1.25;
+}
+
+.app-sidebar__active-filters-toggle:hover {
+  border-color: var(--sidebar-accent);
+  background: var(--sidebar-control-hover);
+  color: var(--sidebar-text);
+}
+
+.app-sidebar__active-filters-toggle:focus-visible {
+  outline: 4px solid var(--sidebar-focus-ring);
+  outline-offset: 2px;
+}
+
+.app-sidebar__active-filters-toggle svg {
+  width: 1.125rem;
+  height: 1.125rem;
+  flex-shrink: 0;
+  transition: transform 150ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.app-sidebar__active-filters-toggle[aria-expanded="true"] svg {
+  transform: rotate(180deg);
+}
+
+.app-sidebar__active-filters.is-collapsed .app-sidebar__active-filters-chips {
+  display: none;
+}
+
+.app-sidebar__active-filters.is-expanded .app-sidebar__active-filters-chips {
+  max-block-size: min(12rem, 28vh);
+  align-content: flex-start;
+  overflow-y: auto;
+  padding-inline-end: 0.25rem;
+  scrollbar-color: var(--sidebar-scrollbar-thumb) transparent;
+  scrollbar-width: thin;
+}
+
 .app-sidebar__section-icon {
   color: var(--sidebar-accent-ink);
 }
 
-.app-sidebar__action {
-  color: var(--sidebar-accent-ink);
-}
-
-.app-sidebar__action:hover {
-  color: var(--sidebar-accent-hover);
+.app-sidebar .ui-button.app-sidebar__auxiliary-action {
+  --ui-button-muted-text: var(--sidebar-text-muted);
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .app-sidebar__section-toggle,
 .app-sidebar__section-toggle-button,
-.app-sidebar__sort-button,
 .app-sidebar__year-expander {
   border: 0;
   background: transparent;
@@ -76,57 +208,9 @@
   color: var(--sidebar-text);
 }
 
-.app-sidebar__sort-button {
-  border: 1px solid var(--sidebar-control-border);
-  border-radius: 0.5rem;
-  padding-inline: 0.5rem;
-  padding-block: 0.25rem;
-  background: var(--sidebar-control);
-  color: var(--sidebar-text-muted);
-  cursor: pointer;
-}
-
-.app-sidebar__sort-button:hover {
-  border-color: var(--sidebar-accent);
-  background: var(--sidebar-control-hover);
-  color: var(--sidebar-text);
-}
-
-.app-sidebar__close {
-  box-sizing: border-box;
-  display: inline-grid;
-  place-items: center;
-  width: var(--ui-icon-button-size);
-  min-width: var(--ui-icon-button-size);
-  height: var(--ui-icon-button-size);
-  min-height: var(--ui-icon-button-size);
-  padding: 0;
-  border: 0;
-  border-radius: var(--ui-icon-button-radius);
-  background: transparent;
-  cursor: pointer;
-}
-
-.app-sidebar__close:focus-visible,
-.app-sidebar__reset:focus-visible {
-  outline: 2px solid var(--sidebar-accent);
-  outline-offset: 2px;
-}
-
-.app-sidebar__close,
-.app-sidebar__reset {
-  color: var(--sidebar-text-muted);
-}
-
-.app-sidebar__close:hover,
-.app-sidebar__reset:hover {
-  background: var(--sidebar-control-hover);
-  color: var(--sidebar-text);
-}
-
-.app-sidebar__close svg {
-  width: var(--ui-icon-button-icon-size);
-  height: var(--ui-icon-button-icon-size);
+.app-sidebar .ui-button.app-sidebar__close {
+  --ui-button-muted-text: var(--sidebar-text-muted);
+  flex-shrink: 0;
 }
 
 .app-sidebar__section-toggle-button svg {
@@ -135,13 +219,17 @@
 }
 
 .app-sidebar__active-filters {
-  padding: 0.75rem 1rem;
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.625rem 1rem;
   border-bottom: 1px solid var(--sidebar-border);
   background: var(--sidebar-surface);
 }
 
 .app-sidebar__filter-chip {
   display: inline-flex;
+  max-width: 100%;
+  min-width: 0;
   min-height: 1.75rem;
   align-items: center;
   gap: 0.375rem;
@@ -150,7 +238,15 @@
   padding: 0.25rem 0.625rem;
   background: var(--sidebar-control);
   color: var(--sidebar-text-secondary);
+  font-size: var(--ui-font-caption);
   line-height: 1.25rem;
+}
+
+.app-sidebar__filter-chip-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .app-sidebar__filter-chip svg {
@@ -182,8 +278,8 @@
 }
 
 .app-sidebar__filter-chip-remove:focus-visible {
-  outline: 2px solid var(--sidebar-accent);
-  outline-offset: 1px;
+  outline: 4px solid var(--sidebar-focus-ring);
+  outline-offset: 2px;
 }
 
 .app-sidebar__filter-chip-remove svg {
@@ -200,31 +296,116 @@
   min-width: 0;
 }
 
-.app-sidebar__section-heading {
-  min-height: 2rem;
-  margin-block-end: 0.5rem;
-  letter-spacing: 0.035em;
+.app-sidebar__section-heading--months > .app-sidebar__section-toggle {
+  min-width: 0;
+  flex: 1 1 auto;
+  justify-content: flex-start;
+  overflow: hidden;
+}
+
+.app-sidebar__section-heading--months {
+  min-width: 0;
+}
+
+.app-sidebar__section-toggle--months > svg {
+  flex: 0 0 auto;
+}
+
+.app-sidebar__section-toggle--months > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-sidebar__section-heading--has-selection {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: auto auto;
+  column-gap: 0.5rem;
+  row-gap: 0.25rem;
+  align-items: center;
+}
+
+.app-sidebar__section-heading--has-selection > .app-sidebar__section-toggle {
+  grid-column: 1 / -1;
+  grid-row: 1;
+  flex-basis: auto;
+  width: 100%;
+}
+
+.app-sidebar__section-heading--has-selection > .app-sidebar__section-heading-actions {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  width: 100%;
+}
+
+@container sidebar-months (min-width: 22rem) {
+  .app-sidebar__section-heading--has-selection {
+    display: flex;
+    flex-wrap: nowrap;
+    row-gap: 0;
+  }
+
+  .app-sidebar__section-heading--has-selection > .app-sidebar__section-toggle {
+    flex-basis: auto;
+    width: auto;
+  }
+
+  .app-sidebar__section-heading--has-selection > .app-sidebar__section-heading-actions {
+    width: auto;
+  }
+}
+
+/* Keep the title on its own row whenever the sidebar is too narrow for the
+   title, sort action, and disclosure control to share one line. */
+.app-sidebar__section-heading--months {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  row-gap: 0.25rem;
+  align-items: center;
+}
+
+.app-sidebar__section-heading--months > .app-sidebar__section-toggle {
+  grid-column: 1;
+  grid-row: 1;
+  flex-basis: auto;
+  width: 100%;
+}
+
+.app-sidebar__section-heading--months > .app-sidebar__section-heading-actions {
+  grid-column: 1;
+  grid-row: 2;
+  width: 100%;
+}
+
+@container sidebar-months (min-width: 22rem) {
+  .app-sidebar__section-heading--months {
+    display: flex;
+    flex-wrap: nowrap;
+    row-gap: 0;
+  }
+
+  .app-sidebar__section-heading--months > .app-sidebar__section-toggle {
+    width: auto;
+  }
+
+  .app-sidebar__section-heading--months > .app-sidebar__section-heading-actions {
+    width: auto;
+  }
 }
 
 .app-sidebar__section--months {
+  container: sidebar-months / inline-size;
   border-block-start-color: var(--sidebar-border);
   padding-block-start: 0.875rem;
-}
-
-.app-sidebar__search {
-  min-height: 2.5rem;
-  border: 1px solid var(--sidebar-control-border);
-  border-radius: 0.75rem;
-  padding-inline: 0.75rem;
-  background: var(--sidebar-control);
-  color: var(--sidebar-text);
 }
 
 .app-sidebar__list {
   border-radius: 0.875rem;
   border: 1px solid var(--sidebar-border);
   background: var(--sidebar-surface-raised);
-  box-shadow: inset 0 1px 0 color-mix(in oklch, var(--sidebar-text) 4%, transparent);
   scrollbar-color: var(--sidebar-scrollbar-thumb) transparent;
   scrollbar-width: thin;
   scrollbar-gutter: stable;
@@ -273,7 +454,12 @@
   border-color: transparent;
   background: var(--sidebar-primary);
   color: var(--sidebar-primary-ink);
-  box-shadow: 0 0.35rem 0.9rem color-mix(in oklch, var(--sidebar-primary) 24%, transparent);
+}
+
+.app-sidebar__artist-option.is-selected:hover {
+  border-color: transparent;
+  background: var(--sidebar-primary-hover);
+  color: var(--sidebar-primary-ink);
 }
 
 .app-sidebar__loading {
@@ -283,7 +469,7 @@
   gap: 0.5rem;
   padding-inline: 0.75rem;
   color: var(--sidebar-text-muted);
-  font-size: 0.75rem;
+  font-size: var(--ui-font-min);
 }
 
 .app-sidebar__loading-dot {
@@ -292,16 +478,14 @@
   flex: 0 0 auto;
   border-radius: 999px;
   background: var(--sidebar-accent);
-  box-shadow: 0 0 0 0.25rem color-mix(in oklch, var(--sidebar-accent) 14%, transparent);
 }
 
 .app-sidebar__artist-option:focus-visible,
 .app-sidebar__month-list > button:focus-visible,
 .app-sidebar__section-toggle:focus-visible,
 .app-sidebar__section-toggle-button:focus-visible,
-.app-sidebar__sort-button:focus-visible,
 .app-sidebar__year-expander:focus-visible {
-  outline: 2px solid var(--sidebar-accent-hover);
+  outline: 4px solid var(--sidebar-focus-ring);
   outline-offset: 2px;
 }
 
@@ -310,29 +494,82 @@
 }
 
 .app-sidebar__year-header {
+  min-width: 0;
   min-height: 2.75rem;
   gap: 0.75rem;
-  border-radius: 0;
+  border-start-start-radius: 0.625rem;
+  border-start-end-radius: 0.625rem;
+  border-end-start-radius: 0;
+  border-end-end-radius: 0;
   background: transparent;
   color: var(--sidebar-text);
 }
 
-.app-sidebar__year-header--selected {
+.app-sidebar__year-header--idle:hover {
+  background: var(--sidebar-control-hover);
   color: var(--sidebar-text);
-  background: var(--sidebar-control);
-  box-shadow: none;
+}
+
+.app-sidebar__year-expander-icon,
+.app-sidebar__year-count {
+  color: var(--sidebar-text-muted);
+}
+
+.app-sidebar__year-header--selected {
+  color: var(--sidebar-primary);
+  background: color-mix(in srgb, var(--sidebar-primary) 10%, var(--sidebar-control));
 }
 
 .app-sidebar__year-card {
   border: 1px solid var(--sidebar-border);
+  border-radius: 0.875rem;
   background: var(--sidebar-surface);
+  overflow: hidden;
 }
 
 .app-sidebar__year-expander {
   min-width: 0;
+  flex: 1 1 auto;
   padding: 0;
   text-align: start;
   cursor: pointer;
+}
+
+.app-sidebar__year-label {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  align-items: baseline;
+  gap: 0.375rem;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.app-sidebar__year-label-year {
+  flex: 0 0 auto;
+}
+
+.app-sidebar__year-count {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-sidebar .app-sidebar__year-expander {
+  justify-content: flex-start;
+  border-radius: 0.5rem;
+  padding-inline: 0;
+}
+
+.app-sidebar .ui-button.app-sidebar__year-expander {
+  gap: 0.375rem;
+  padding-inline: 0;
+}
+
+.app-sidebar .app-sidebar__year-expander:focus-visible {
+  outline: 2px solid var(--sidebar-focus-ring);
+  outline-offset: 2px;
 }
 
 .app-sidebar__months-grid {
@@ -350,6 +587,18 @@
   transition: background-color 150ms cubic-bezier(0.2, 0, 0, 1), border-color 150ms cubic-bezier(0.2, 0, 0, 1), color 150ms cubic-bezier(0.2, 0, 0, 1), transform 150ms cubic-bezier(0.2, 0, 0, 1);
 }
 
+.app-sidebar .app-sidebar__year-toggle {
+  flex: 0 0 auto;
+  border-radius: 0.5rem;
+  white-space: nowrap;
+}
+
+.app-sidebar .app-sidebar__month-reset,
+.app-sidebar .app-sidebar__month-button {
+  border-radius: 0.625rem;
+  justify-content: space-between;
+}
+
 .app-sidebar__year-toggle:hover,
 .app-sidebar__month-reset:hover,
 .app-sidebar__month-button:hover {
@@ -361,100 +610,31 @@
 .app-sidebar__year-toggle.is-selected,
 .app-sidebar__month-reset.is-selected,
 .app-sidebar__month-button.is-selected {
-  border-color: var(--sidebar-primary);
+  border-color: transparent;
   background: var(--sidebar-primary);
   color: var(--sidebar-primary-ink);
-  box-shadow: 0 0.25rem 0.75rem color-mix(in oklch, var(--sidebar-primary) 20%, transparent);
+}
+
+.app-sidebar__year-toggle.is-selected:hover,
+.app-sidebar__month-reset.is-selected:hover,
+.app-sidebar__month-button.is-selected:hover {
+  border-color: transparent;
+  background: var(--sidebar-primary-hover);
+  color: var(--sidebar-primary-ink);
+}
+
+.app-sidebar__year-toggle.is-selected:active,
+.app-sidebar__month-reset.is-selected:active,
+.app-sidebar__month-button.is-selected:active {
+  background: var(--sidebar-primary-press);
+  color: var(--sidebar-primary-ink);
 }
 
 .app-sidebar__year-toggle:focus-visible,
 .app-sidebar__month-reset:focus-visible,
 .app-sidebar__month-button:focus-visible {
-  outline: 2px solid var(--sidebar-accent-hover);
+  outline: 4px solid var(--sidebar-focus-ring);
   outline-offset: 2px;
-}
-
-.app-sidebar [class~="bg-zinc-950/40"],
-.app-sidebar [class~="bg-zinc-950/60"] {
-  background: var(--sidebar-surface-raised);
-}
-
-.app-sidebar [class~="bg-zinc-900/40"] {
-  background: var(--sidebar-surface);
-}
-
-.app-sidebar [class~="bg-zinc-800"] {
-  background: var(--sidebar-surface-muted);
-}
-
-.app-sidebar [class~="bg-zinc-800/80"] {
-  background: var(--sidebar-control);
-}
-
-.app-sidebar [class~="bg-zinc-700"] {
-  background: var(--sidebar-control-hover);
-}
-
-.app-sidebar [class~="hover:bg-zinc-800"]:hover,
-.app-sidebar [class~="hover:bg-zinc-800/60"]:hover,
-.app-sidebar [class~="hover:bg-zinc-700"]:hover {
-  background: var(--sidebar-control-hover);
-}
-
-.app-sidebar [class~="border-zinc-800"],
-.app-sidebar [class~="border-zinc-800/60"],
-.app-sidebar [class~="border-zinc-800/80"],
-.app-sidebar [class~="border-zinc-700"] {
-  border-color: var(--sidebar-border);
-}
-
-.app-sidebar [class~="text-zinc-100"],
-.app-sidebar [class~="text-zinc-200"] {
-  color: var(--sidebar-text);
-}
-
-.app-sidebar [class~="text-zinc-300"] {
-  color: var(--sidebar-text-secondary);
-}
-
-.app-sidebar [class~="text-zinc-400"],
-.app-sidebar [class~="text-zinc-500"] {
-  color: var(--sidebar-text-muted);
-}
-
-.app-sidebar [class~="hover:text-zinc-100"]:hover,
-.app-sidebar [class~="hover:text-zinc-200"]:hover {
-  color: var(--sidebar-text);
-}
-
-.app-sidebar input {
-  border-color: var(--sidebar-control-border);
-  background: var(--sidebar-control);
-  color: var(--sidebar-text);
-}
-
-.app-sidebar input::placeholder {
-  color: var(--sidebar-text-muted);
-}
-
-.app-sidebar input:focus {
-  border-color: var(--sidebar-accent);
-  outline-color: var(--sidebar-accent);
-}
-
-.app-sidebar [class~="bg-indigo-600"] {
-  background: var(--sidebar-primary);
-  color: var(--sidebar-primary-ink);
-}
-
-.app-sidebar [class~="bg-indigo-600"]:hover {
-  background: var(--sidebar-primary-hover);
-}
-
-.app-sidebar [class~="text-indigo-200"],
-.app-sidebar [class~="text-indigo-300"],
-.app-sidebar [class~="text-indigo-400"] {
-  color: var(--sidebar-accent-ink);
 }
 
 .app-sidebar [class~="hover:text-white"]:hover {
@@ -474,7 +654,6 @@
   padding: 0.625rem 0.75rem;
   border-radius: 0.875rem;
   background: var(--filter-surface);
-  box-shadow: 0 0.25rem 1rem oklch(0 0 0 / 0.08);
 }
 
 .filter-summary__main {
@@ -486,7 +665,14 @@
 .filter-summary__label {
   min-height: 2rem;
   padding-inline: 0.25rem;
+  color: var(--filter-text);
   letter-spacing: 0.02em;
+}
+
+.filter-summary__icon,
+.filter-summary__meta-copy,
+.filter-summary__meta-total {
+  color: var(--filter-text);
 }
 
 .filter-summary__badge {
@@ -518,24 +704,6 @@
   color: var(--filter-text);
 }
 
-.filter-summary__reset {
-  min-height: 2rem;
-  border: 1px solid var(--filter-border);
-  background: var(--filter-badge);
-  color: var(--filter-text);
-}
-
-.filter-summary__reset:focus-visible {
-  outline: 2px solid var(--filter-text);
-  outline-offset: 2px;
-}
-
-.filter-summary__reset:hover {
-  border-color: var(--filter-text);
-  background: var(--filter-surface);
-  color: var(--filter-text);
-}
-
 /* The filter summary uses the same compact dismiss geometry as sidebar chips. */
 .filter-summary__clear {
   box-sizing: border-box;
@@ -560,34 +728,12 @@
 }
 
 .filter-summary__clear:focus-visible {
-  outline: 2px solid var(--filter-text);
-  outline-offset: 1px;
+  outline: 4px solid var(--brand-focus-ring);
+  outline-offset: 2px;
 }
 
-.filter-summary .text-indigo-200,
-.filter-summary .text-indigo-300,
-.filter-summary .text-indigo-400 {
-  color: var(--filter-text);
-}
-
-.filter-summary .text-purple-200 {
-  color: var(--filter-artist-text);
-}
-
-.filter-summary .text-emerald-200 {
-  color: var(--filter-month-text);
-}
-
-.filter-summary [class~="hover:bg-indigo-500/40"]:hover {
-  background: color-mix(in oklch, var(--filter-text) 16%, transparent);
-}
-
-.filter-summary [class~="hover:bg-purple-500/40"]:hover {
-  background: color-mix(in oklch, var(--filter-artist-text) 16%, transparent);
-}
-
-.filter-summary [class~="hover:bg-emerald-500/40"]:hover {
-  background: color-mix(in oklch, var(--filter-month-text) 16%, transparent);
+.filter-summary__clear:hover {
+  background: color-mix(in oklch, var(--filter-text) 12%, var(--filter-badge));
 }
 
 @media (max-width: 48rem) {
@@ -634,12 +780,12 @@
 }
 
 ::-webkit-scrollbar-thumb {
-  background: oklch(0.4 0.02 260 / 0.5);
+  background: color-mix(in oklch, var(--sidebar-text-muted) 50%, transparent);
   border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: oklch(0.6 0.04 260 / 0.8);
+  background: color-mix(in oklch, var(--sidebar-text-secondary) 80%, transparent);
 }
 
 /* The full-screen filmstrip keeps its scrollbar visible and follows the
@@ -666,14 +812,24 @@
 }
 
 @media (max-width: 40rem) {
+  .app-sidebar__active-filters {
+    gap: 0.375rem;
+    padding-block: 0.5rem;
+  }
+
+  .app-sidebar__active-filters-toggle {
+    font-size: var(--ui-font-min-mobile);
+  }
+
   .app-sidebar {
     position: absolute;
     inset-block: 0;
     inset-inline-start: 0;
-    z-index: 40;
+    /* Keep the drawer above every viewer control while the mobile backdrop
+       owns the rest of the layout. */
+    z-index: 60;
     width: min(18rem, calc(100vw - 1rem));
     max-width: calc(100% - 0.5rem);
-    box-shadow: 1rem 0 2.5rem oklch(0 0 0 / 0.3);
   }
 
   .app-sidebar__body {
@@ -699,11 +855,14 @@
   .app-sidebar__backdrop {
     position: absolute;
     inset: 0;
-    z-index: 30;
+    /* The fixed scroll-to-top control is rendered after the layout shell and
+       also uses z-index 30. Keep the backdrop above it when the drawer opens. */
+    z-index: 50;
     display: block;
     border: 0;
+    border-radius: 0;
     padding: 0;
-    background: oklch(0 0 0 / 0.44);
+    background: var(--sidebar-overlay);
     cursor: pointer;
     backdrop-filter: blur(2px);
   }
@@ -711,5 +870,11 @@
   .app-sidebar__backdrop:focus-visible {
     outline: 2px solid var(--sidebar-accent);
     outline-offset: -2px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-sidebar__active-filters-toggle svg {
+    transition: none;
   }
 }

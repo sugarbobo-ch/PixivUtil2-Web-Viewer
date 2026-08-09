@@ -79,14 +79,16 @@ export interface WorkGroup {
 
 export interface WebConfig {
   webTheme: ThemeMode;
-  defaultViewMode: ViewMode;
+  defaultViewMode: ViewerMode;
   thumbnailSize: number;
   itemsPerPage: number;
   autoOpenBrowser: boolean;
   groupMangaPosts: boolean;
   blurEnabled: boolean;
+  demoMode: boolean;
   preloadImageCount: number;
   fullscreenToolbarSimpleMode: boolean;
+  fullscreenShowThumbnails: boolean;
   webtoonImageScale: number;
   webtoonImageGap: number;
   webtoonShowInfo: boolean;
@@ -100,14 +102,16 @@ export interface WebConfig {
 
 export const DEFAULT_WEB_CONFIG: WebConfig = {
   webTheme: 'dark',
-  defaultViewMode: 'grid',
+  defaultViewMode: 'fullscreen',
   thumbnailSize: 320,
   itemsPerPage: 200,
   autoOpenBrowser: true,
   groupMangaPosts: false,
   blurEnabled: false,
+  demoMode: false,
   preloadImageCount: 3,
   fullscreenToolbarSimpleMode: true,
+  fullscreenShowThumbnails: true,
   webtoonImageScale: 100,
   webtoonImageGap: 24,
   webtoonShowInfo: true,

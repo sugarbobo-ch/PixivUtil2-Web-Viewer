@@ -3,6 +3,8 @@ import { SourceLink, WorkGroup } from '../types';
 import { buildThumbnailUrl } from '../utils/webConfig';
 import { fetchFirstSourceLink } from '../utils/sourceLinks';
 import { MediaIssuePlaceholder } from './MediaIssuePlaceholder';
+import { Badge, Button, IconButton } from './ui';
+import { DemoMediaBlock } from './DemoMediaBlock';
 import { X, Play, Images, Film, ExternalLink } from 'lucide-react';
 
 interface MangaGroupModalProps {
@@ -12,6 +14,7 @@ interface MangaGroupModalProps {
   onSelectImage: (pageIndex: number) => void;
   thumbnailSize: number;
   blurEnabled?: boolean;
+  demoMode?: boolean;
 }
 
 export const MangaGroupModal: React.FC<MangaGroupModalProps> = ({
@@ -21,6 +24,7 @@ export const MangaGroupModal: React.FC<MangaGroupModalProps> = ({
   onSelectImage,
   thumbnailSize,
   blurEnabled = false,
+  demoMode = false,
 }) => {
   const [sourceLink, setSourceLink] = useState<SourceLink | null>(null);
   const [isSourceLoading, setIsSourceLoading] = useState(false);
@@ -83,32 +87,36 @@ export const MangaGroupModal: React.FC<MangaGroupModalProps> = ({
     <div
       role="presentation"
       onClick={handleBackdropClick}
-      className="manga-group-modal fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-fadeIn select-none"
+      className="manga-group-modal fixed inset-0 z-50 flex items-center justify-center"
     >
       <div
         role="dialog"
         aria-modal="true"
         aria-labelledby="manga-group-modal-title"
-        className="manga-group-modal__panel bg-zinc-900 border border-zinc-800 rounded-2xl max-w-4xl w-full max-h-[85vh] flex flex-col shadow-2xl overflow-hidden"
+        className="manga-group-modal__panel flex min-h-0 w-full flex-col overflow-hidden"
       >
         {/* Header Bar */}
-        <div className="manga-group-modal__header flex items-center justify-between py-4 border-b border-zinc-800 bg-zinc-900/90">
-          <div className="flex items-center gap-3 min-w-0 pr-4">
-            <div className="manga-group-modal__title-icon p-2 rounded-xl shrink-0">
+        <div className="manga-group-modal__header flex items-center justify-between">
+          <div className="flex min-w-0 flex-1 items-center gap-3 pe-4">
+            <div className="manga-group-modal__title-icon shrink-0">
               <Images className="w-5 h-5" aria-hidden="true" />
             </div>
             <div className="manga-group-modal__heading min-w-0">
               <div className="manga-group-modal__title-row flex items-center gap-2">
-                <h3 id="manga-group-modal-title" className="manga-group-modal__title font-bold text-base text-zinc-100 truncate">
+                <h3
+                  id="manga-group-modal-title"
+                  className="manga-group-modal__title font-bold text-base truncate"
+                  title={workGroup.title || '無題作品'}
+                >
                   {workGroup.title || '無題作品'}
                 </h3>
-                <span className="manga-group-modal__count viewer-group-badge text-xs px-2 py-0.5 rounded-full font-semibold shrink-0">
+                <Badge variant="surface" size="sm" className="manga-group-modal__count shrink-0">
                   {workGroup.items.length} 頁圖包
-                </span>
+                </Badge>
               </div>
-              <p className="manga-group-modal__meta text-xs text-zinc-400 truncate mt-0.5">
-                繪師: <span className="text-zinc-300">{workGroup.artist_name || workGroup.member_id}</span>
-                {workGroup.created_date && <span className="ml-3 text-zinc-500">‧ {workGroup.created_date}</span>}
+              <p className="manga-group-modal__meta mt-0.5">
+                繪師: <span className="manga-group-modal__meta-primary">{workGroup.artist_name || workGroup.member_id}</span>
+                {workGroup.created_date && <span className="manga-group-modal__meta-secondary ms-3">‧ {workGroup.created_date}</span>}
               </p>
               <div className="manga-group-source" aria-live="polite">
                 {isSourceLoading ? (
@@ -129,9 +137,10 @@ export const MangaGroupModal: React.FC<MangaGroupModalProps> = ({
           </div>
 
           <div className="manga-group-modal__actions">
-            <button
+            <Button
               type="button"
               onClick={() => onSelectImage(0)}
+              variant="primary"
               className="manga-group-modal__play-button"
               aria-label="從第 1 頁開始播放圖包"
               title="從第 1 頁開始播放圖包"
@@ -140,22 +149,23 @@ export const MangaGroupModal: React.FC<MangaGroupModalProps> = ({
                 <Play className="h-5 w-5 fill-current" />
               </span>
               <span className="manga-group-modal__play-label">播放圖包</span>
-            </button>
-            <button
+            </Button>
+            <IconButton
               ref={closeButtonRef}
               type="button"
               onClick={onClose}
+              variant="ghost"
               className="manga-group-modal__close-button"
               aria-label="關閉圖包預覽"
               title="關閉圖包預覽 (Esc)"
             >
               <X className="h-5 w-5" aria-hidden="true" />
-            </button>
+            </IconButton>
           </div>
         </div>
 
         {/* Thumbnail Grid Area */}
-        <div className="manga-group-modal__content p-5 overflow-y-auto flex-1 scrollbar-thin scrollbar-thumb-zinc-700">
+        <div className="manga-group-modal__content flex-1 overflow-y-auto">
           <div className="manga-group-modal__grid grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3.5">
             {workGroup.items.map((item, idx) => {
               const isVideo = item.save_name.toLowerCase().endsWith('.mp4');
@@ -165,34 +175,38 @@ export const MangaGroupModal: React.FC<MangaGroupModalProps> = ({
                   key={item.image_id}
                   onClick={() => onSelectImage(idx)}
                   aria-label={`開啟第 ${idx + 1} 頁`}
-                  className="manga-group-card group relative block aspect-square w-full overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950 p-0 text-left transition-[border-color,box-shadow,transform] duration-200"
+                  className="manga-group-card group relative block aspect-square w-full overflow-hidden rounded-lg p-0 text-left"
                 >
                   {item.media_status ? (
                     <MediaIssuePlaceholder message={item.media_error} compact />
                   ) : (
-                    <img
-                      src={buildThumbnailUrl(item, thumbnailSize)}
-                      alt={item.title || `P${idx + 1}`}
-                      loading="lazy"
-                      className={`w-full h-full object-cover ${blurEnabled ? 'blur-media blur-media--thumbnail' : 'transition-transform duration-300 group-hover:scale-105'}`}
-                    />
+                    demoMode ? (
+                      <DemoMediaBlock dominantColor={item.dominant_color} />
+                    ) : (
+                      <img
+                        src={buildThumbnailUrl(item, thumbnailSize)}
+                        alt={item.title || `P${idx + 1}`}
+                        loading="lazy"
+                        className={`w-full h-full object-cover ${blurEnabled ? 'blur-media blur-media--thumbnail' : 'transition-transform duration-300 group-hover:scale-105'}`}
+                      />
+                    )
                   )}
 
                   {/* Page Badge */}
-                  <div className="manga-group-card__page-badge viewer-group-badge absolute top-2 left-2 px-2 py-0.5 rounded-md text-[11px] font-bold">
+                  <Badge variant="hud" size="xs" className="manga-group-card__page-badge">
                     P{idx + 1}
-                  </div>
+                  </Badge>
 
                   {/* Video Badge */}
                   {isVideo && (
-                    <div className="manga-group-card__video-badge absolute top-2 right-2 p-1 rounded-full bg-black/70 backdrop-blur-md text-white">
+                    <Badge variant="hud" size="sm" iconOnly className="manga-group-card__video-badge">
                       <Film className="w-3 h-3" aria-hidden="true" />
-                    </div>
+                    </Badge>
                   )}
 
                   {/* Hover Overlay */}
                   <div className="manga-group-card__hover-overlay pointer-events-none absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                    <span className="text-xs font-semibold px-2.5 py-1 rounded-lg bg-black/80 text-white backdrop-blur-md">
+                    <span className="manga-group-card__hover-label text-xs font-semibold">
                       點擊看大圖
                     </span>
                   </div>

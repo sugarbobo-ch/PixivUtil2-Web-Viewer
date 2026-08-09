@@ -4,11 +4,11 @@ import { getItemGroupKey } from '../utils/grouping';
 import { ArtistStickyNav } from './ArtistStickyNav';
 import { CustomSelect } from './CustomSelect';
 import { MonthJumpItem, MonthJumpNavigationOptions, MonthNavigationPhase, MonthQuickNav } from './MonthQuickNav';
-import { getTimeFilterLabel } from '../utils/timeFilterLabels';
-import { CheckSquare, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, ArrowUpDown, Search, Filter, X, RotateCcw, List } from 'lucide-react';
+import { ChevronLeft, ChevronsLeft, ChevronsRight, ArrowUpDown, Search, Filter, RotateCcw, List } from 'lucide-react';
 import { GalleryMonthSection } from './GalleryMonthSection';
 import { GalleryThumbnail } from './GalleryThumbnail';
 import { getGridRowScrollTop } from '../utils/galleryLayout';
+import { Button, IconButton, Input } from './ui';
 
 interface GalleryGridProps {
   images: ImageItem[];
@@ -28,12 +28,11 @@ interface GalleryGridProps {
   onReplaceSelection: (imageIds: number[]) => void;
   onOpenFullscreen: (index: number) => void;
   searchQuery?: string;
-  onClearSearch?: () => void;
   selectedArtist?: number | null;
   onClearArtist?: () => void;
   onOpenFilters?: () => void;
+  isFilterSidebarOpen?: boolean;
   selectedMonths?: string[];
-  onClearMonth?: (month: string) => void;
   onResetAllFilters?: () => void;
   groupMangaPosts?: boolean;
   onOpenWorkGroup?: (group: WorkGroup) => void;
@@ -53,6 +52,7 @@ interface GalleryGridProps {
   onRequestArtistUpdate?: () => void;
   onOpenArtistSettings?: () => void;
   blurEnabled?: boolean;
+  demoMode?: boolean;
 }
 
 interface SelectionGesture {
@@ -123,12 +123,11 @@ export const GalleryGrid: React.FC<GalleryGridProps> = ({
   onReplaceSelection,
   onOpenFullscreen,
   searchQuery = '',
-  onClearSearch,
   selectedArtist = null,
   onClearArtist,
   onOpenFilters,
+  isFilterSidebarOpen = false,
   selectedMonths = [],
-  onClearMonth,
   onResetAllFilters,
   groupMangaPosts = false,
   onOpenWorkGroup,
@@ -148,6 +147,7 @@ export const GalleryGrid: React.FC<GalleryGridProps> = ({
   onRequestArtistUpdate,
   onOpenArtistSettings,
   blurEnabled = false,
+  demoMode = false,
 }) => {
   const galleryRootRef = React.useRef<HTMLDivElement | null>(null);
   const filterChromeRef = React.useRef<HTMLDivElement | null>(null);
@@ -611,9 +611,8 @@ export const GalleryGrid: React.FC<GalleryGridProps> = ({
     setPageInput(String(currentPage));
   }, [currentPage, totalPages]);
 
-  const hasActiveFilters = searchQuery !== '' || selectedArtist !== null || selectedMonths.length > 0;
-  const hasActiveFilterSummary = searchQuery !== '' || selectedMonths.length > 0;
-  const selectedArtistObj = selectedArtist === null
+const hasActiveFilters = searchQuery !== '' || selectedArtist !== null || selectedMonths.length > 0;
+const selectedArtistObj = selectedArtist === null
     ? null
     : artists.find(artist => artist.member_id === selectedArtist) || null;
   const monthNavResetKey = [
@@ -714,68 +713,24 @@ export const GalleryGrid: React.FC<GalleryGridProps> = ({
         data-viewer-sticky-toolbar="true"
         className="gallery-context-shell sticky top-0 z-20"
       >
-      {/* Active Search & Filter Banner */}
-      {hasActiveFilterSummary && (
-        <div className="filter-summary filter-summary__layout rounded-xl p-3 mx-4 mt-3 flex flex-wrap items-center justify-between gap-3 shadow-md backdrop-blur-sm">
-          <div className="filter-summary__main flex items-center gap-2 flex-wrap">
-            <span className="filter-summary__label text-xs font-bold text-indigo-300 flex items-center gap-1.5 mr-1">
-              <Filter className="w-4 h-4 text-indigo-400" />
-              目前篩選中:
-            </span>
-
-            {searchQuery && (
-              <span className="filter-summary__badge filter-summary__badge--search inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold shadow-xs">
-                <Search className="w-3.5 h-3.5 text-indigo-400" />
-                關鍵字: 「{searchQuery}」
-                {onClearSearch && (
-                  <button
-                    type="button"
-                    onClick={onClearSearch}
-                    className="filter-summary__clear hover:bg-indigo-500/40 transition-colors ml-0.5"
-                    aria-label={`清除搜尋條件：${searchQuery}`}
-                    title="清除關鍵字搜尋"
-                  >
-                    <X className="w-3.5 h-3.5" />
-                  </button>
-                )}
-              </span>
-            )}
-
-            {selectedMonths.map((m) => (
-              <span
-                key={m}
-                className="filter-summary__badge filter-summary__badge--month inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold shadow-xs"
-              >
-                📅 {getTimeFilterLabel(m)}: {m}
-                {onClearMonth && (
-                  <button
-                    type="button"
-                    onClick={() => onClearMonth(m)}
-                    className="filter-summary__clear hover:bg-emerald-500/40 transition-colors ml-0.5"
-                    aria-label={`清除月份條件：${m}`}
-                    title={`取消 ${m} ${getTimeFilterLabel(m)}`}
-                  >
-                    <X className="w-3.5 h-3.5" />
-                  </button>
-                )}
-              </span>
-            ))}
-          </div>
-
-          <div className="filter-summary__meta flex items-center gap-3">
-            <span className="text-xs font-medium text-zinc-400">
-              找到 <strong className="text-zinc-100 font-bold">{totalImages}</strong> 筆相符作品
-            </span>
-            {onResetAllFilters && (
-              <button
-                onClick={onResetAllFilters}
-                className="filter-summary__reset text-xs font-medium px-2.5 py-1 rounded-lg flex items-center gap-1 transition-[background-color,color,border-color] shadow-xs"
-              >
-                <RotateCcw className="w-3.5 h-3.5 text-zinc-400" />
-                重設所有條件
-              </button>
-            )}
-          </div>
+      {/* Keep the result count visible without repeating every active filter. */}
+      {hasActiveFilters && (
+        <div className="filter-summary filter-summary__layout filter-summary--compact mx-4 mt-2">
+          <span className="filter-summary__meta-copy" role="status" aria-live="polite">
+            找到 <strong className="filter-summary__meta-total">{totalImages}</strong> 筆相符作品
+          </span>
+          {onResetAllFilters && (
+            <Button
+              type="button"
+              onClick={onResetAllFilters}
+              variant="secondary"
+              size="md"
+              className="filter-summary__reset"
+            >
+              <RotateCcw className="filter-summary__reset-icon" aria-hidden="true" />
+              重設所有條件
+            </Button>
+          )}
         </div>
       )}
 
@@ -784,18 +739,19 @@ export const GalleryGrid: React.FC<GalleryGridProps> = ({
         className={`gallery-filter-toolbar ${selectedArtistObj ? 'has-artist' : 'is-empty'} flex items-center gap-2 px-4 select-none sm:gap-3`}
       >
         {onOpenFilters && (
-          <button
+          <IconButton
             type="button"
             onClick={onOpenFilters}
-            className={`gallery-filter-toolbar__filter-trigger ${hasActiveFilters ? 'is-active' : ''}`}
+            variant={hasActiveFilters ? 'primary' : 'secondary'}
+            size="md"
+            className="gallery-filter-toolbar__filter-trigger"
             aria-label="開啟篩選條件"
+            aria-expanded={isFilterSidebarOpen}
             aria-controls="gallery-filter-sidebar"
             title="開啟篩選條件"
           >
             <Filter className="h-5 w-5" aria-hidden="true" />
-            <span className="gallery-filter-toolbar__filter-label">篩選</span>
-            {hasActiveFilters && <span className="gallery-filter-toolbar__filter-indicator" aria-hidden="true" />}
-          </button>
+          </IconButton>
         )}
         <ArtistStickyNav
           artist={selectedArtistObj}
@@ -816,7 +772,7 @@ export const GalleryGrid: React.FC<GalleryGridProps> = ({
         />
           <div className="gallery-filter-toolbar__actions">
             <div className="gallery-filter-toolbar__sort ml-auto flex min-h-9 shrink-0 items-center gap-2">
-            <span className="gallery-filter-toolbar__label text-xs font-medium text-zinc-400">排序:</span>
+            <span className="gallery-filter-toolbar__label text-xs font-medium">排序:</span>
             <CustomSelect
               value={sortMode}
               options={sortOptions}
@@ -826,11 +782,10 @@ export const GalleryGrid: React.FC<GalleryGridProps> = ({
               leadingContent={<ArrowUpDown className="gallery-filter-toolbar__sort-icon h-5 w-5" />}
               buttonClassName="gallery-filter-toolbar__sort-control"
               menuPlacement="end"
-              style={{ '--select-icon-color': 'var(--header-control-muted)', '--select-icon-focus-color': 'var(--header-accent)' } as React.CSSProperties}
             />
           </div>
           <div className="gallery-filter-toolbar__page-size">
-            <span className="gallery-filter-toolbar__label gallery-filter-toolbar__page-size-label text-xs font-medium text-zinc-400">每頁:</span>
+            <span className="gallery-filter-toolbar__label gallery-filter-toolbar__page-size-label text-xs font-medium">每頁:</span>
             <CustomSelect
               value={itemsPerPage}
               options={itemsPerPageOptions}
@@ -843,22 +798,8 @@ export const GalleryGrid: React.FC<GalleryGridProps> = ({
               leadingContent={<List className="gallery-filter-toolbar__page-size-icon h-5 w-5" />}
               buttonClassName="gallery-filter-toolbar__page-size-control"
               menuPlacement="end"
-              style={{ '--select-icon-color': 'var(--header-control-muted)', '--select-icon-focus-color': 'var(--header-accent)' } as React.CSSProperties}
             />
           </div>
-          {onToggleEditMode && (
-            <button
-              type="button"
-              onClick={onToggleEditMode}
-              aria-pressed={isEditMode}
-              aria-label={isEditMode ? '結束編輯模式' : '開啟編輯模式'}
-              title={isEditMode ? '結束編輯模式' : '開啟編輯模式'}
-              className={`gallery-filter-toolbar__edit-trigger ${isEditMode ? 'is-active' : ''}`}
-            >
-              <CheckSquare className="h-5 w-5" aria-hidden="true" />
-              <span className="gallery-filter-toolbar__edit-label">{isEditMode ? '編輯中' : '編輯'}</span>
-            </button>
-          )}
         </div>
       </div>
       </div>
@@ -891,14 +832,16 @@ export const GalleryGrid: React.FC<GalleryGridProps> = ({
               )}
             </div>
             {hasActiveFilters && onResetAllFilters && (
-              <button
+              <Button
                 type="button"
                 onClick={onResetAllFilters}
+                variant="plain"
+                size="sm"
                 className="gallery-empty-state__reset"
               >
                 <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
                 清除條件
-              </button>
+              </Button>
             )}
           </div>
         ) : (
@@ -918,6 +861,7 @@ export const GalleryGrid: React.FC<GalleryGridProps> = ({
                 handleCardClick={handleCardClick}
                 handleCardKeyDown={handleCardKeyDown}
                 blurEnabled={blurEnabled}
+                demoMode={demoMode}
                 scrollContainerRef={scrollContainerRef}
                 scrollTick={scrollTick}
                 navigationMode={navigationMode}
@@ -928,75 +872,78 @@ export const GalleryGrid: React.FC<GalleryGridProps> = ({
             ))}
 
             {/* Pagination Bar */}
-            <div className="gallery-pagination flex flex-col sm:flex-row items-center justify-between gap-3 pt-6 border-t border-zinc-800 text-xs text-zinc-400">
+            <div className="gallery-pagination flex flex-col sm:flex-row items-center justify-between gap-3 pt-6 text-xs">
           <div className="gallery-pagination__summary">
-            顯示第 <span className="font-semibold text-zinc-200">{startOffset + 1}</span> - <span className="font-semibold text-zinc-200">{endOffset}</span> 張，共 <span className="font-semibold text-indigo-400">{totalImages}</span> 張作品
+            顯示第 <span className="font-semibold">{startOffset + 1}</span> - <span className="font-semibold">{endOffset}</span> 張，共 <span className="gallery-pagination__total font-semibold">{totalImages}</span> 張作品
           </div>
 
           {/* Page Buttons */}
           <div className="gallery-pagination__controls flex items-center gap-1.5">
-            <button
+            <IconButton
               type="button"
               onClick={() => onPageChange(1)}
+              variant="secondary"
               aria-label="第一頁"
               disabled={currentPage === 1}
-              className="gallery-pagination__button gallery-pagination__button--icon rounded-lg border border-zinc-800 bg-zinc-900 text-zinc-300 hover:bg-zinc-800 disabled:opacity-40 disabled:hover:bg-zinc-900"
+              className="gallery-pagination__button gallery-pagination__button--icon"
               title="第一頁"
             >
               <ChevronsLeft className="h-5 w-5" />
-            </button>
-            <button
+            </IconButton>
+            <Button
               type="button"
               onClick={() => onPageChange(currentPage - 1)}
               disabled={currentPage === 1}
-              className="gallery-pagination__button p-1.5 rounded-lg border border-zinc-800 bg-zinc-900 text-zinc-300 hover:bg-zinc-800 disabled:opacity-40 disabled:hover:bg-zinc-900 flex items-center gap-1 px-2.5"
+              variant="secondary"
+              className="gallery-pagination__button flex items-center gap-1 px-2.5"
             >
               <ChevronLeft className="w-4 h-4" /> 上一頁
-            </button>
+            </Button>
 
             {getPageNumbers().map((p, idx) => {
               if (typeof p === 'string') {
-                return <span key={idx} className="px-2 text-zinc-500">...</span>;
+                return <span key={idx} className="gallery-pagination__ellipsis px-2">...</span>;
               }
                 return (
-                <button
+                <Button
                   key={`${p}-${idx}`}
                   type="button"
                   onClick={() => onPageChange(p)}
-                  className={`gallery-pagination__button ${currentPage === p ? 'is-current' : ''} rounded-lg text-xs font-semibold transition-colors ${
-                    currentPage === p
-                      ? 'bg-indigo-600 text-white shadow-sm'
-                      : 'bg-zinc-900 border border-zinc-800 text-zinc-300 hover:bg-zinc-800'
-                  }`}
+                  variant={currentPage === p ? 'primary' : 'secondary'}
+                  aria-current={currentPage === p ? 'page' : undefined}
+                  className={`gallery-pagination__button ${currentPage === p ? 'is-current gallery-pagination__button--current' : ''}`}
                 >
                   {p}
-                </button>
+                </Button>
               );
             })}
 
-            <button
+            <Button
               type="button"
               onClick={() => onPageChange(currentPage + 1)}
               disabled={currentPage === totalPages}
-              className="gallery-pagination__button p-1.5 rounded-lg border border-zinc-800 bg-zinc-900 text-zinc-300 hover:bg-zinc-800 disabled:opacity-40 disabled:hover:bg-zinc-900 flex items-center gap-1 px-2.5"
+              variant="secondary"
+              className="gallery-pagination__button flex items-center gap-1 px-2.5"
             >
-              下一頁 <ChevronRight className="w-4 h-4" />
-            </button>
-            <button
+              下一頁 <span aria-hidden="true">&gt;</span>
+            </Button>
+            <IconButton
               type="button"
               onClick={() => onPageChange(totalPages)}
+              variant="secondary"
               aria-label="最後一頁"
               disabled={currentPage === totalPages}
-              className="gallery-pagination__button gallery-pagination__button--icon rounded-lg border border-zinc-800 bg-zinc-900 text-zinc-300 hover:bg-zinc-800 disabled:opacity-40 disabled:hover:bg-zinc-900"
+              className="gallery-pagination__button gallery-pagination__button--icon"
               title="最後一頁"
             >
               <ChevronsRight className="h-5 w-5" />
-            </button>
+            </IconButton>
           </div>
 
           <form className="gallery-pagination__jump" onSubmit={handlePageInputSubmit}>
             <label className="gallery-pagination__jump-label" htmlFor="gallery-page-input">前往頁面</label>
-            <input
+            <Input
+              controlSize="sm"
               id="gallery-page-input"
               name="page"
               type="number"
@@ -1015,7 +962,7 @@ export const GalleryGrid: React.FC<GalleryGridProps> = ({
               aria-describedby="gallery-page-input-hint"
             />
             <span id="gallery-page-input-hint" className="gallery-pagination__jump-total">/ {totalPages}</span>
-            <button type="submit" className="gallery-pagination__button gallery-pagination__jump-submit">前往</button>
+            <Button type="submit" variant="secondary" className="gallery-pagination__button gallery-pagination__jump-submit">前往</Button>
           </form>
 
             </div>

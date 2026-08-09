@@ -5,7 +5,9 @@ import { buildThumbnailUrl } from '../utils/webConfig';
 import { fetchSourceLink } from '../utils/sourceLinks';
 import { LocalOpenTarget, openLocalMedia } from '../utils/localFileActions';
 import { MediaIssuePlaceholder } from './MediaIssuePlaceholder';
+import { DemoMediaBlock } from './DemoMediaBlock';
 import { imageLoadScheduler, useImageLoadPermission } from '../utils/imageLoadScheduler';
+import { Button, IconButton } from './ui/Button';
 import {
   ChevronLeft,
   ChevronRight,
@@ -38,7 +40,7 @@ import {
   Scan,
   ScanSearch,
   ScrollText,
-  SlidersHorizontal,
+  Settings2,
   Trash2,
   X,
 } from 'lucide-react';
@@ -59,6 +61,11 @@ const FILMSTRIP_LOAD_OVERSCAN = 96;
 const MIN_ZOOM_PERCENT = 10;
 const MAX_ZOOM_PERCENT = 800;
 const ZOOM_STEP = 10;
+const SWIPE_MIN_DISTANCE = 48;
+const SWIPE_MIN_VELOCITY = 0.28;
+const SWIPE_MAX_DURATION = 750;
+const SWIPE_DIRECTION_BIAS = 1.2;
+const SWIPE_MOVE_TOLERANCE = 12;
 
 type ZoomMode = 'auto' | 'lock' | 'width' | 'height' | 'fit' | 'fill' | 'custom';
 
@@ -79,6 +86,15 @@ const ZOOM_MODE_SHORTCUTS: Array<{
 interface Point {
   x: number;
   y: number;
+}
+
+interface StageSwipeGesture {
+  pointerId: number;
+  startX: number;
+  startY: number;
+  startedAt: number;
+  canSwipe: boolean;
+  moved: boolean;
 }
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
@@ -115,6 +131,7 @@ interface FilmstripThumbnailProps {
   isVisible: boolean;
   thumbnailSize: number;
   blurEnabled: boolean;
+  demoMode: boolean;
 }
 
 const FilmstripThumbnail = React.memo<FilmstripThumbnailProps>(({
@@ -124,6 +141,7 @@ const FilmstripThumbnail = React.memo<FilmstripThumbnailProps>(({
   isVisible,
   thumbnailSize,
   blurEnabled,
+  demoMode,
 }) => {
   const url = buildThumbnailUrl(item, thumbnailSize);
   const loadEnabled = isNearCurrent || isVisible;
@@ -132,12 +150,14 @@ const FilmstripThumbnail = React.memo<FilmstripThumbnailProps>(({
     priority: 2,
     kind: 'thumbnail',
     owner: 'filmstrip',
-    enabled: loadEnabled,
+    enabled: loadEnabled && !demoMode,
   });
 
   return (
     <span className="fullscreen-viewer__thumbnail-slot">
-      {admitted ? (
+      {demoMode ? (
+        <DemoMediaBlock dominantColor={item.dominant_color} />
+      ) : admitted ? (
         <img
           src={url}
           alt={item.title || `P${pageNumber}`}
@@ -168,11 +188,15 @@ interface FullscreenViewerProps {
   preloadCount?: number;
   thumbnailSize: number;
   blurEnabled?: boolean;
+  demoMode?: boolean;
+  isMobileViewport?: boolean;
   groupMangaPosts?: boolean;
   onToggleGroupMangaPosts?: () => void;
   onToggleBlur?: () => void;
   simpleToolbar?: boolean;
   onSimpleToolbarChange?: (simpleMode: boolean) => void;
+  /** Persistent preference for the initial visibility of the horizontal rail. */
+  showFilmstripByDefault?: boolean;
   pageOffset?: number;
   totalImages?: number;
   activeMode: ViewerMode;
@@ -192,11 +216,14 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
   preloadCount = 3,
   thumbnailSize,
   blurEnabled = false,
+  demoMode = false,
+  isMobileViewport = false,
   groupMangaPosts = false,
   onToggleGroupMangaPosts,
   onToggleBlur,
   simpleToolbar = true,
   onSimpleToolbarChange,
+  showFilmstripByDefault = true,
   pageOffset = 0,
   totalImages = images.length,
   activeMode,
@@ -222,7 +249,7 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
     priority: 0,
     kind: 'thumbnail',
     owner: 'fullscreen',
-    enabled: Boolean(currentItem && !currentItemIsVideo && !currentItem.media_status),
+    enabled: Boolean(currentItem && !demoMode && !currentItemIsVideo && !currentItem.media_status),
   });
   const [showDetails, setShowDetails] = useState(false);
   const [sourceLink, setSourceLink] = useState<SourceLink | null>(null);
@@ -243,12 +270,16 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
   const [naturalSizeMediaUrl, setNaturalSizeMediaUrl] = useState<string | null>(null);
   const [isMediaTransitionSuppressed, setIsMediaTransitionSuppressed] = useState(true);
   const [stageSize, setStageSize] = useState({ width: 0, height: 0 });
-  const [showFilmstrip, setShowFilmstrip] = useState(true);
+  const [showFilmstrip, setShowFilmstrip] = useState(showFilmstripByDefault);
   const [showShortcutHelp, setShowShortcutHelp] = useState(false);
+  const [isMobileToolbarOpen, setIsMobileToolbarOpen] = useState(false);
   const [checkerboardEnabled, setCheckerboardEnabled] = useState(false);
   const [isBrowserFullscreen, setIsBrowserFullscreen] = useState(false);
   const [isSlideshowPlaying, setIsSlideshowPlaying] = useState(false);
   const viewerRef = useRef<HTMLDivElement>(null);
+  const mobileToolbarToggleRef = useRef<HTMLButtonElement>(null);
+  const mobileToolbarMenuRef = useRef<HTMLDivElement>(null);
+  const mobileToolbarWasOpenRef = useRef(false);
   const mediaStackRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const panGestureRef = useRef<{
@@ -258,6 +289,8 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
     originX: number;
     originY: number;
   } | null>(null);
+  const stageSwipeGestureRef = useRef<StageSwipeGesture | null>(null);
+  const suppressStageClickUntilRef = useRef(0);
   const wheelGestureActive = useRef(false);
   const wheelGestureResetTimer = useRef<number | null>(null);
   const filmstripScrollRef = useRef<HTMLDivElement>(null);
@@ -278,6 +311,42 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
   const previouslyFocusedElement = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
+    setShowFilmstrip(showFilmstripByDefault);
+  }, [showFilmstripByDefault]);
+
+  useEffect(() => {
+    if (!isMobileToolbarOpen) {
+      if (mobileToolbarWasOpenRef.current) {
+        mobileToolbarWasOpenRef.current = false;
+        mobileToolbarToggleRef.current?.focus({ preventScroll: true });
+      }
+      return undefined;
+    }
+
+    mobileToolbarWasOpenRef.current = true;
+    const focusFrame = window.requestAnimationFrame(() => {
+      const buttons = mobileToolbarMenuRef.current?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)');
+      const firstVisibleButton = Array.from(buttons ?? []).find(button => button.getClientRects().length > 0);
+      firstVisibleButton?.focus({ preventScroll: true });
+    });
+
+    return () => window.cancelAnimationFrame(focusFrame);
+  }, [isMobileToolbarOpen]);
+
+  useEffect(() => {
+    if (!isMobileToolbarOpen) return undefined;
+
+    const handleOutsidePointerDown = (event: PointerEvent) => {
+      const target = event.target instanceof Element ? event.target : null;
+      if (target?.closest('.fullscreen-viewer__mobile-toolbar-toggle, #fullscreen-mobile-toolbar')) return;
+      setIsMobileToolbarOpen(false);
+    };
+
+    document.addEventListener('pointerdown', handleOutsidePointerDown, true);
+    return () => document.removeEventListener('pointerdown', handleOutsidePointerDown, true);
+  }, [isMobileToolbarOpen]);
+
+  useEffect(() => {
     zoomModeRef.current = zoomMode;
   }, [zoomMode]);
 
@@ -295,6 +364,7 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
     && !Boolean(visibleOriginalUrl);
   const transformReady = Boolean(
     currentItem
+    && !demoMode
     && !currentItemIsVideo
     && !currentItem.media_status
     && naturalSizeMediaUrl === currentMediaUrl
@@ -305,6 +375,7 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
   );
   const hasTransformableMedia = Boolean(
     currentItem
+    && !demoMode
     && !currentItemIsVideo
     && !currentItem.media_status
   );
@@ -492,15 +563,24 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
     setNaturalSize({ width: 0, height: 0 });
     setNaturalSizeMediaUrl(null);
     setShowShortcutHelp(false);
+    setIsMobileToolbarOpen(false);
     panGestureRef.current = null;
+    stageSwipeGestureRef.current = null;
+    suppressStageClickUntilRef.current = 0;
   }, [currentItem?.save_name, currentMediaUrl]);
 
   useEffect(() => {
-    const handleFullscreenChange = () => {
+    const syncBrowserFullscreenState = () => {
       setIsBrowserFullscreen(document.fullscreenElement === viewerRef.current);
     };
-    document.addEventListener('fullscreenchange', handleFullscreenChange);
-    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
+
+    syncBrowserFullscreenState();
+    document.addEventListener('fullscreenchange', syncBrowserFullscreenState);
+    document.addEventListener('fullscreenerror', syncBrowserFullscreenState);
+    return () => {
+      document.removeEventListener('fullscreenchange', syncBrowserFullscreenState);
+      document.removeEventListener('fullscreenerror', syncBrowserFullscreenState);
+    };
   }, []);
 
   const handleOpenLocalMedia = useCallback(async (target: LocalOpenTarget) => {
@@ -664,6 +744,20 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
   // Dynamic configurable image preloader. Keep the query string identical to
   // the visible image URL so the browser can reuse the fetched response.
   useEffect(() => {
+    if (demoMode) {
+      for (const [url, handle] of preloadHandlesRef.current) {
+        handle.cancel();
+        preloadHandlesRef.current.delete(url);
+      }
+      for (const image of preloadedImagesRef.current.values()) {
+        image.onload = null;
+        image.onerror = null;
+        image.src = '';
+      }
+      preloadedImagesRef.current.clear();
+      return;
+    }
+
     if (!images.length || preloadCount <= 0) return;
 
     const preloadIndexes = new Set<number>();
@@ -712,13 +806,13 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
         preloadHandlesRef.current.delete(url);
       }
     }
-  }, [currentIndex, currentItem, currentItemIsVideo, currentMediaUrl, images, preloadCount]);
+  }, [currentIndex, currentItem, currentItemIsVideo, currentMediaUrl, demoMode, images, preloadCount]);
 
   // Keep the previous image on screen until the next one has loaded and
   // decoded. Replacing the visible <img> with an unfinished request exposes a
   // bright one-frame flash, especially when switching from a dark artwork.
   useEffect(() => {
-    if (!currentItem || currentItemIsVideo || !currentMediaUrl) {
+    if (demoMode || !currentItem || currentItemIsVideo || !currentMediaUrl) {
       if (displayedImageUrlRef.current !== null) {
         displayedImageUrlRef.current = null;
         displayedImagePathRef.current = null;
@@ -791,10 +885,10 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
       image.onload = null;
       image.onerror = null;
     };
-  }, [currentItem, currentItemIsVideo, currentMediaUrl]);
+  }, [currentItem, currentItemIsVideo, currentMediaUrl, demoMode]);
 
   const reloadCurrentMedia = useCallback(() => {
-    if (!currentItem || !currentMediaUrl) return;
+    if (demoMode || !currentItem || !currentMediaUrl) return;
     if (currentItemIsVideo) {
       videoRef.current?.load();
       void videoRef.current?.play().catch(() => undefined);
@@ -822,15 +916,22 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
       setOriginalLoadFailed(true);
     };
     image.src = reloadUrl;
-  }, [currentItem, currentItemIsVideo, currentMediaUrl]);
+  }, [currentItem, currentItemIsVideo, currentMediaUrl, demoMode]);
 
   const toggleBrowserFullscreen = useCallback(() => {
-    if (document.fullscreenElement === viewerRef.current) {
-      void document.exitFullscreen().catch(() => undefined);
+    const viewer = viewerRef.current;
+    if (!viewer) return;
+
+    const syncStateAfterRequest = () => {
+      setIsBrowserFullscreen(document.fullscreenElement === viewer);
+    };
+
+    if (document.fullscreenElement === viewer) {
+      void document.exitFullscreen().catch(syncStateAfterRequest);
       return;
     }
-    const request = viewerRef.current?.requestFullscreen();
-    if (request) void request.catch(() => undefined);
+
+    void viewer.requestFullscreen().catch(syncStateAfterRequest);
   }, []);
 
   const handleNext = useCallback(() => {
@@ -909,6 +1010,93 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
     panGestureRef.current = null;
     setIsPanning(false);
   }, []);
+
+  const handleStagePointerDown = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.pointerType !== 'touch') return;
+
+    suppressStageClickUntilRef.current = 0;
+    const target = event.target instanceof Element ? event.target : null;
+    if (target?.closest('button, input, select, textarea, video, [contenteditable="true"]')) return;
+
+    stageSwipeGestureRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      startedAt: performance.now(),
+      canSwipe: !isPannable && !currentItemIsVideo,
+      moved: false,
+    };
+
+  }, [currentItemIsVideo, isPannable]);
+
+  const handleStagePointerMove = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    const gesture = stageSwipeGestureRef.current;
+    if (!gesture || gesture.pointerId !== event.pointerId) return;
+
+    const deltaX = event.clientX - gesture.startX;
+    const deltaY = event.clientY - gesture.startY;
+    const distance = Math.hypot(deltaX, deltaY);
+    if (distance >= SWIPE_MOVE_TOLERANCE) gesture.moved = true;
+
+    if (Math.abs(deltaX) >= Math.abs(deltaY) * SWIPE_DIRECTION_BIAS && Math.abs(deltaX) >= SWIPE_MOVE_TOLERANCE) {
+      event.preventDefault();
+    }
+  }, []);
+
+  const handleStagePointerEnd = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    const gesture = stageSwipeGestureRef.current;
+    if (!gesture || gesture.pointerId !== event.pointerId) return;
+
+    const deltaX = event.clientX - gesture.startX;
+    const deltaY = event.clientY - gesture.startY;
+    const distanceX = Math.abs(deltaX);
+    const elapsed = Math.max(1, performance.now() - gesture.startedAt);
+    const velocity = distanceX / elapsed;
+    const isHorizontal = distanceX >= Math.abs(deltaY) * SWIPE_DIRECTION_BIAS;
+    const isSwipe = event.type === 'pointerup'
+      && gesture.canSwipe
+      && isHorizontal
+      && distanceX >= SWIPE_MIN_DISTANCE
+      && velocity >= SWIPE_MIN_VELOCITY
+      && elapsed <= SWIPE_MAX_DURATION;
+
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    stageSwipeGestureRef.current = null;
+
+    if (gesture.moved || isSwipe) {
+      suppressStageClickUntilRef.current = performance.now() + 350;
+    }
+
+    if (!isSwipe) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+    if (deltaX < 0) handleNext();
+    else handlePrev();
+  }, [handleNext, handlePrev]);
+
+  const handleStageClick = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+    if (performance.now() < suppressStageClickUntilRef.current) {
+      suppressStageClickUntilRef.current = 0;
+      return;
+    }
+
+    const target = event.target instanceof Element ? event.target : null;
+    if (event.target === event.currentTarget) {
+      onClose();
+      return;
+    }
+    if (target?.closest('button, input, select, textarea, video, [contenteditable="true"]')) return;
+
+    const mediaSurface = target?.closest<HTMLElement>('.fullscreen-viewer__media-stack, .fullscreen-viewer__issue-frame');
+    if (!mediaSurface) return;
+
+    const bounds = mediaSurface.getBoundingClientRect();
+    if (event.clientX < bounds.left + bounds.width / 2) handlePrev();
+    else handleNext();
+  }, [handleNext, handlePrev, onClose]);
 
   // Wheel over the filmstrip pans its native horizontal scroller. Wheel Up /
   // Wheel Down elsewhere uses the same navigation callbacks as the arrow keys.
@@ -1015,10 +1203,41 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
       return;
     }
 
+    if (e.key === 'Escape' && isMobileToolbarOpen) {
+      e.preventDefault();
+      e.stopPropagation();
+      setIsMobileToolbarOpen(false);
+      return;
+    }
+
     if (e.key === 'Escape') {
       e.preventDefault();
       e.stopPropagation();
       onClose();
+      return;
+    }
+
+    const isFilmstripTarget = Boolean(target?.closest('.fullscreen-viewer__thumbnail'));
+    const isFilmstripNavigationKey = e.key === 'ArrowRight'
+      || e.key === 'ArrowDown'
+      || e.key === 'PageDown'
+      || e.key === 'k'
+      || e.key === 'K'
+      || e.key === 'ArrowLeft'
+      || e.key === 'ArrowUp'
+      || e.key === 'PageUp'
+      || e.key === 'j'
+      || e.key === 'J';
+
+    if (isFilmstripTarget && isFilmstripNavigationKey && !e.ctrlKey && !e.altKey && !e.metaKey) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.key === 'ArrowRight' || e.key === 'ArrowDown' || e.key === 'PageDown' || e.key === 'k' || e.key === 'K') {
+        handleNext();
+      } else {
+        handlePrev();
+      }
+      viewerRef.current?.focus({ preventScroll: true });
       return;
     }
 
@@ -1127,6 +1346,7 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
     onNavigate,
     rotateImage,
     reloadCurrentMedia,
+    isMobileToolbarOpen,
     showActualSize,
     showShortcutHelp,
     toggleVideoPlayback,
@@ -1185,7 +1405,7 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
       aria-modal="true"
       aria-label={currentItem.title || 'Image preview'}
       tabIndex={-1}
-      className={`fullscreen-viewer animate-fadeIn${checkerboardEnabled ? ' is-checkerboard' : ''}`}
+      className={`fullscreen-viewer animate-fadeIn${checkerboardEnabled ? ' is-checkerboard' : ''}${blurEnabled ? ' is-blur-enabled' : ''}${demoMode ? ' is-demo-mode' : ''}${images.length > 1 && showFilmstrip ? ' has-filmstrip' : ''}`}
     >
       {/* Top Header Bar */}
       <div className="fullscreen-viewer__topbar">
@@ -1206,352 +1426,444 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
           )}
         </div>
 
-        <div className={`fullscreen-viewer__topbar-actions${simpleToolbar ? ' is-simple' : ''}${isMediaLoading ? ' is-media-loading' : ''}`}>
-          <div className="fullscreen-viewer__toolbar-group fullscreen-viewer__toolbar-navigation" role="group" aria-label="圖片導覽">
-            <button
+        <div className="fullscreen-viewer__mobile-toolbar-toggle">
+          <IconButton
+            ref={mobileToolbarToggleRef}
+            type="button"
+            onClick={() => setIsMobileToolbarOpen(value => !value)}
+            aria-expanded={isMobileToolbarOpen}
+            aria-controls="fullscreen-mobile-toolbar"
+            aria-label={isMobileToolbarOpen ? '關閉工具列' : '開啟工具列'}
+            variant="plain"
+            title={isMobileToolbarOpen ? '關閉工具列' : '開啟工具列'}
+          >
+            <Settings2 className="w-5 h-5" aria-hidden="true" />
+          </IconButton>
+        </div>
+
+        <div className="fullscreen-viewer__mobile-details-toggle">
+          <IconButton
+            type="button"
+            onClick={() => setShowDetails(value => !value)}
+            aria-label="顯示圖片詳細資訊"
+            aria-pressed={showDetails}
+            aria-controls="fullscreen-details-panel"
+            variant={showDetails ? 'primary' : 'plain'}
+            title="圖片資訊 (I)"
+          >
+            <Info className="w-5 h-5" aria-hidden="true" />
+          </IconButton>
+        </div>
+
+        <div
+          ref={mobileToolbarMenuRef}
+          id="fullscreen-mobile-toolbar"
+          role="region"
+          aria-label="手機工具列"
+          className={`fullscreen-viewer__topbar-actions${simpleToolbar ? ' is-simple' : ''}${isMediaLoading ? ' is-media-loading' : ''}${isMobileToolbarOpen ? ' is-mobile-open' : ''}`}
+        >
+          <div className="fullscreen-viewer__toolbar-group fullscreen-viewer__toolbar-group--navigation fullscreen-viewer__toolbar-navigation" role="group" aria-label="圖片導覽">
+            <IconButton
               type="button"
               onClick={handlePrev}
               disabled={currentIndex <= 0}
+              variant="ghost"
               aria-label="上一張圖片"
-              className="viewer-icon-button"
+              data-mobile-label="上一頁"
               title="上一張 (← / J)"
             >
               <ChevronLeft className="w-5 h-5" aria-hidden="true" />
-            </button>
-            <button
+            </IconButton>
+            <IconButton
               type="button"
               onClick={handleNext}
               disabled={currentIndex >= images.length - 1}
+              variant="ghost"
               aria-label="下一張圖片"
-              className="viewer-icon-button"
+              data-mobile-label="下一頁 >"
+              className="fullscreen-viewer__toolbar-next"
               title="下一張 (→ / K)"
             >
               <ChevronRight className="w-5 h-5" aria-hidden="true" />
-            </button>
+            </IconButton>
           </div>
 
           <div className="fullscreen-viewer__toolbar-center">
-            <div className="fullscreen-viewer__mode-switcher" role="group" aria-label="閱讀模式">
-            <button
+            <div className="fullscreen-viewer__toolbar-group fullscreen-viewer__toolbar-group--mode fullscreen-viewer__mode-switcher" role="group" aria-label="閱讀模式">
+            <span className="fullscreen-viewer__mobile-group-heading" aria-hidden="true">
+              <Maximize2 className="h-4 w-4" />
+              <span>閱讀模式</span>
+            </span>
+            <IconButton
               type="button"
               onClick={() => onChangeMode('fullscreen')}
               aria-pressed={activeMode === 'fullscreen'}
+              variant={activeMode === 'fullscreen' ? 'primary' : 'ghost'}
               aria-label="切換至單張檢視"
-              className={`fullscreen-viewer__mode-button${activeMode === 'fullscreen' ? ' is-active' : ''}`}
+              className="fullscreen-viewer__mode-button"
+              data-mobile-label="單張"
               title="單張檢視"
             >
               <Maximize2 className="h-4 w-4" aria-hidden="true" />
-              <span className="fullscreen-viewer__mode-label">單張</span>
-            </button>
-            <button
+            </IconButton>
+            <IconButton
               type="button"
               onClick={() => onChangeMode('webtoon')}
               aria-pressed={activeMode === 'webtoon'}
+              variant={activeMode === 'webtoon' ? 'primary' : 'ghost'}
               aria-label="切換至條漫檢視"
-              className={`fullscreen-viewer__mode-button${activeMode === 'webtoon' ? ' is-active' : ''}`}
+              className="fullscreen-viewer__mode-button"
+              data-mobile-label="條漫"
               title="條漫檢視"
             >
               <ScrollText className="h-4 w-4" aria-hidden="true" />
-              <span className="fullscreen-viewer__mode-label">條漫</span>
-            </button>
+            </IconButton>
             </div>
 
-            <div className="fullscreen-viewer__zoom-controls" role="group" aria-label="圖片縮放">
-            <button
+            <div className="fullscreen-viewer__toolbar-group fullscreen-viewer__toolbar-group--zoom fullscreen-viewer__zoom-controls" role="group" aria-label="圖片縮放">
+            <span className="fullscreen-viewer__mobile-group-heading" aria-hidden="true">
+              <ScanSearch className="h-4 w-4" />
+              <span>圖片縮放</span>
+            </span>
+            <IconButton
               type="button"
               onClick={zoomOut}
               disabled={!hasTransformableMedia || effectiveZoomPercent <= MIN_ZOOM_PERCENT}
+              variant="ghost"
               aria-label="縮小圖片"
-              className="viewer-icon-button"
               title="縮小 (-／Num-)"
             >
               <Minus className="w-5 h-5" aria-hidden="true" />
-            </button>
-            <button
-              type="button"
-              onClick={showActualSize}
-              disabled={!hasTransformableMedia}
-              aria-label={`目前縮放 ${Math.round(effectiveZoomPercent)}%，切換至原始大小`}
-              className="fullscreen-viewer__zoom-value"
-              title="原始大小 (Ctrl + 0)"
-            >
+            </IconButton>
+            <span className="fullscreen-viewer__zoom-current" aria-live="polite" aria-atomic="true">
               {Math.round(effectiveZoomPercent)}%
-            </button>
-            <button
+            </span>
+            <IconButton
               type="button"
               onClick={zoomIn}
               disabled={!hasTransformableMedia || effectiveZoomPercent >= MAX_ZOOM_PERCENT}
+              variant="ghost"
               aria-label="放大圖片"
-              className="viewer-icon-button"
               title="放大 (+／Num+)"
             >
               <Plus className="w-5 h-5" aria-hidden="true" />
-            </button>
+            </IconButton>
+            <IconButton
+              type="button"
+              onClick={showActualSize}
+              disabled={!hasTransformableMedia}
+              variant="ghost"
+              aria-label={`目前縮放 ${Math.round(effectiveZoomPercent)}%，切換至原始大小`}
+              className="fullscreen-viewer__zoom-value"
+              data-mobile-label="原始比例"
+              title="原始大小 (Ctrl + 0)"
+            >
+              <ScanSearch className="w-5 h-5" aria-hidden="true" />
+            </IconButton>
               {simpleToolbar && (
-                <button
+                <IconButton
                   type="button"
                   onClick={fitToViewer}
                   disabled={!hasTransformableMedia}
                   aria-pressed={zoomMode === 'fit'}
+                  variant={zoomMode === 'fit' ? 'primary' : 'ghost'}
                   aria-label="使圖片適合視窗"
-                  className={`viewer-icon-button${zoomMode === 'fit' ? ' is-active' : ''}`}
                   title="適合視窗 (Ctrl + M)"
                 >
                   <Scan className="w-5 h-5" aria-hidden="true" />
-                </button>
+                </IconButton>
               )}
             </div>
 
             {!simpleToolbar && (
-              <div className="fullscreen-viewer__toolbar-group fullscreen-viewer__zoom-modes" role="group" aria-label="圖片縮放模式">
+              <div className="fullscreen-viewer__toolbar-group fullscreen-viewer__toolbar-group--zoom-modes fullscreen-viewer__zoom-modes" role="group" aria-label="圖片縮放模式">
+                <span className="fullscreen-viewer__mobile-group-heading" aria-hidden="true">
+                  <Scan className="h-4 w-4" />
+                  <span>圖片縮放模式</span>
+                </span>
                 {ZOOM_MODE_SHORTCUTS.map(item => (
-                  <button
+                  <IconButton
                     key={item.mode}
                     type="button"
                     onClick={() => applyZoomMode(item.mode)}
                     disabled={!hasTransformableMedia}
                     aria-pressed={zoomMode === item.mode}
                     aria-label={`${item.label}，快捷鍵 ${item.key} 或 Num${item.key}`}
-                    className={`viewer-icon-button${zoomMode === item.mode ? ' is-active' : ''}`}
+                    variant={zoomMode === item.mode ? 'primary' : 'ghost'}
                     title={`${item.key}／Num${item.key} · ${item.label}`}
                   >
                     {renderZoomModeIcon(item.mode)}
-                  </button>
+                  </IconButton>
                 ))}
               </div>
             )}
 
             {!simpleToolbar && (
-            <div className="fullscreen-viewer__toolbar-group" role="group" aria-label="圖片方向">
-              <button
+            <div className="fullscreen-viewer__toolbar-group fullscreen-viewer__toolbar-group--transform" role="group" aria-label="圖片方向">
+              <span className="fullscreen-viewer__mobile-group-heading" aria-hidden="true">
+                <RotateCw className="h-4 w-4" />
+                <span>圖片方向</span>
+              </span>
+              <IconButton
                 type="button"
                 onClick={() => rotateImage(-90)}
                 disabled={!hasTransformableMedia}
                 aria-label="向左旋轉"
-                className="viewer-icon-button"
+                variant="ghost"
                 title="向左旋轉 (Ctrl + ←)"
               >
                 <RotateCcw className="w-5 h-5" aria-hidden="true" />
-              </button>
-              <button
+              </IconButton>
+              <IconButton
                 type="button"
                 onClick={() => rotateImage(90)}
                 disabled={!hasTransformableMedia}
                 aria-label="向右旋轉"
-                className="viewer-icon-button"
+                variant="ghost"
                 title="向右旋轉 (Ctrl + →)"
               >
                 <RotateCw className="w-5 h-5" aria-hidden="true" />
-              </button>
-              <button
+              </IconButton>
+              <IconButton
                 type="button"
                 onClick={() => setFlipHorizontal(value => !value)}
                 disabled={!hasTransformableMedia}
                 aria-pressed={flipHorizontal}
                 aria-label="水平翻轉"
-                className={`viewer-icon-button${flipHorizontal ? ' is-active' : ''}`}
+                variant={flipHorizontal ? 'primary' : 'ghost'}
                 title="水平翻轉 (Ctrl + H)"
               >
                 <FlipHorizontal2 className="w-5 h-5" aria-hidden="true" />
-              </button>
-              <button
+              </IconButton>
+              <IconButton
                 type="button"
                 onClick={() => setFlipVertical(value => !value)}
                 disabled={!hasTransformableMedia}
                 aria-pressed={flipVertical}
                 aria-label="垂直翻轉"
-                className={`viewer-icon-button${flipVertical ? ' is-active' : ''}`}
+                variant={flipVertical ? 'primary' : 'ghost'}
                 title="垂直翻轉 (Ctrl + V)"
               >
                 <FlipVertical2 className="w-5 h-5" aria-hidden="true" />
-              </button>
+              </IconButton>
             </div>
             )}
 
             {!simpleToolbar && (
-            <div className="fullscreen-viewer__toolbar-group" role="group" aria-label="檢視功能">
-              <button
+            <div className="fullscreen-viewer__toolbar-group fullscreen-viewer__toolbar-group--display" role="group" aria-label="檢視功能">
+              <span className="fullscreen-viewer__mobile-group-heading" aria-hidden="true">
+                <GalleryHorizontal className="h-4 w-4" />
+                <span>檢視功能</span>
+              </span>
+              <IconButton
                 type="button"
                 onClick={reloadCurrentMedia}
                 aria-label="重新載入目前圖片"
-                className="viewer-icon-button"
+                variant="ghost"
                 title="重新載入 (R)"
               >
                 <RefreshCw className="w-5 h-5" aria-hidden="true" />
-              </button>
+              </IconButton>
               {images.length > 1 && (
-                <button
+                <IconButton
                   type="button"
                   onClick={() => setShowFilmstrip(value => !value)}
                   aria-pressed={showFilmstrip}
                   aria-label={showFilmstrip ? '隱藏縮圖列' : '顯示縮圖列'}
-                  className={`viewer-icon-button${showFilmstrip ? ' is-active' : ''}`}
+                  variant={showFilmstrip ? 'primary' : 'ghost'}
                   title="縮圖列 (T)"
                 >
                   <GalleryHorizontal className="w-5 h-5" aria-hidden="true" />
-                </button>
+                </IconButton>
               )}
-              <button
+              <IconButton
                 type="button"
                 onClick={() => setCheckerboardEnabled(value => !value)}
                 aria-pressed={checkerboardEnabled}
                 aria-label={checkerboardEnabled ? '關閉棋盤格背景' : '開啟棋盤格背景'}
-                className={`viewer-icon-button${checkerboardEnabled ? ' is-active' : ''}`}
+                variant={checkerboardEnabled ? 'primary' : 'ghost'}
                 title="棋盤格背景 (B)"
               >
                 <Grid2X2 className="w-5 h-5" aria-hidden="true" />
-              </button>
-              <button
+              </IconButton>
+              <IconButton
                 type="button"
                 onClick={toggleBrowserFullscreen}
                 aria-pressed={isBrowserFullscreen}
                 aria-label={isBrowserFullscreen ? '離開瀏覽器全螢幕' : '進入瀏覽器全螢幕'}
-                className={`viewer-icon-button${isBrowserFullscreen ? ' is-active' : ''}`}
+                variant={isBrowserFullscreen ? 'primary' : 'ghost'}
                 title="瀏覽器全螢幕 (F)"
               >
                 {isBrowserFullscreen
                   ? <Minimize2 className="w-5 h-5" aria-hidden="true" />
                   : <Maximize2 className="w-5 h-5" aria-hidden="true" />}
-              </button>
+              </IconButton>
               {images.length > 1 && (
-                <button
+                <IconButton
                   type="button"
                   onClick={() => setIsSlideshowPlaying(value => !value)}
                   aria-pressed={isSlideshowPlaying}
                   aria-label={isSlideshowPlaying ? '暫停幻燈片播放' : '開始幻燈片播放'}
-                  className={`viewer-icon-button${isSlideshowPlaying ? ' is-active' : ''}`}
+                  variant={isSlideshowPlaying ? 'primary' : 'ghost'}
                   title="幻燈片 (S)"
                 >
                   {isSlideshowPlaying
                     ? <Pause className="w-5 h-5" aria-hidden="true" />
                     : <Presentation className="w-5 h-5" aria-hidden="true" />}
-                </button>
+                </IconButton>
               )}
             </div>
             )}
 
             {!simpleToolbar && (
-            <div className="fullscreen-viewer__toolbar-group" role="group" aria-label="內容顯示設定">
+            <div className="fullscreen-viewer__toolbar-group fullscreen-viewer__toolbar-group--content" role="group" aria-label="內容顯示設定">
+              <span className="fullscreen-viewer__mobile-group-heading" aria-hidden="true">
+                <Layers className="h-4 w-4" />
+                <span>內容顯示設定</span>
+              </span>
               {onToggleGroupMangaPosts && (
-                <button
+                <IconButton
                   type="button"
                   onClick={onToggleGroupMangaPosts}
                   aria-pressed={groupMangaPosts}
                   aria-label={groupMangaPosts ? '關閉組圖模式' : '開啟組圖模式'}
-                  className={`viewer-icon-button${groupMangaPosts ? ' is-active' : ''}`}
+                  data-mobile-label="組圖"
+                  variant={groupMangaPosts ? 'primary' : 'ghost'}
                   title={groupMangaPosts ? '關閉組圖模式' : '開啟組圖模式'}
                 >
                   <Layers className="w-5 h-5" aria-hidden="true" />
-                </button>
+                </IconButton>
               )}
               {onToggleBlur && (
-                <button
+                <IconButton
                   type="button"
                   onClick={onToggleBlur}
                   aria-pressed={blurEnabled}
                   aria-label={blurEnabled ? '關閉模糊遮罩' : '開啟模糊遮罩'}
-                  className={`viewer-icon-button${blurEnabled ? ' is-active' : ''}`}
+                  data-mobile-label="模糊"
+                  variant={blurEnabled ? 'primary' : 'ghost'}
                   title={blurEnabled ? '關閉模糊遮罩' : '開啟模糊遮罩'}
                 >
                   {blurEnabled ? <EyeOff className="w-5 h-5" aria-hidden="true" /> : <Eye className="w-5 h-5" aria-hidden="true" />}
-                </button>
+                </IconButton>
               )}
-              <button
+              <IconButton
                 type="button"
                 onClick={() => setShowDetails(!showDetails)}
                 aria-label="顯示圖片詳細資訊"
                 aria-pressed={showDetails}
-                className={`viewer-icon-button${showDetails ? ' is-active' : ''}`}
+                aria-controls="fullscreen-details-panel"
+                className="fullscreen-viewer__details-toolbar-button"
+                data-mobile-label="資訊"
+                variant={showDetails ? 'primary' : 'ghost'}
                 title="詳細資訊 (I)"
               >
                 <Info className="w-5 h-5" aria-hidden="true" />
-              </button>
+              </IconButton>
             </div>
             )}
           </div>
 
-          <div className="fullscreen-viewer__toolbar-group fullscreen-viewer__toolbar-settings" role="group" aria-label="工具列設定">
-            <button
+          <div className="fullscreen-viewer__toolbar-group fullscreen-viewer__toolbar-group--settings fullscreen-viewer__toolbar-settings" role="group" aria-label="工具列設定">
+            <span className="fullscreen-viewer__mobile-group-heading" aria-hidden="true">
+              <Settings2 className="h-4 w-4" />
+              <span>工具列設定</span>
+            </span>
+            <IconButton
               type="button"
               onClick={() => setShowShortcutHelp(value => !value)}
               aria-label="顯示全螢幕快捷鍵"
               aria-expanded={showShortcutHelp}
               aria-controls="fullscreen-shortcut-help"
-              className={`viewer-icon-button${showShortcutHelp ? ' is-active' : ''}`}
+              data-mobile-label="快捷鍵"
+              variant={showShortcutHelp ? 'primary' : 'ghost'}
               title="快捷鍵 (F1)"
             >
               <CircleHelp className="w-5 h-5" aria-hidden="true" />
-            </button>
+            </IconButton>
             {onSimpleToolbarChange && (
-              <button
+              <IconButton
                 type="button"
                 onClick={() => onSimpleToolbarChange(!simpleToolbar)}
                 aria-pressed={!simpleToolbar}
                 aria-label={simpleToolbar ? '展開完整工具列' : '切換至簡易工具列'}
-                className={`viewer-icon-button${!simpleToolbar ? ' is-active' : ''}`}
+                data-mobile-label={simpleToolbar ? '完整工具列' : '簡易工具列'}
+                variant={!simpleToolbar ? 'primary' : 'ghost'}
                 title={simpleToolbar ? '完整工具列' : '簡易工具列'}
               >
-                <SlidersHorizontal className="w-5 h-5" aria-hidden="true" />
-              </button>
+                <Settings2 className="w-5 h-5" aria-hidden="true" />
+              </IconButton>
             )}
           </div>
 
           {onDeleteCurrent && (
-            <div className="fullscreen-viewer__toolbar-group fullscreen-viewer__toolbar-danger" role="group" aria-label="刪除圖片">
-              <button
+            <div className="fullscreen-viewer__toolbar-group fullscreen-viewer__toolbar-group--danger fullscreen-viewer__toolbar-danger" role="group" aria-label="刪除圖片">
+              <span className="fullscreen-viewer__mobile-group-heading" aria-hidden="true">
+                <Trash2 className="h-4 w-4" />
+                <span>刪除圖片</span>
+              </span>
+              <IconButton
                 type="button"
                 onClick={() => onDeleteCurrent(currentItem.image_id)}
                 aria-label="將圖片移至回收區"
-                className="viewer-icon-button viewer-icon-button--danger"
+                data-mobile-label="刪除圖片"
+                variant="danger"
                 title="移至回收區 (Delete)"
               >
                 <Trash2 className="w-5 h-5" aria-hidden="true" />
-              </button>
+              </IconButton>
             </div>
           )}
         </div>
 
-        <button
+        <IconButton
           type="button"
           onClick={onClose}
           aria-label="關閉全螢幕檢視"
-          className="viewer-icon-button fullscreen-viewer__close-button"
+          variant={isMobileViewport ? 'plain' : 'ghost'}
+          className="fullscreen-viewer__close-button"
           title="關閉 (Esc)"
         >
           <X className="w-5 h-5" aria-hidden="true" />
-        </button>
+        </IconButton>
       </div>
 
       {/* Main Display Area */}
       <div
         className="fullscreen-viewer__stage"
-        onClick={event => {
-          if (event.target === event.currentTarget) onClose();
-        }}
+        onClick={handleStageClick}
+        onPointerDown={handleStagePointerDown}
+        onPointerMove={handleStagePointerMove}
+        onPointerUp={handleStagePointerEnd}
+        onPointerCancel={handleStagePointerEnd}
       >
         {/* Navigation Buttons */}
         {currentIndex > 0 && (
-          <button
+          <IconButton
             type="button"
             onClick={handlePrev}
             aria-label="Previous image"
+            variant="secondary"
+            size="lg"
             className="viewer-nav-button viewer-nav-button--previous"
             title="上一張 (←)"
           >
             <ChevronLeft className="w-8 h-8" aria-hidden="true" />
-          </button>
+          </IconButton>
         )}
 
         {currentIndex < images.length - 1 && (
-          <button
+          <IconButton
             type="button"
             onClick={handleNext}
             aria-label="Next image"
+            variant="secondary"
+            size="lg"
             className="viewer-nav-button viewer-nav-button--next"
             title="下一張 (→)"
           >
             <ChevronRight className="w-8 h-8" aria-hidden="true" />
-          </button>
+          </IconButton>
         )}
 
         {/* Media Rendering */}
@@ -1560,73 +1872,86 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
             <MediaIssuePlaceholder message={currentItem.media_error} />
           </div>
         ) : currentItemIsVideo ? (
-          <div className="fullscreen-viewer__video-frame">
-            <video
-              ref={videoRef}
-              src={mediaUrl}
-              autoPlay
-              loop
-              controls
-              className={`fullscreen-viewer__media ${blurEnabled ? 'blur-media blur-media--viewer' : ''}`}
-            />
+          <div className={`fullscreen-viewer__video-frame${demoMode ? ' fullscreen-viewer__video-frame--demo' : ''}`}>
+            {demoMode ? (
+              <DemoMediaBlock dominantColor={currentItem.dominant_color} />
+            ) : (
+              <video
+                ref={videoRef}
+                src={mediaUrl}
+                autoPlay
+                loop
+                controls
+                className={`fullscreen-viewer__media ${blurEnabled ? 'blur-media blur-media--viewer' : ''}`}
+              />
+            )}
           </div>
         ) : (
           <div
             ref={mediaStackRef}
-            className={`fullscreen-viewer__media-stack${isPannable ? ' is-pannable' : ''}${isPanning ? ' is-panning' : ''}${zoomMode === 'lock' ? ' is-zoom-locked' : ''}${suppressMediaTransitions ? ' is-media-transition-suppressed' : ''}`}
+            className={`fullscreen-viewer__media-stack${demoMode ? ' fullscreen-viewer__media-stack--demo' : ''}${isPannable ? ' is-pannable' : ''}${isPanning ? ' is-panning' : ''}${zoomMode === 'lock' ? ' is-zoom-locked' : ''}${suppressMediaTransitions ? ' is-media-transition-suppressed' : ''}`}
             onPointerDown={handlePanPointerDown}
             onPointerMove={handlePanPointerMove}
             onPointerUp={endPanGesture}
             onPointerCancel={endPanGesture}
           >
-            {showThumbnailPreview && (
-              <img
-                src={currentThumbnailUrl}
-                alt=""
-                aria-hidden="true"
-                loading="eager"
-                decoding="async"
-                {...{ fetchpriority: 'high' }}
-                onLoad={() => {
-                  imageLoadScheduler.markLoaded(currentThumbnailUrl);
-                }}
-                onError={() => {
-                  imageLoadScheduler.markFinished(currentThumbnailUrl, false);
-                  setThumbnailFailed(true);
-                }}
-                draggable={false}
-                style={mediaTransformStyle}
-                className={`fullscreen-viewer__media fullscreen-viewer__media--thumbnail ${blurEnabled ? 'blur-media blur-media--viewer' : ''}`}
+            {demoMode ? (
+              <DemoMediaBlock
+                dominantColor={currentItem.dominant_color}
+                className="fullscreen-viewer__media fullscreen-viewer__media--demo"
               />
+            ) : (
+              <>
+                {showThumbnailPreview && (
+                  <img
+                    src={currentThumbnailUrl}
+                    alt=""
+                    aria-hidden="true"
+                    loading="eager"
+                    decoding="async"
+                    {...{ fetchpriority: 'high' }}
+                    onLoad={() => {
+                      imageLoadScheduler.markLoaded(currentThumbnailUrl);
+                    }}
+                    onError={() => {
+                      imageLoadScheduler.markFinished(currentThumbnailUrl, false);
+                      setThumbnailFailed(true);
+                    }}
+                    draggable={false}
+                    style={mediaTransformStyle}
+                    className={`fullscreen-viewer__media fullscreen-viewer__media--thumbnail ${blurEnabled ? 'blur-media blur-media--viewer' : ''}`}
+                  />
+                )}
+                {visibleOriginalUrl && (
+                  <img
+                    src={visibleOriginalUrl}
+                    alt={currentItem.title}
+                    loading="eager"
+                    decoding="async"
+                    {...{ fetchpriority: 'high' }}
+                    onLoad={event => {
+                      setNaturalSize({
+                        width: event.currentTarget.naturalWidth,
+                        height: event.currentTarget.naturalHeight,
+                      });
+                      setNaturalSizeMediaUrl(currentMediaUrl);
+                      imageLoadScheduler.markLoaded(event.currentTarget.currentSrc || mediaUrl);
+                    }}
+                    onError={event => {
+                      imageLoadScheduler.markFinished(event.currentTarget.currentSrc || mediaUrl, false);
+                      setOriginalLoadFailed(true);
+                      displayedImageUrlRef.current = null;
+                      displayedImagePathRef.current = null;
+                      setDisplayedImageUrl(null);
+                    }}
+                    draggable={false}
+                    style={mediaTransformStyle}
+                    className={`fullscreen-viewer__media fullscreen-viewer__media--original is-visible ${blurEnabled ? 'blur-media blur-media--viewer' : ''}`}
+                  />
+                )}
+              </>
             )}
-            {visibleOriginalUrl && (
-              <img
-                src={visibleOriginalUrl}
-                alt={currentItem.title}
-                loading="eager"
-                decoding="async"
-                {...{ fetchpriority: 'high' }}
-                onLoad={event => {
-                  setNaturalSize({
-                    width: event.currentTarget.naturalWidth,
-                    height: event.currentTarget.naturalHeight,
-                  });
-                  setNaturalSizeMediaUrl(currentMediaUrl);
-                  imageLoadScheduler.markLoaded(event.currentTarget.currentSrc || mediaUrl);
-                }}
-                onError={event => {
-                  imageLoadScheduler.markFinished(event.currentTarget.currentSrc || mediaUrl, false);
-                  setOriginalLoadFailed(true);
-                  displayedImageUrlRef.current = null;
-                  displayedImagePathRef.current = null;
-                  setDisplayedImageUrl(null);
-                }}
-                draggable={false}
-                style={mediaTransformStyle}
-                className={`fullscreen-viewer__media fullscreen-viewer__media--original is-visible ${blurEnabled ? 'blur-media blur-media--viewer' : ''}`}
-              />
-            )}
-            {originalLoadFailed && (
+            {originalLoadFailed && !demoMode && (
               <p className="fullscreen-viewer__load-error" role="status">
                 原圖載入失敗，保留縮圖預覽。
               </p>
@@ -1636,15 +1961,28 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
 
         {/* Details Panel Overlay */}
         {showDetails && (
-          <div className="fullscreen-viewer__details">
+          <div id="fullscreen-details-panel" className="fullscreen-viewer__details">
             <div>
-              <h4 className="font-bold text-base text-white mb-2">{currentItem.title || '無題'}</h4>
+              <div className="fullscreen-viewer__details-header">
+                <h4 className="font-bold text-base text-white">{currentItem.title || '無題'}</h4>
+                <IconButton
+                  type="button"
+                  onClick={() => setShowDetails(false)}
+                  aria-label="關閉圖片詳細資訊"
+                  variant={isMobileViewport ? 'plain' : 'ghost'}
+                  size="sm"
+                  className="fullscreen-viewer__details-close"
+                  title="關閉圖片詳細資訊"
+                >
+                  <X className="w-4 h-4" aria-hidden="true" />
+                </IconButton>
+              </div>
               <div className="fullscreen-viewer__details-body">
-                <p><span className="text-zinc-500">作品 ID:</span> {currentItem.image_id}</p>
-                <p><span className="text-zinc-500">繪師:</span> {currentItem.artist_name || currentItem.member_id}</p>
-                <p><span className="text-zinc-500">繪師 ID:</span> {currentItem.member_id}</p>
-                <p><span className="text-zinc-500">發布時間:</span> {currentItem.created_date || '未知'}</p>
-                <p className="break-all"><span className="text-zinc-500">儲存路徑:</span> {currentItem.save_name}</p>
+                <p><span className="fullscreen-viewer__details-label">作品 ID:</span> {currentItem.image_id}</p>
+                <p><span className="fullscreen-viewer__details-label">繪師:</span> {currentItem.artist_name || currentItem.member_id}</p>
+                <p><span className="fullscreen-viewer__details-label">繪師 ID:</span> {currentItem.member_id}</p>
+                <p><span className="fullscreen-viewer__details-label">發布時間:</span> {currentItem.created_date || '未知'}</p>
+                <p className="break-all"><span className="fullscreen-viewer__details-label">儲存路徑:</span> {currentItem.save_name}</p>
                 <p className="fullscreen-viewer__source-row" aria-live="polite">
                   <span className="fullscreen-viewer__details-label">來源作品:</span>{' '}
                   {isSourceLoading ? (
@@ -1664,15 +2002,16 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
                   )}
                 </p>
                 {currentItem.media_status && (
-                  <p className="text-amber-300"><span className="text-zinc-500">狀態:</span> {currentItem.media_error}</p>
+                  <p className="fullscreen-viewer__details-warning"><span className="fullscreen-viewer__details-label">狀態:</span> {currentItem.media_error}</p>
                 )}
               </div>
             </div>
             <div className="viewer-details-actions">
               <div className="viewer-file-actions">
-              <button
+              <Button
                 type="button"
                 onClick={() => handleOpenLocalMedia('file')}
+                variant="secondary"
                 className="viewer-secondary-action"
                 disabled={!canOpenLocalMedia || openAction !== null}
                 aria-busy={openAction === 'file'}
@@ -1680,10 +2019,11 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
               >
                 <ImageIcon className="h-4 w-4" aria-hidden="true" />
                 {openMediaLabel}
-              </button>
-              <button
+              </Button>
+              <Button
                 type="button"
                 onClick={() => handleOpenLocalMedia('folder')}
+                variant="secondary"
                 className="viewer-secondary-action"
                 disabled={!canOpenLocalMedia || openAction !== null}
                 aria-busy={openAction === 'folder'}
@@ -1691,17 +2031,19 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
               >
                 <FolderOpen className="h-4 w-4" aria-hidden="true" />
                 開啟資料夾
-              </button>
+              </Button>
               </div>
             {openActionError && (
               <p className="viewer-file-action-error" role="alert">{openActionError}</p>
             )}
-            <button
+            <Button
+              type="button"
               onClick={() => window.open(mediaUrl, '_blank')}
+              variant="primary"
               className="viewer-primary-action"
             >
               <Download className="w-4 h-4" /> 下載 / 開啟原檔
-            </button>
+            </Button>
             </div>
           </div>
         )}
@@ -1715,14 +2057,14 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
         >
           <div className="fullscreen-viewer__shortcut-help-header">
             <h4>全螢幕快捷鍵</h4>
-            <button
+            <IconButton
               type="button"
               onClick={() => setShowShortcutHelp(false)}
               aria-label="關閉快捷鍵說明"
-              className="viewer-icon-button"
+              variant="ghost"
             >
               <X className="w-4 h-4" aria-hidden="true" />
-            </button>
+            </IconButton>
           </div>
           <dl className="fullscreen-viewer__shortcut-list">
             <div><dt>上一張／下一張</dt><dd>← ↑ J / → ↓ K</dd></div>
@@ -1796,6 +2138,7 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
                           isVisible={isVisible}
                           thumbnailSize={thumbnailSize}
                           blurEnabled={blurEnabled}
+                          demoMode={demoMode}
                         />
                       )}
                       <span className="fullscreen-viewer__thumbnail-index">
