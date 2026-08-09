@@ -10,7 +10,7 @@
 2. 完成後雙擊 `run_viewer.bat`。前端與 API 會由同一個可見終端機管理；按 `Ctrl+C` 會一起停止。
 3. 日後雙擊 `update.bat`，即可用 `git pull --ff-only` 取得更新並重新同步依賴。更新功能需要 Git for Windows 與已設定的 upstream remote。
 
-安裝器只會在 `web_config.json` 不存在時，從 `web_config.example.json` 建立本機設定，不會覆蓋既有設定。舊版 runtime 更新時會保留在 `.runtime/backups`，不會直接硬刪。
+安裝器會把 pnpm 套件 store 固定放在 `.runtime/pnpm-store`。它只會在 `web_config.json` 不存在時，從 `web_config.example.json` 建立本機設定，不會覆蓋既有設定。舊版 runtime 更新時會保留在 `.runtime/backups`，不會直接硬刪。
 
 服務位址：
 

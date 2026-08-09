@@ -17,6 +17,7 @@ The installer downloads a project-local toolchain into `.runtime/`:
 - portable Node.js and pnpm;
 - uv and a uv-managed Python installation;
 - backend dependencies in `.runtime/backend-venv/`;
+- the pnpm content-addressable store in `.runtime/pnpm-store/`;
 - frontend dependencies in `frontend/node_modules/`.
 
 No administrator privileges are required. An internet connection is required for the first installation.

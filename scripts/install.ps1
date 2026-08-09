@@ -16,6 +16,7 @@ $UvRoot = Join-Path $RuntimeRoot "uv"
 $PnpmRoot = Join-Path $RuntimeRoot "pnpm"
 $PythonRoot = Join-Path $RuntimeRoot "python"
 $UvCacheRoot = Join-Path $RuntimeRoot "uv-cache"
+$PnpmStoreRoot = Join-Path $RuntimeRoot "pnpm-store"
 $BackendEnvironment = Join-Path $RuntimeRoot "backend-venv"
 $BackupRoot = Join-Path $RuntimeRoot "backups"
 
@@ -174,7 +175,8 @@ try {
     Invoke-Checked $uvExe @("sync", "--project", (Join-Path $ProjectRoot "backend"), "--python", $PythonVersion, "--locked")
 
     Write-Step "Synchronizing frontend dependencies"
-    Invoke-Checked $pnpmCmd @("install", "--frozen-lockfile") (Join-Path $ProjectRoot "frontend")
+    $frontendRoot = Join-Path $ProjectRoot "frontend"
+    Invoke-Checked $pnpmCmd @("install", "--frozen-lockfile", "--store-dir", $PnpmStoreRoot) $frontendRoot
 
     $configPath = Join-Path $ProjectRoot "web_config.json"
     $exampleConfigPath = Join-Path $ProjectRoot "web_config.example.json"
