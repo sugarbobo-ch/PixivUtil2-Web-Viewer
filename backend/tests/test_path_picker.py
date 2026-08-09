@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -124,7 +125,9 @@ class PathPickerValidationTests(unittest.TestCase):
             outside.write_bytes(b"outside")
 
             with patch.object(main, "get_root_directory", return_value=str(root)):
-                self.assertEqual(main.resolve_image_path(None, str(inside)), str(inside.resolve()))
+                resolved_inside = main.resolve_image_path(None, str(inside))
+                self.assertIsNotNone(resolved_inside)
+                self.assertTrue(os.path.samefile(resolved_inside, inside))
                 self.assertIsNone(main.resolve_image_path(None, str(outside)))
                 with self.assertRaises(main.HTTPException) as raised:
                     main.rescan_directory(main.RescanRequest(directory=str(outside.parent)))

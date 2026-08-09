@@ -221,7 +221,7 @@ class MediaLibraryTests(unittest.TestCase):
             "mediaRootPath": str(folder_only_root),
         })
 
-        self.assertEqual(resolved, str(pixiv_root.resolve()))
+        self.assertTrue(os.path.samefile(resolved, pixiv_root))
 
     def test_indexing_does_not_modify_source_media_bytes(self):
         path = self._write_media("65432109.jpg", b"source-bytes")
