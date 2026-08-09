@@ -4,7 +4,7 @@
 
 [![CI and release](https://github.com/sugarbobo-ch/PixivUtil2-Web-Viewer/actions/workflows/ci-cd.yml/badge.svg)](https://github.com/sugarbobo-ch/PixivUtil2-Web-Viewer/actions/workflows/ci-cd.yml)
 
-A Windows-first local web viewer for a PixivUtil2 library. The React/Vite frontend provides gallery, fullscreen, and webtoon reading modes, while the FastAPI backend reads PixivUtil2 metadata and manages viewer-side indexes and thumbnail caches.
+A Windows-first local web viewer for a PixivUtil2 library or a compatible local media folder. The React/Vite frontend provides gallery, fullscreen, and webtoon reading modes, while the FastAPI backend reads PixivUtil2 metadata when available and manages viewer-side indexes and thumbnail caches.
 
 ## Highlights
 
@@ -14,6 +14,21 @@ A Windows-first local web viewer for a PixivUtil2 library. The React/Vite fronte
 - Keep sensitive media covered with the blur toggle while retaining page counts, grouping, and navigation.
 - Refresh the viewer index and optional dominant-color metadata in the background without writing to the PixivUtil2 source database.
 - Organize thumbnail caches through a recoverable workflow instead of permanently deleting generated files.
+
+## PixivUtil2 and folder-only use
+
+We recommend [PixivUtil2](https://github.com/Nandaka/PixivUtil2) for downloading Pixiv resources and keeping their local metadata. This viewer can read the resulting library, including files arranged in the same folder structure.
+
+PixivUtil2 is optional for local browsing. The viewer can scan supported media directly from a configured folder and build its own Viewer index; you do not need to install PixivUtil2 or provide its `db.sqlite`.
+
+For folder-only use, create or select a minimal `config.ini` that points to the media folder:
+
+```ini
+[Settings]
+rootDirectory = D:\Pictures
+```
+
+The configuration file only supplies the media root. Pixiv-specific metadata is available when the corresponding PixivUtil2 files are present.
 
 ## Screenshots
 
@@ -67,7 +82,9 @@ No administrator privileges are required. An internet connection is required for
 ## Typical workflow
 
 1. Run `install.bat`, then start the viewer with `run_viewer.bat`.
-2. If auto-discovery does not find PixivUtil2, open **Settings → Pixiv settings** and select `config.ini`.
+2. Choose a source:
+   - For a PixivUtil2 library, let the viewer discover PixivUtil2 or select its `config.ini` in **Settings → Pixiv settings**.
+   - For folder-only browsing, select a `config.ini` whose `[Settings] rootDirectory` points to your local media folder. PixivUtil2 itself and its `db.sqlite` are not required.
 3. Open **Settings → Image database** and select **Update image database**. The background job refreshes the viewer snapshot and can analyze image colors.
 4. Browse with artist and month filters, then open a manga pack in fullscreen or webtoon mode. Enable **Blur** before sharing your screen or taking screenshots.
 5. When the thumbnail cache grows, use **Settings → Image database → Organize thumbnails**. Organized files move to a recoverable location and can be restored.

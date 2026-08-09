@@ -15,6 +15,21 @@
 - 在背景更新 Viewer 索引與選用的主色分析，不寫入 PixivUtil2 原始資料庫。
 - 透過可復原流程整理縮圖快取，不直接永久刪除產生的檔案。
 
+## PixivUtil2 與僅讀取資料夾
+
+建議使用 [PixivUtil2](https://github.com/Nandaka/PixivUtil2) 下載 Pixiv 資源並保留本機中繼資料。這個 Viewer 可以讀取它建立的本機圖庫，也支援讀取相同資料夾結構中的檔案。
+
+如果只想瀏覽本機檔案，PixivUtil2 並非必要。Viewer 可以直接掃描指定資料夾中的支援格式媒體，建立自己的 Viewer 索引；不需要安裝 PixivUtil2，也不需要提供它的 `db.sqlite`。
+
+僅讀取資料夾時，建立或選取一份指向媒體資料夾的最小 `config.ini`：
+
+```ini
+[Settings]
+rootDirectory = D:\Pictures
+```
+
+這份設定檔只用來提供媒體根目錄；只有在存在對應的 PixivUtil2 檔案時，Viewer 才會讀取 Pixiv 專屬中繼資料。
+
 ## 操作畫面
 
 以下畫面均開啟內建模糊遮罩；媒體仍留在本機，Git 只收錄這些模糊後的操作截圖。
@@ -65,7 +80,9 @@
 ## 建議使用流程
 
 1. 執行 `install.bat`，完成後使用 `run_viewer.bat` 啟動。
-2. 若沒有自動找到 PixivUtil2，開啟「設定 → Pixiv 設定」並選擇 `config.ini`。
+2. 選擇資料來源：
+   - 使用 PixivUtil2 圖庫時，讓 Viewer 自動尋找 PixivUtil2，或在「設定 → Pixiv 設定」選取它的 `config.ini`。
+   - 僅讀取資料夾時，選取一份 `[Settings] rootDirectory` 指向本機媒體資料夾的 `config.ini`；不需要安裝 PixivUtil2，也不需要它的 `db.sqlite`。
 3. 到「設定 → 圖片資料庫」選擇「更新圖片資料庫」。背景工作會更新 Viewer 快照，並可依設定分析圖片主色。
 4. 使用繪師與月份篩選作品，再以全螢幕或條漫播放圖包；分享畫面或擷取操作截圖前可開啟「模糊遮罩」。
 5. 縮圖快取變大時，到「設定 → 圖片資料庫」執行「整理縮圖」。檔案會移到可復原位置，之後仍能還原。
