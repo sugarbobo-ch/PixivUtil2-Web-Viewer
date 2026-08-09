@@ -256,14 +256,15 @@ export const GalleryMonthSection: React.FC<GalleryMonthSectionProps> = ({
     };
 
     return (
-      <div
+      <button
+        type="button"
         key={card.key}
         data-selection-card="true"
         data-selection-key={card.key}
         data-selection-ids={card.ids.join(',')}
         data-gallery-index={card.globalIndex}
         data-gallery-indices={card.globalIndices.join(' ')}
-        role={isEditMode ? 'checkbox' : 'button'}
+        role={isEditMode ? 'checkbox' : undefined}
         tabIndex={0}
         aria-checked={isEditMode ? isSelected : undefined}
         aria-label={card.item.title || '作品'}
@@ -322,7 +323,7 @@ export const GalleryMonthSection: React.FC<GalleryMonthSectionProps> = ({
             {card.item.artist_name || `繪師 ID: ${card.item.member_id}`}
           </p>
         </div>
-      </div>
+      </button>
     );
   };
 

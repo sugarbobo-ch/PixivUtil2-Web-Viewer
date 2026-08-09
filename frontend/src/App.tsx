@@ -1766,14 +1766,14 @@ export const App: React.FC = () => {
 
   if (!isWebConfigReady) {
     return (
-      <div className="flex h-screen items-center justify-center bg-zinc-950 text-sm text-zinc-400" aria-busy="true">
+      <div className="app-root__loading" aria-busy="true">
         載入 Web Viewer 設定中…
       </div>
     );
   }
 
   return (
-    <div className={`h-screen flex flex-col overflow-hidden bg-zinc-950 text-zinc-100 transition-colors${viewMode === 'webtoon' ? ' webtoon-app' : ''}${viewMode === 'webtoon' && isWebtoonHeaderHidden ? ' webtoon-app--header-hidden' : ''}`}>
+    <div className={`app-root${viewMode === 'webtoon' ? ' webtoon-app' : ''}${viewMode === 'webtoon' && isWebtoonHeaderHidden ? ' webtoon-app--header-hidden' : ''}`}>
       <Header
         viewMode={viewMode}
         setViewMode={handleViewModeChange}

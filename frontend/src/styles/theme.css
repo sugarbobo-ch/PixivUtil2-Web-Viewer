@@ -1,80 +1,31 @@
-/* Keep legacy Tailwind neutral utilities aligned with the semantic theme
-   tokens while the component-specific styles migrate to named classes. */
-.dark [class*="bg-zinc-950"] {
-  background-color: var(--neutral-canvas) !important;
+/* App shell surfaces are semantic so the root never depends on legacy
+   Tailwind color utilities that can drift from the light/dark tokens. */
+.app-root {
+  display: flex;
+  height: 100%;
+  min-height: 100%;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--neutral-canvas);
+  color: var(--neutral-text-1);
+  transition: background-color 150ms cubic-bezier(0.2, 0, 0, 1),
+    color 150ms cubic-bezier(0.2, 0, 0, 1);
 }
 
-.dark [class*="bg-zinc-900"] {
-  background-color: var(--neutral-surface) !important;
+.app-root__loading {
+  display: flex;
+  min-height: 100%;
+  align-items: center;
+  justify-content: center;
+  background: var(--neutral-canvas);
+  color: var(--neutral-text-3);
+  font-size: var(--ui-font-min);
+  line-height: 1.5;
 }
 
-.dark [class*="bg-zinc-800"] {
-  background-color: var(--neutral-surface-raised) !important;
-}
-
-.dark [class*="bg-zinc-700"] {
-  background-color: var(--neutral-control-hover) !important;
-}
-
-.dark [class*="border-zinc-800"],
-.dark [class*="border-zinc-700"],
-.dark [class*="border-zinc-600"] {
-  border-color: var(--neutral-border) !important;
-}
-
-.dark [class*="text-zinc-100"],
-.dark [class*="text-zinc-200"],
-.dark [class*="text-zinc-300"] {
-  color: var(--neutral-text-1) !important;
-}
-
-.dark [class*="text-zinc-400"],
-.dark [class*="text-zinc-500"],
-.dark [class*="text-zinc-600"] {
-  color: var(--neutral-text-3) !important;
-}
-
-/* The interface uses a dark-first Tailwind palette. Remap its neutral tokens
-   under .light so the persisted webTheme setting changes the whole viewer. */
+/* Keep the document canvas aligned with the persisted light theme while the
+   app shell supplies the component surface and text roles. */
 .light body {
   background-color: var(--color-bg);
   color: var(--color-text);
-}
-
-.light [class*="bg-zinc-950"] {
-  background-color: var(--color-bg) !important;
-}
-
-.light [class*="bg-zinc-900"] {
-  background-color: var(--color-card) !important;
-}
-
-.light [class*="bg-zinc-800"] {
-  background-color: var(--neutral-control) !important;
-}
-
-.light [class*="bg-zinc-700"] {
-  background-color: var(--neutral-control-hover) !important;
-}
-
-.light [class*="border-zinc-800"],
-.light [class*="border-zinc-700"],
-.light [class*="border-zinc-600"] {
-  border-color: var(--color-border) !important;
-}
-
-.light [class*="text-zinc-100"],
-.light [class*="text-zinc-200"],
-.light [class*="text-zinc-300"] {
-  color: var(--neutral-text-1) !important;
-}
-
-.light [class*="text-zinc-400"],
-.light [class*="text-zinc-500"],
-.light [class*="text-zinc-600"] {
-  color: var(--neutral-text-3) !important;
-}
-
-.light [class*="placeholder-zinc-500"]::placeholder {
-  color: var(--neutral-text-3) !important;
 }

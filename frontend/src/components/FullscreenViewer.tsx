@@ -638,6 +638,51 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
     };
   }, []);
 
+  useEffect(() => {
+    const handleTabKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Tab') return;
+
+      const viewer = viewerRef.current;
+      if (!viewer) return;
+
+      const focusableElements = Array.from(viewer.querySelectorAll<HTMLElement>([
+        'button:not([disabled])',
+        'input:not([disabled])',
+        'select:not([disabled])',
+        'textarea:not([disabled])',
+        'a[href]',
+        '[tabindex]:not([tabindex="-1"])',
+      ].join(', '))).filter(element => (
+        !element.hasAttribute('aria-hidden')
+        && element.getClientRects().length > 0
+      ));
+
+      if (focusableElements.length === 0) {
+        event.preventDefault();
+        viewer.focus({ preventScroll: true });
+        return;
+      }
+
+      const first = focusableElements[0];
+      const last = focusableElements[focusableElements.length - 1];
+      const activeElement = document.activeElement;
+
+      if (!viewer.contains(activeElement)) {
+        event.preventDefault();
+        (event.shiftKey ? last : first).focus({ preventScroll: true });
+      } else if (event.shiftKey && activeElement === first) {
+        event.preventDefault();
+        last.focus({ preventScroll: true });
+      } else if (!event.shiftKey && activeElement === last) {
+        event.preventDefault();
+        first.focus({ preventScroll: true });
+      }
+    };
+
+    document.addEventListener('keydown', handleTabKey);
+    return () => document.removeEventListener('keydown', handleTabKey);
+  }, []);
+
   useLayoutEffect(() => {
     const mediaStack = mediaStackRef.current;
     if (!mediaStack) {

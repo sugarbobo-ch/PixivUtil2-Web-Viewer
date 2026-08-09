@@ -5,6 +5,7 @@ import { fetchFirstSourceLink } from '../utils/sourceLinks';
 import { MediaIssuePlaceholder } from './MediaIssuePlaceholder';
 import { Badge, Button, IconButton } from './ui';
 import { DemoMediaBlock } from './DemoMediaBlock';
+import { useModalFocusTrap } from '../utils/useModalFocusTrap';
 import { X, Play, Images, Film, ExternalLink } from 'lucide-react';
 
 interface MangaGroupModalProps {
@@ -28,21 +29,14 @@ export const MangaGroupModal: React.FC<MangaGroupModalProps> = ({
 }) => {
   const [sourceLink, setSourceLink] = useState<SourceLink | null>(null);
   const [isSourceLoading, setIsSourceLoading] = useState(false);
+  const dialogRef = useRef<HTMLDivElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
-  const previouslyFocusedElement = useRef<HTMLElement | null>(null);
 
-  useEffect(() => {
-    if (!isOpen) return undefined;
-
-    previouslyFocusedElement.current = document.activeElement instanceof HTMLElement
-      ? document.activeElement
-      : null;
-    closeButtonRef.current?.focus({ preventScroll: true });
-
-    return () => {
-      previouslyFocusedElement.current?.focus({ preventScroll: true });
-    };
-  }, [isOpen]);
+  useModalFocusTrap({
+    isOpen,
+    dialogRef,
+    initialFocusRef: closeButtonRef,
+  });
 
   useEffect(() => {
     if (!isOpen) return undefined;
@@ -90,6 +84,7 @@ export const MangaGroupModal: React.FC<MangaGroupModalProps> = ({
       className="manga-group-modal fixed inset-0 z-50 flex items-center justify-center"
     >
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="manga-group-modal-title"

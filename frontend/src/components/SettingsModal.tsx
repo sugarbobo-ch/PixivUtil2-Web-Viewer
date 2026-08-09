@@ -38,6 +38,7 @@ import {
   WebConfig,
 } from '../types';
 import { normalizeWebConfig } from '../utils/webConfig';
+import { useModalFocusTrap } from '../utils/useModalFocusTrap';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -223,8 +224,33 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const libraryPollTimerRef = useRef<number | null>(null);
   const hiddenArtistsRequestRef = useRef<Promise<void> | null>(null);
   const sectionTabsRef = useRef<HTMLDivElement | null>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const saveConfirmDialogRef = useRef<HTMLDivElement>(null);
+  const saveConfirmCancelRef = useRef<HTMLButtonElement>(null);
+  const hardDeleteDialogRef = useRef<HTMLDivElement>(null);
+  const hardDeleteCancelRef = useRef<HTMLButtonElement>(null);
   const [canScrollSectionTabsLeft, setCanScrollSectionTabsLeft] = useState(false);
   const [canScrollSectionTabsRight, setCanScrollSectionTabsRight] = useState(false);
+
+  useModalFocusTrap({
+    isOpen,
+    dialogRef,
+    initialFocusRef: closeButtonRef,
+    disabled: !!showSaveConfirm || !!hardDeleteTarget,
+  });
+
+  useModalFocusTrap({
+    isOpen: isOpen && showSaveConfirm,
+    dialogRef: saveConfirmDialogRef,
+    initialFocusRef: saveConfirmCancelRef,
+  });
+
+  useModalFocusTrap({
+    isOpen: isOpen && !!hardDeleteTarget,
+    dialogRef: hardDeleteDialogRef,
+    initialFocusRef: hardDeleteCancelRef,
+  });
 
   const sectionKeys = Object.keys(pixivSections);
   const sectionTabKey = sectionKeys.join('\u0000');
@@ -1143,6 +1169,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       className="settings-modal fixed inset-0 z-50 flex items-center justify-center overflow-y-auto p-4 backdrop-blur-sm"
     >
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="settings-modal-title"
@@ -1158,6 +1185,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </h2>
           </div>
           <IconButton
+            ref={closeButtonRef}
             type="button"
             onClick={onClose}
             variant="ghost"
@@ -1946,11 +1974,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           role="presentation"
           onClick={handleSaveConfirmBackdropClick}
         >
-          <div role="dialog" aria-modal="true" aria-labelledby="save-confirm-title" className="settings-modal__confirm-panel w-full max-w-md space-y-4 rounded-2xl p-5">
+          <div ref={saveConfirmDialogRef} role="dialog" aria-modal="true" aria-labelledby="save-confirm-title" className="settings-modal__confirm-panel w-full max-w-md space-y-4 rounded-2xl p-5">
             <h3 id="save-confirm-title" className="settings-modal__confirm-title text-base font-bold">儲存 PixivUtil2 設定？</h3>
             <p className="settings-modal__confirm-text text-sm leading-6">儲存前會先把目前 config.ini 複製成 .bak；若寫入失敗，系統會嘗試從備份還原。</p>
             <div className="flex flex-wrap justify-end gap-3 pt-2">
-              <Button type="button" onClick={() => setShowSaveConfirm(false)} variant="plain">
+              <Button ref={saveConfirmCancelRef} type="button" onClick={() => setShowSaveConfirm(false)} variant="plain">
                 取消
               </Button>
               <Button type="button" onClick={handleSavePixivConfig} disabled={loading} variant="primary">
@@ -1967,7 +1995,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           role="presentation"
           onClick={handleHardDeleteBackdropClick}
         >
-          <div role="dialog" aria-modal="true" aria-labelledby="thumbnail-hard-delete-title" className="settings-modal__confirm-panel w-full max-w-md space-y-4 rounded-2xl p-5">
+          <div ref={hardDeleteDialogRef} role="dialog" aria-modal="true" aria-labelledby="thumbnail-hard-delete-title" className="settings-modal__confirm-panel w-full max-w-md space-y-4 rounded-2xl p-5">
             <div className="flex items-start gap-3">
               <span className="settings-modal__danger-icon mt-0.5 rounded-lg p-2">
                 <Trash2 className="h-5 w-5" aria-hidden="true" />
@@ -1979,7 +2007,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </div>
             <p className="settings-modal__danger-note rounded-lg px-3 py-2 text-xs leading-5">只會刪除縮圖快取，不會刪除原始圖片。</p>
             <div className="flex flex-wrap justify-end gap-3 pt-2">
-              <Button type="button" onClick={() => setHardDeleteTarget(null)} disabled={hardDeleteLoading} variant="plain">
+              <Button ref={hardDeleteCancelRef} type="button" onClick={() => setHardDeleteTarget(null)} disabled={hardDeleteLoading} variant="plain">
                 取消
               </Button>
               <Button type="button" onClick={handleHardDeleteThumbnailCache} disabled={hardDeleteLoading} variant="danger">

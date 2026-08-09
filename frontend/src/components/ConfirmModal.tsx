@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 import { AlertTriangle, RefreshCw, Trash2 } from 'lucide-react';
 import { Button } from './ui/Button';
+import { useModalFocusTrap } from '../utils/useModalFocusTrap';
 
 type ConfirmModalVariant = 'danger' | 'primary';
 
@@ -25,21 +26,14 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({
   onConfirm,
   onCancel,
 }) => {
+  const dialogRef = useRef<HTMLDivElement>(null);
   const cancelButtonRef = useRef<HTMLButtonElement>(null);
-  const previouslyFocusedElement = useRef<HTMLElement | null>(null);
 
-  useEffect(() => {
-    if (!isOpen) return undefined;
-
-    previouslyFocusedElement.current = document.activeElement instanceof HTMLElement
-      ? document.activeElement
-      : null;
-    cancelButtonRef.current?.focus({ preventScroll: true });
-
-    return () => {
-      previouslyFocusedElement.current?.focus({ preventScroll: true });
-    };
-  }, [isOpen]);
+  useModalFocusTrap({
+    isOpen,
+    dialogRef,
+    initialFocusRef: cancelButtonRef,
+  });
 
   useEffect(() => {
     if (!isOpen) return undefined;
@@ -72,6 +66,7 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({
       className="settings-modal__confirm-overlay fixed inset-0 z-[70] flex items-center justify-center p-4"
     >
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="confirm-modal-title"

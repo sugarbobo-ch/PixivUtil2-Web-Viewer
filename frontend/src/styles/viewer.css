@@ -408,10 +408,6 @@
     color: var(--viewer-text);
   }
 
-  .fullscreen-viewer__details .text-amber-300 {
-    color: oklch(0.72 0.16 80);
-  }
-
   .fullscreen-viewer__details-title {
     margin-bottom: 0.5rem;
     color: var(--viewer-text);

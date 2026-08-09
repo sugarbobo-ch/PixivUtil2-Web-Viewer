@@ -38,9 +38,16 @@
   }
 
   .gallery-card {
+    display: block;
+    width: 100%;
     height: 100%;
     border: 1px solid var(--viewer-border);
+    padding: 0;
     background: var(--viewer-surface);
+    color: inherit;
+    font: inherit;
+    text-align: inherit;
+    appearance: none;
     transition: border-color 180ms cubic-bezier(0.2, 0, 0, 1), transform 180ms cubic-bezier(0.2, 0, 0, 1);
   }
 

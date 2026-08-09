@@ -1,8 +1,9 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Eye, Settings2, Trash2, X } from 'lucide-react';
 import { Artist } from '../types';
 import { ConfirmModal } from './ConfirmModal';
 import { Button, IconButton } from './ui/Button';
+import { useModalFocusTrap } from '../utils/useModalFocusTrap';
 
 interface ArtistSettingsModalProps {
   isOpen: boolean;
@@ -27,6 +28,15 @@ export const ArtistSettingsModal: React.FC<ArtistSettingsModalProps> = ({
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const dialogRef = useRef<HTMLElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+
+  useModalFocusTrap({
+    isOpen: isOpen && !!artist,
+    dialogRef,
+    initialFocusRef: closeButtonRef,
+    disabled: !!action,
+  });
 
   useEffect(() => {
     if (!isOpen) {
@@ -98,6 +108,7 @@ export const ArtistSettingsModal: React.FC<ArtistSettingsModalProps> = ({
         }}
       >
         <section
+          ref={dialogRef}
           className="settings-modal__panel flex w-full max-w-xl flex-col overflow-hidden rounded-2xl"
           role="dialog"
           aria-modal="true"
@@ -112,7 +123,7 @@ export const ArtistSettingsModal: React.FC<ArtistSettingsModalProps> = ({
                 繪師設定：{artistName}
               </h2>
             </div>
-            <IconButton type="button" onClick={onClose} variant="ghost" className="settings-modal__close" aria-label="關閉繪師設定" title="關閉繪師設定">
+            <IconButton ref={closeButtonRef} type="button" onClick={onClose} variant="ghost" className="settings-modal__close" aria-label="關閉繪師設定" title="關閉繪師設定">
               <X className="h-5 w-5" aria-hidden="true" />
             </IconButton>
           </header>
