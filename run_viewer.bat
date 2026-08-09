@@ -1,10 +1,13 @@
 @echo off
-echo =========================================
-echo  Starting PixivUtil2 Web Viewer ^& API...
-echo =========================================
+setlocal
+cd /d "%~dp0"
 
-cd /d "%~dp0backend"
-start "PixivUtil2 FastAPI Backend" uv run uvicorn main:app --port 8000 --reload
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\run.ps1"
+set "RUN_EXIT=%ERRORLEVEL%"
 
-cd /d "%~dp0frontend"
-cmd /c pnpm dev
+if not "%RUN_EXIT%"=="0" (
+  echo.
+  echo The viewer stopped with an error. Review the message above.
+  pause
+)
+exit /b %RUN_EXIT%

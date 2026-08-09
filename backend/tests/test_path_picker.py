@@ -1,6 +1,8 @@
+import asyncio
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import Mock, patch
 
 import sys
 
@@ -11,6 +13,19 @@ import main
 
 
 class PathPickerValidationTests(unittest.TestCase):
+    def test_library_manager_is_owned_by_application_lifespan(self):
+        fake_manager = Mock()
+
+        async def exercise_lifespan():
+            self.assertIsNone(main.LIBRARY_JOB_MANAGER)
+            with patch.object(main.library_jobs, "LibraryJobManager", return_value=fake_manager):
+                async with main.lifespan(main.app):
+                    self.assertIs(main.LIBRARY_JOB_MANAGER, fake_manager)
+                self.assertIsNone(main.LIBRARY_JOB_MANAGER)
+
+        asyncio.run(exercise_lifespan())
+        fake_manager.close.assert_called_once_with()
+
     def test_default_dev_frontend_origins_can_use_the_picker_session(self):
         self.assertIn("http://localhost:3000", main.ALLOWED_ORIGINS)
         self.assertIn("http://127.0.0.1:3000", main.ALLOWED_ORIGINS)

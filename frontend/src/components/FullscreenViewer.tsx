@@ -666,8 +666,11 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
       const first = focusableElements[0];
       const last = focusableElements[focusableElements.length - 1];
       const activeElement = document.activeElement;
+      const activeFocusableIndex = activeElement instanceof HTMLElement
+        ? focusableElements.indexOf(activeElement)
+        : -1;
 
-      if (!viewer.contains(activeElement)) {
+      if (!viewer.contains(activeElement) || activeFocusableIndex === -1) {
         event.preventDefault();
         (event.shiftKey ? last : first).focus({ preventScroll: true });
       } else if (event.shiftKey && activeElement === first) {

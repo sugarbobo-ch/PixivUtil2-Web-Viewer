@@ -4,7 +4,11 @@ backend/__pycache__/
 backend/cache_thumbs/
 backend/viewer.sqlite*
 .pnpm-store/
+/.runtime/
 *.pyc
+
+# Local runtime settings
+/web_config.json
 
 # Node modules & build outputs
 frontend/node_modules/

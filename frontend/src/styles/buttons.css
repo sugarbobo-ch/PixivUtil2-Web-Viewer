@@ -209,7 +209,7 @@
 }
 
 .ui-button:disabled {
-  cursor: not-allowed;
+  cursor: default;
   opacity: var(--ui-disabled-opacity);
 }
 
@@ -292,6 +292,19 @@
   --ui-button-danger-hover: var(--viewer-danger-hover);
   --ui-button-danger-press: color-mix(in oklch, var(--viewer-danger) 86%, var(--viewer-text));
   --ui-button-danger-ink: var(--brand-ink);
+}
+
+/* The batch toolbar floats over gallery media, so its neutral controls and
+   metadata use the same appearance-aware HUD family as the overlay surface. */
+.batch-edit-toolbar .ui-button {
+  --ui-button-surface: var(--viewer-hud-surface);
+  --ui-button-surface-hover: var(--viewer-hud-hover);
+  --ui-button-surface-press: var(--viewer-hud-press);
+  --ui-button-border: var(--viewer-hud-border);
+  --ui-button-text: var(--viewer-hud-text);
+  --ui-button-muted-text: var(--viewer-hud-text-muted);
+  --ui-button-hover-text: var(--viewer-hud-text);
+  --ui-button-focus: var(--viewer-focus-ring);
 }
 
 .filter-summary .ui-button {

@@ -1,6 +1,7 @@
 import React from 'react';
 import { CheckSquare, Download, LoaderCircle, Square, Trash2, X } from 'lucide-react';
 import { Button, IconButton } from './ui/Button';
+import { Badge } from './ui/Badge';
 
 interface BatchEditToolbarProps {
   selectedCount: number;
@@ -29,13 +30,19 @@ export const BatchEditToolbar: React.FC<BatchEditToolbarProps> = ({
 
   return (
     <section className="batch-edit-toolbar" aria-label="批次編輯工具">
-      <div className="batch-edit-toolbar__summary" role="status" aria-live="polite">
+      <Badge
+        variant="hud"
+        size="md"
+        className="batch-edit-toolbar__summary"
+        role="status"
+        aria-live="polite"
+      >
         <span className="batch-edit-toolbar__summary-label">已選取</span>
         <strong>{selectedCount}</strong>
         <span aria-hidden="true">/</span>
         <span>{totalCount}</span>
         <span className="batch-edit-toolbar__summary-label">項</span>
-      </div>
+      </Badge>
 
       <div className="batch-edit-toolbar__actions">
         <Button

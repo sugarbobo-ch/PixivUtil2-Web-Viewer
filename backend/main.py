@@ -12,6 +12,7 @@ import tempfile
 import zipfile
 import threading
 import time
+from contextlib import asynccontextmanager
 from typing import List, Dict, Any, Optional, Literal
 from fastapi import FastAPI, HTTPException, Query, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -27,7 +28,38 @@ import library_jobs
 import path_picker
 import recycle_bin
 
-app = FastAPI(title="PixivUtil2 Web Viewer Backend API", version="1.0.0")
+LIBRARY_JOB_MANAGER: Optional[library_jobs.LibraryJobManager] = None
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """Own background workers for exactly one ASGI application lifespan."""
+    global LIBRARY_JOB_MANAGER
+    manager = library_jobs.LibraryJobManager(auto_reconcile=True)
+    LIBRARY_JOB_MANAGER = manager
+    try:
+        yield
+    finally:
+        manager.close()
+        if LIBRARY_JOB_MANAGER is manager:
+            LIBRARY_JOB_MANAGER = None
+
+
+def get_library_job_manager() -> library_jobs.LibraryJobManager:
+    manager = LIBRARY_JOB_MANAGER
+    if manager is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Media library service is not ready.",
+        )
+    return manager
+
+
+app = FastAPI(
+    title="PixivUtil2 Web Viewer Backend API",
+    version="1.0.0",
+    lifespan=lifespan,
+)
 
 _default_allowed_origins = {
     "http://localhost:3000",
@@ -66,7 +98,6 @@ THUMB_GENERATION_LOCK = threading.Lock()
 THUMB_GENERATION_INFLIGHT: dict[str, threading.Event] = {}
 
 WEB_CONFIG_PATH = config_paths.WEB_CONFIG_PATH
-LIBRARY_JOB_MANAGER = library_jobs.LibraryJobManager(auto_reconcile=True)
 
 
 def generate_thumbnail_once(thumb_path: str, generator) -> bool:
@@ -512,6 +543,7 @@ def restore_settings():
 
 @app.post("/api/rescan", status_code=status.HTTP_202_ACCEPTED)
 def rescan_directory(req: RescanRequest):
+    manager = get_library_job_manager()
     target_dir = req.directory or get_root_directory()
     target_dir = os.path.abspath(target_dir)
     if not os.path.isdir(target_dir):
@@ -520,7 +552,7 @@ def rescan_directory(req: RescanRequest):
             detail=f"Directory does not exist: {target_dir}",
         )
     try:
-        job = LIBRARY_JOB_MANAGER.start(
+        job = manager.start(
             "update-library",
             target_dir,
             analyze_colors=True,
@@ -542,6 +574,7 @@ def rescan_directory(req: RescanRequest):
 
 @app.post("/api/library/jobs", status_code=status.HTTP_202_ACCEPTED)
 def start_library_job(req: LibraryJobRequest):
+    manager = get_library_job_manager()
     target_dir = os.path.abspath(req.directory or get_root_directory())
     if req.type != "organize-thumbnail-cache" and not os.path.isdir(target_dir):
         raise HTTPException(
@@ -605,7 +638,7 @@ def start_library_job(req: LibraryJobRequest):
     priority = max(0, min(100, int(priority)))
 
     try:
-        job = LIBRARY_JOB_MANAGER.start(
+        job = manager.start(
             req.type,
             target_dir,
             analyze_colors=req.analyze_colors,
@@ -624,12 +657,12 @@ def start_library_job(req: LibraryJobRequest):
 
 @app.get("/api/library/jobs/current")
 def read_current_library_job():
-    return {"job": LIBRARY_JOB_MANAGER.current()}
+    return {"job": get_library_job_manager().current()}
 
 
 @app.get("/api/library/jobs/{job_id}")
 def read_library_job(job_id: str):
-    job = LIBRARY_JOB_MANAGER.get(job_id)
+    job = get_library_job_manager().get(job_id)
     if job is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Library job not found")
     return {"job": job}
@@ -637,7 +670,7 @@ def read_library_job(job_id: str):
 
 @app.post("/api/library/jobs/{job_id}/cancel")
 def cancel_library_job(job_id: str):
-    job = LIBRARY_JOB_MANAGER.cancel(job_id)
+    job = get_library_job_manager().cancel(job_id)
     if job is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Library job not found")
     return {"job": job}
@@ -679,7 +712,7 @@ def read_library_cache_preview(job_id: str, recovery_name: str):
 
 @app.delete("/api/library/cache/{job_id}")
 def permanently_delete_library_cache(job_id: str):
-    active_job = LIBRARY_JOB_MANAGER.current()
+    active_job = get_library_job_manager().current()
     if active_job and active_job.get("status") in db.LIBRARY_JOB_ACTIVE_STATUSES:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -696,7 +729,7 @@ def permanently_delete_library_cache(job_id: str):
 
 @app.post("/api/library/cache/{job_id}/restore")
 def restore_library_cache(job_id: str):
-    active_job = LIBRARY_JOB_MANAGER.current()
+    active_job = get_library_job_manager().current()
     if active_job and active_job.get("status") in db.LIBRARY_JOB_ACTIVE_STATUSES:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
