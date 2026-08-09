@@ -77,7 +77,9 @@ def _normalise_path(value: str) -> str:
     expanded = os.path.expandvars(os.path.expanduser(str(value).strip()))
     if not os.path.isabs(expanded):
         expanded = os.path.abspath(expanded)
-    return os.path.normpath(os.path.abspath(expanded))
+    # Resolve Windows 8.3 aliases (for example, RUNNER~1) so returned paths
+    # are stable across native picker, Path.resolve(), and persisted config.
+    return os.path.normpath(os.path.realpath(expanded))
 
 
 def _is_within(path: str, directory: str) -> bool:
