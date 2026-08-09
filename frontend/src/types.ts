@@ -64,7 +64,13 @@ export interface ImageItem {
 export type ViewerMode = 'fullscreen' | 'webtoon';
 export type ViewMode = 'grid' | ViewerMode;
 export type ThemeMode = 'dark' | 'light';
-export type SortMode = 'newest_month' | 'oldest_month' | 'oldest' | 'natural_name';
+export type SortMode =
+  | 'newest_month'
+  | 'newest_works_pages_ascending'
+  | 'newest_month_oldest_works'
+  | 'oldest_month'
+  | 'oldest'
+  | 'natural_name';
 
 export interface WorkGroup {
   group_id: string;
@@ -98,6 +104,9 @@ export interface WebConfig {
   manageThumbnailCache: boolean;
   thumbnailCacheLimitMiB: number;
   pixivConfigPath?: string;
+  librarySourceMode: 'unconfigured' | 'pixiv' | 'folder';
+  mediaRootPath: string;
+  onboardingCompleted: boolean;
 }
 
 export const DEFAULT_WEB_CONFIG: WebConfig = {
@@ -120,6 +129,9 @@ export const DEFAULT_WEB_CONFIG: WebConfig = {
   analyzeColorsAfterLibraryUpdate: true,
   manageThumbnailCache: true,
   thumbnailCacheLimitMiB: 1024,
+  librarySourceMode: 'unconfigured',
+  mediaRootPath: '',
+  onboardingCompleted: false,
 };
 
 export type LibraryJobStatus =

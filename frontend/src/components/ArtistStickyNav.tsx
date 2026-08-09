@@ -1,13 +1,11 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ArrowUpDown, Check, ExternalLink, FilterX, List, MoreHorizontal, Pencil, RefreshCw, Settings2 } from 'lucide-react';
-import { Artist } from '../types';
+import { Artist, SortMode } from '../types';
 import { fetchArtistSourceLinks } from '../utils/sourceLinks';
 import { Button, IconButton } from './ui/Button';
 
-type GallerySortMode = 'newest_month' | 'oldest_month' | 'oldest' | 'natural_name';
-
 interface GallerySortOption {
-  value: GallerySortMode;
+  value: SortMode;
   label: string;
   description?: string;
 }
@@ -26,9 +24,9 @@ interface ArtistStickyNavProps {
   onOpenSettings?: () => void;
   isEditMode?: boolean;
   onToggleEditMode?: () => void;
-  sortMode?: GallerySortMode;
+  sortMode?: SortMode;
   sortOptions?: readonly GallerySortOption[];
-  onSortModeChange?: (mode: GallerySortMode) => void;
+  onSortModeChange?: (mode: SortMode) => void;
   itemsPerPage?: number;
   itemsPerPageOptions?: readonly GalleryItemsPerPageOption[];
   onItemsPerPageChange?: (itemsPerPage: number) => void;

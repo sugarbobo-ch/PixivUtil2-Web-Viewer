@@ -103,7 +103,10 @@ export const GalleryMonthSection: React.FC<GalleryMonthSectionProps> = ({
   const displayCards = React.useMemo<DisplayCard[]>(() => {
     if (!groupMangaPosts) {
       return group.items.map(({ item, globalIndex }) => ({
-        key: `image:${globalIndex}`,
+        // Keep the card identity tied to the file, not its current position.
+        // Reusing an index key after a sort can leave the previous thumbnail
+        // component mounted at the same slot while its replacement is queued.
+        key: `image:${item.image_id}:${item.save_name}`,
         item,
         globalIndex,
         ids: [item.image_id],
@@ -132,7 +135,7 @@ export const GalleryMonthSection: React.FC<GalleryMonthSectionProps> = ({
         items: value.items.map(entry => entry.item),
       };
       return {
-        key: `work:${groupId}:${coverEntry.globalIndex}`,
+        key: `work:${groupId}:${coverEntry.item.save_name}`,
         item: value.cover,
         globalIndex: coverEntry.globalIndex,
         ids: Array.from(new Set(value.items.map(entry => entry.item.image_id))),
@@ -141,6 +144,11 @@ export const GalleryMonthSection: React.FC<GalleryMonthSectionProps> = ({
       };
     });
   }, [group.items, group.key, groupMangaPosts]);
+
+  const displayOrderKey = React.useMemo(
+    () => displayCards.map(card => card.key).join('\u0000'),
+    [displayCards],
+  );
 
   const destinationLocalIndex = destinationMonthKey === group.key && destinationGlobalIndex !== null
     ? displayCards.findIndex(card => card.globalIndices.includes(destinationGlobalIndex))
@@ -201,7 +209,7 @@ export const GalleryMonthSection: React.FC<GalleryMonthSectionProps> = ({
       forcedIndex,
     });
     setVirtualRange(current => rangesEqual(current, nextRange) ? current : nextRange);
-  }, [destinationLocalIndex, displayCards.length, metrics, navigationMode, restoreLocalIndex, scrollContainerRef, scrollTick]);
+  }, [destinationLocalIndex, displayCards.length, displayOrderKey, metrics, navigationMode, restoreLocalIndex, scrollContainerRef, scrollTick]);
 
   const activeMetrics = metrics ?? FALLBACK_METRICS;
   const totalRows = getRowCount(displayCards.length, activeMetrics.columns);

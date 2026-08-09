@@ -21,7 +21,14 @@ export const GalleryThumbnail: React.FC<GalleryThumbnailProps> = ({
   demoMode,
   dominantColor,
 }) => {
-  const [loadState, setLoadState] = React.useState<'loading' | 'loaded' | 'error'>('loading');
+  const [loadResult, setLoadResult] = React.useState<{
+    src: string;
+    state: 'loading' | 'loaded' | 'error';
+  }>(() => ({ src, state: 'loading' }));
+  // Derive the reset during render. A passive effect can run after a cached
+  // image's onLoad event and incorrectly turn a completed thumbnail back into
+  // a permanent loading skeleton during rapid sorting.
+  const loadState = loadResult.src === src ? loadResult.state : 'loading';
   const admitted = useImageLoadPermission({
     url: src,
     priority,
@@ -38,10 +45,6 @@ export const GalleryThumbnail: React.FC<GalleryThumbnailProps> = ({
     ? { '--gallery-thumbnail-dominant': validatedDominantColor } as React.CSSProperties
     : undefined;
 
-  React.useEffect(() => {
-    setLoadState('loading');
-  }, [demoMode, src]);
-
   return (
     <div className={`gallery-thumbnail${loadState === 'loaded' ? ' is-ready' : ''}`} style={thumbnailStyle}>
       {demoMode ? (
@@ -53,19 +56,24 @@ export const GalleryThumbnail: React.FC<GalleryThumbnailProps> = ({
           )}
           {shouldRenderImage && (
             <img
+              key={src}
               src={src}
               alt={alt}
               draggable={false}
-              loading={priority <= 1 ? 'eager' : 'lazy'}
+              // Rendering this element means the scheduler has already
+              // admitted it. Native lazy loading here can occupy a scheduler
+              // slot without starting the request and starve newly visible
+              // thumbnails after rapid sorting or scrolling.
+              loading="eager"
               decoding="async"
               {...{ fetchpriority: priority <= 1 ? 'high' : 'low' }}
               onLoad={() => {
                 imageLoadScheduler.markLoaded(src);
-                setLoadState('loaded');
+                setLoadResult({ src, state: 'loaded' });
               }}
               onError={() => {
                 imageLoadScheduler.markFinished(src, false);
-                setLoadState('error');
+                setLoadResult({ src, state: 'error' });
               }}
               className={`gallery-thumbnail__image w-full h-full object-cover ${loadState === 'loaded' ? 'is-loaded' : ''} ${blurEnabled ? 'blur-media blur-media--thumbnail' : 'transition-transform duration-300 group-hover:scale-105'}`}
             />

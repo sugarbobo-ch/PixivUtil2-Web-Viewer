@@ -2,6 +2,7 @@ import React, { forwardRef } from 'react';
 
 export type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'plain' | 'success' | 'danger';
 export type ButtonSize = 'xs' | 'sm' | 'md' | 'lg';
+export type ButtonShape = 'control' | 'card';
 
 export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
   /** Semantic intent. Do not use a color utility class to express intent. */
@@ -12,6 +13,8 @@ export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElemen
   fullWidth?: boolean;
   /** Internal primitive flag used by IconButton. */
   iconOnly?: boolean;
+  /** Shared geometry for standard actions and large option cards. */
+  shape?: ButtonShape;
 }
 
 export interface IconButtonProps extends Omit<ButtonProps, 'children' | 'iconOnly'> {
@@ -32,6 +35,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
     size = 'md',
     fullWidth = false,
     iconOnly = false,
+    shape = 'control',
     ...buttonProps
   },
   ref,
@@ -42,6 +46,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
       ref={ref}
       type={type}
       className={cx('ui-button', iconOnly && 'ui-button--icon', className)}
+      data-shape={shape}
       data-variant={variant}
       data-size={size}
       data-full-width={fullWidth ? 'true' : undefined}

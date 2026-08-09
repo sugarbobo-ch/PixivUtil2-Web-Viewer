@@ -16,7 +16,7 @@ import config_paths
 # ``PIXIV_DB_PATH`` is strictly read-only.  ``DB_PATH`` is retained as a
 # compatibility alias for tests and existing Viewer callers, but now points to
 # the Web Viewer-owned database instead of PixivUtil2's database.
-PIXIV_DB_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "db.sqlite"))
+PIXIV_DB_PATH = config_paths.get_pixiv_database_path()
 VIEWER_DB_PATH = config_paths.VIEWER_DB_PATH
 DB_PATH = VIEWER_DB_PATH
 MEDIA_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".mp4"}
@@ -35,7 +35,10 @@ SYNTHETIC_IMAGE_ID_RANGE = 8_000_000_000
 # part of the user's image collection. In particular, discord-fanbox-archiver
 # stores temporary downloads and extraction staging under ``_state\partial``.
 RECYCLE_DIRECTORY_NAME = ".pixivutil2-trash"
-INTERNAL_DIRECTORY_NAMES = {"_state", RECYCLE_DIRECTORY_NAME}
+INTERNAL_DIRECTORY_NAMES = {"_state", "__pycache__", RECYCLE_DIRECTORY_NAME}
+VIEWER_INTERNAL_MEDIA_DIRECTORIES = {
+    os.path.normcase(os.path.abspath(os.path.join(os.path.dirname(__file__), "cache_thumbs"))),
+}
 
 
 def is_internal_directory_name(name: str) -> bool:
@@ -48,6 +51,13 @@ def is_internal_media_path(file_path: Optional[str]) -> bool:
         return False
 
     normalized = os.path.normpath(os.path.abspath(file_path))
+    normalized_case = os.path.normcase(normalized)
+    if any(
+        normalized_case == directory
+        or normalized_case.startswith(directory.rstrip(os.sep) + os.sep)
+        for directory in VIEWER_INTERNAL_MEDIA_DIRECTORIES
+    ):
+        return True
     return any(is_internal_directory_name(part) for part in normalized.split(os.sep))
 
 
@@ -688,17 +698,36 @@ def _sql_path_prefix_like(directory: str) -> str:
     return f"{escaped}%"
 
 
-def _stored_media_path_is_within(file_path: Optional[str], directory: str) -> bool:
+def _resolve_stored_media_path(file_path: str, source_root: str) -> str:
+    if os.path.isabs(file_path):
+        return os.path.abspath(file_path)
+    return os.path.abspath(os.path.join(source_root, file_path))
+
+
+def _stored_media_path_is_within(
+    file_path: Optional[str],
+    directory: str,
+    source_root: Optional[str] = None,
+) -> bool:
     if not file_path or is_internal_media_path(file_path):
         return False
-    return _is_path_within(str(file_path), directory)
+    return _is_path_within(
+        _resolve_stored_media_path(str(file_path), source_root or directory),
+        directory,
+    )
 
 
-def _stored_media_path_is_direct_child(file_path: Optional[str], directory: str) -> bool:
+def _stored_media_path_is_direct_child(
+    file_path: Optional[str],
+    directory: str,
+    source_root: Optional[str] = None,
+) -> bool:
     if not file_path or is_internal_media_path(file_path):
         return False
     try:
-        normalized_file = _normalise_media_path(str(file_path))
+        normalized_file = _normalise_media_path(
+            _resolve_stored_media_path(str(file_path), source_root or directory)
+        )
         normalized_directory = _normalise_media_path(directory)
         return os.path.dirname(normalized_file) == normalized_directory
     except (OSError, TypeError, ValueError):
@@ -1039,6 +1068,7 @@ def discover_root_scopes(root_directory: str) -> List[Dict[str, Any]]:
             if entry.is_dir(follow_symlinks=False)
             and not entry.name.startswith(".")
             and not is_internal_directory_name(entry.name)
+            and not is_internal_media_path(entry.path)
         ]
     except OSError:
         return []
@@ -1069,6 +1099,37 @@ def discover_root_scopes(root_directory: str) -> List[Dict[str, Any]]:
             """,
             (root_scope_key, root, now),
         )
+
+        # Exactly one configured root is authoritative. Historical scopes are
+        # retained for diagnostics, but anything outside that root must never
+        # remain selectable or leak its rows into the current gallery.
+        historical_scopes = conn.execute(
+            """
+            SELECT scope_key, scope_type, directory
+            FROM viewer_index_scope
+            WHERE is_active = 1 AND scope_key != ?
+            """,
+            (root_scope_key,),
+        ).fetchall()
+        for historical_scope in historical_scopes:
+            scope_directory = os.path.abspath(str(historical_scope["directory"] or ""))
+            belongs_to_root = (
+                historical_scope["scope_type"] != "root"
+                and _is_path_within(scope_directory, root)
+            )
+            if belongs_to_root:
+                continue
+            conn.execute(
+                """
+                UPDATE viewer_index_scope
+                SET is_active = 0,
+                    dirty = 0,
+                    status = 'stale',
+                    last_error = NULL
+                WHERE scope_key = ?
+                """,
+                (historical_scope["scope_key"],),
+            )
 
         discovered_directories = {
             os.path.normcase(os.path.abspath(entry.path))
@@ -1674,12 +1735,14 @@ def get_media_metadata_for_directory(directory: str) -> List[Dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
-def get_dominant_colors(normalized_paths: List[str]) -> Dict[str, str]:
-    """Return only current, validated dominant colors for requested paths."""
+def get_dominant_color_analysis_results(
+    normalized_paths: List[str],
+) -> Dict[str, Optional[str]]:
+    """Return current analysis results, including files with no usable color."""
     if not normalized_paths:
         return {}
 
-    colors: Dict[str, str] = {}
+    results: Dict[str, Optional[str]] = {}
     with get_db_connection() as conn:
         for offset in range(0, len(normalized_paths), 500):
             chunk = normalized_paths[offset:offset + 500]
@@ -1700,9 +1763,27 @@ def get_dominant_colors(normalized_paths: List[str]) -> Dict[str, str]:
             ).fetchall()
             for row in rows:
                 color = row["dominant_color"]
-                if color and re.fullmatch(r"#[0-9A-Fa-f]{6}", color):
-                    colors[row["normalized_path"]] = color
-    return colors
+                # A null result is terminal for indexed videos that have no
+                # thumbnail to sample. For images, null also marks a color
+                # invalidated by a file change, so it must be analyzed again.
+                is_video_without_color = (
+                    color is None
+                    and os.path.splitext(row["normalized_path"])[1].lower() == ".mp4"
+                )
+                if is_video_without_color or (
+                    color is not None and re.fullmatch(r"#[0-9A-Fa-f]{6}", color)
+                ):
+                    results[row["normalized_path"]] = color
+    return results
+
+
+def get_dominant_colors(normalized_paths: List[str]) -> Dict[str, str]:
+    """Return only current, validated dominant colors for requested paths."""
+    return {
+        path: color
+        for path, color in get_dominant_color_analysis_results(normalized_paths).items()
+        if color is not None
+    }
 
 
 def save_dominant_color(
@@ -2153,20 +2234,7 @@ def is_direct_media_file(file_path: Optional[str], folder_path: str) -> bool:
 
 
 def get_configured_root_directory() -> str:
-    import configparser
-
-    root_dir = config_paths.WORKSPACE_ROOT
-    config_path = config_paths.get_pixiv_config_path()
-    if os.path.exists(config_path):
-        try:
-            config = configparser.ConfigParser(interpolation=None)
-            config.read(config_path, encoding="utf-8")
-            cfg_dir = config.get("Settings", "rootDirectory", fallback=".")
-            if cfg_dir and cfg_dir != ".":
-                root_dir = os.path.abspath(cfg_dir)
-        except Exception:
-            pass
-    return root_dir
+    return config_paths.get_media_root_directory()
 
 
 def _is_path_within(path: str, directory: str) -> bool:
@@ -2347,7 +2415,10 @@ def _get_all_artists_from_viewer_snapshot() -> List[Dict[str, Any]]:
     """
     init_db_schema()
     hidden_artist_ids = get_hidden_artist_ids()
-    root_directory = os.path.abspath(get_configured_root_directory())
+    try:
+        root_directory = os.path.abspath(get_configured_root_directory())
+    except config_paths.MediaSourceConfigurationError:
+        return []
 
     with get_db_connection() as conn:
         scope_rows = conn.execute(
@@ -2600,6 +2671,28 @@ def matches_month_filter(date_val: Optional[str], month_list: List[str]) -> bool
     )
 
 
+def _sort_newest_works_with_pages(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Keep newest works first while preserving each work's natural page order."""
+    work_groups: Dict[str, List[Dict[str, Any]]] = {}
+    for item in items:
+        work_groups.setdefault(_get_image_group_key(item), []).append(item)
+
+    ordered_groups = sorted(
+        work_groups.items(),
+        key=lambda entry: (
+            max((item.get("created_date") or "") for item in entry[1]),
+            natural_sort_key(entry[0]),
+        ),
+        reverse=True,
+    )
+
+    result: List[Dict[str, Any]] = []
+    for _, work_items in ordered_groups:
+        work_items.sort(key=lambda item: natural_sort_key(item.get("save_name") or ""))
+        result.extend(work_items)
+    return result
+
+
 def _sort_gallery_items(items: List[Dict[str, Any]], sort_mode: str) -> List[Dict[str, Any]]:
     """Sort a snapshot result without consulting the source filesystem."""
     if sort_mode == "oldest":
@@ -2636,6 +2729,8 @@ def _sort_gallery_items(items: List[Dict[str, Any]], sort_mode: str) -> List[Dic
                 natural_sort_key(item.get("save_name") or ""),
             ))
             result.extend(group)
+        elif sort_mode == "newest_works_pages_ascending":
+            result.extend(_sort_newest_works_with_pages(group))
         else:
             date_groups = {}
             for item in group:
@@ -2665,14 +2760,20 @@ def _get_images_from_viewer_snapshot(
     month_list = [value.strip() for value in month.split(",") if value.strip()] if month else []
     hidden_artist_ids = get_hidden_artist_ids()
     artist_scope_directory: Optional[str] = None
-    root_directory: Optional[str] = None
+    try:
+        root_directory = os.path.abspath(get_configured_root_directory())
+    except config_paths.MediaSourceConfigurationError:
+        return [], 0, []
     if artist_id is not None and artist_id != -1:
         artist_scope = get_artist_scope(int(artist_id))
         if artist_scope is None:
             return [], 0, []
-        artist_scope_directory = str(artist_scope["directory"])
-    elif artist_id == -1:
-        root_directory = get_configured_root_directory()
+        artist_scope_directory = os.path.abspath(str(artist_scope["directory"]))
+        if (
+            not _stored_media_path_is_within(artist_scope_directory, root_directory, root_directory)
+            or os.path.normcase(os.path.dirname(artist_scope_directory)) != os.path.normcase(root_directory)
+        ):
+            return [], 0, []
     items: List[Dict[str, Any]] = []
 
     with get_db_connection() as conn:
@@ -2783,6 +2884,7 @@ def _get_images_from_viewer_snapshot(
     visible_items = [
         item for item in items
         if should_keep_database_media(item.get("save_name"))
+        and _stored_media_path_is_within(item.get("save_name"), root_directory, root_directory)
         and not (artist_id is None and item.get("member_id") in hidden_artist_ids)
     ]
     if artist_scope_directory:
@@ -2791,12 +2893,16 @@ def _get_images_from_viewer_snapshot(
         # must not allow a row outside the selected artist directory through.
         visible_items = [
             item for item in visible_items
-            if _stored_media_path_is_within(item.get("save_name"), artist_scope_directory)
+            if _stored_media_path_is_within(
+                item.get("save_name"), artist_scope_directory, root_directory
+            )
         ]
     elif artist_id == -1 and root_directory:
         visible_items = [
             item for item in visible_items
-            if _stored_media_path_is_direct_child(item.get("save_name"), root_directory)
+            if _stored_media_path_is_direct_child(
+                item.get("save_name"), root_directory, root_directory
+            )
         ]
     deduplicated: Dict[str, Dict[str, Any]] = {}
     for item in visible_items:
@@ -3103,7 +3209,7 @@ def get_images(
     elif sort_mode == "natural_name":
         all_items.sort(key=lambda x: natural_sort_key(x.get("save_name") or ""))
     elif sort_mode == "newest_month_oldest_works":
-        # Newest month section first, but within month works are ordered oldest to newest
+        # Newest month section first, but within each month images are oldest first.
         month_groups = {}
         for item in all_items:
             ym = (item.get("created_date") or "")[:7] or "未指定"
@@ -3112,8 +3218,22 @@ def get_images(
         final_items = []
         for ym in sorted_months:
             group = month_groups[ym]
-            group.sort(key=lambda x: (x.get("created_date") or "", natural_sort_key(x.get("save_name") or "")))
+            group.sort(key=lambda x: (
+                x.get("created_date") or "",
+                natural_sort_key(x.get("save_name") or ""),
+            ))
             final_items.extend(group)
+        all_items = final_items
+    elif sort_mode == "newest_works_pages_ascending":
+        # Month and work order are newest first; pages inside a work stay 1 -> N.
+        month_groups = {}
+        for item in all_items:
+            ym = (item.get("created_date") or "")[:7] or "未指定"
+            month_groups.setdefault(ym, []).append(item)
+        sorted_months = sorted(month_groups.keys(), reverse=True)
+        final_items = []
+        for ym in sorted_months:
+            final_items.extend(_sort_newest_works_with_pages(month_groups[ym]))
         all_items = final_items
     elif sort_mode == "oldest_month":
         # Month sections ascending (oldest month first), within month posts newest first, pages 1->N

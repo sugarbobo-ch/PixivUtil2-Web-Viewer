@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
   CheckCircle2,
@@ -72,6 +72,9 @@ interface WebViewerConfig {
   manageThumbnailCache: boolean;
   thumbnailCacheLimitMiB: number;
   pixivConfigPath: string;
+  librarySourceMode: WebConfig['librarySourceMode'];
+  mediaRootPath: string;
+  onboardingCompleted: boolean;
 }
 
 interface PixivConfigResponse {
@@ -95,6 +98,8 @@ interface FeedbackMessage {
   text: string;
 }
 
+type SourceClosePrompt = 'unsaved' | 'update' | null;
+
 interface LibraryJobResponse {
   job: LibraryJob | null;
 }
@@ -114,6 +119,13 @@ const defaultWebConfig: WebViewerConfig = {
   ...DEFAULT_WEB_CONFIG,
   pixivConfigPath: '',
 };
+
+const getLibrarySourceSignature = (config: WebViewerConfig) => [
+  config.librarySourceMode,
+  config.librarySourceMode === 'folder'
+    ? config.mediaRootPath.trim()
+    : config.pixivConfigPath.trim(),
+].join('\u0000');
 
 const themeOptions = [
   { value: 'dark', label: '深色', description: '深色背景，適合夜間瀏覽' },
@@ -157,6 +169,20 @@ const getLibraryJobStatusTitle = (job: LibraryJob | null) => {
   return job.phase === 'discovering' ? '正在讀取圖片資料夾' : '正在更新圖片資料庫';
 };
 
+const getCompletedLibraryUpdateDescription = (job: LibraryJob) => {
+  const details: string[] = [];
+  if (job.added > 0) details.push(`新增 ${job.added} 張`);
+  if (job.updated > 0) details.push(`更新 ${job.updated} 張`);
+  if (job.colors_created > 0) details.push(`建立 ${job.colors_created} 筆圖片色彩資料`);
+  if (job.errors > 0) details.push(`${job.errors} 個檔案處理失敗`);
+  if (job.conflicts > 0) details.push(`${job.conflicts} 個檔名衝突已保留`);
+
+  if (details.length > 0) return `${details.join('、')}。`;
+  return job.analyze_colors
+    ? '沒有新增或變更的圖片，圖片色彩資料也已是最新狀態。'
+    : '沒有新增或變更的圖片。';
+};
+
 const getLibraryJobStatusDescription = (job: LibraryJob | null) => {
   if (!job) return '開始更新圖片資料庫後，這裡會保留穩定的狀態訊息。';
   const isCacheJob = job.job_type === 'organize-thumbnail-cache';
@@ -164,7 +190,7 @@ const getLibraryJobStatusDescription = (job: LibraryJob | null) => {
   if (job.status === 'cancelling') return isCacheJob ? '正在停止；已完成的縮圖移動會保留。' : '正在停止；已完成的圖片更新會保留。';
   if (job.status === 'completed') {
     if (isCacheJob) return `已移出 ${job.cache_moved} 個縮圖，原檔仍可從可復原位置還原。`;
-    return `新增 ${job.added} 張、更新 ${job.updated} 張、分析 ${job.colors_created} 張色彩`;
+    return getCompletedLibraryUpdateDescription(job);
   }
   if (job.status === 'cancelled') {
     return isCacheJob
@@ -215,10 +241,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [expandedRecoveryJobId, setExpandedRecoveryJobId] = useState<string | null>(null);
   const [recoveryDetails, setRecoveryDetails] = useState<ThumbnailCacheRecoveryDetails | null>(null);
   const [recoveryDetailsLoading, setRecoveryDetailsLoading] = useState(false);
-  const [hardDeleteTarget, setHardDeleteTarget] = useState<ThumbnailCacheRecoveryJob | null>(null);
-  const [hardDeleteLoading, setHardDeleteLoading] = useState(false);
+  const [recycleCacheTarget, setRecycleCacheTarget] = useState<ThumbnailCacheRecoveryJob | null>(null);
+  const [recycleCacheLoading, setRecycleCacheLoading] = useState(false);
   const [message, setMessage] = useState<FeedbackMessage | null>(null);
   const [showSaveConfirm, setShowSaveConfirm] = useState(false);
+  const [sourceClosePrompt, setSourceClosePrompt] = useState<SourceClosePrompt>(null);
+  const [savedLibrarySourceSignature, setSavedLibrarySourceSignature] = useState(
+    getLibrarySourceSignature(defaultWebConfig),
+  );
+  const [librarySourceNeedsUpdate, setLibrarySourceNeedsUpdate] = useState(false);
   const [hiddenArtists, setHiddenArtists] = useState<HiddenArtist[]>([]);
   const [selectedArtistIds, setSelectedArtistIds] = useState<number[]>([]);
   const libraryPollTimerRef = useRef<number | null>(null);
@@ -228,8 +259,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const saveConfirmDialogRef = useRef<HTMLDivElement>(null);
   const saveConfirmCancelRef = useRef<HTMLButtonElement>(null);
-  const hardDeleteDialogRef = useRef<HTMLDivElement>(null);
-  const hardDeleteCancelRef = useRef<HTMLButtonElement>(null);
+  const recycleCacheDialogRef = useRef<HTMLDivElement>(null);
+  const recycleCacheCancelRef = useRef<HTMLButtonElement>(null);
+  const sourceCloseDialogRef = useRef<HTMLDivElement>(null);
+  const sourceCloseCancelRef = useRef<HTMLButtonElement>(null);
   const [canScrollSectionTabsLeft, setCanScrollSectionTabsLeft] = useState(false);
   const [canScrollSectionTabsRight, setCanScrollSectionTabsRight] = useState(false);
 
@@ -237,7 +270,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     isOpen,
     dialogRef,
     initialFocusRef: closeButtonRef,
-    disabled: !!showSaveConfirm || !!hardDeleteTarget,
+    disabled: !!showSaveConfirm || !!recycleCacheTarget || !!sourceClosePrompt,
   });
 
   useModalFocusTrap({
@@ -247,17 +280,24 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   });
 
   useModalFocusTrap({
-    isOpen: isOpen && !!hardDeleteTarget,
-    dialogRef: hardDeleteDialogRef,
-    initialFocusRef: hardDeleteCancelRef,
+    isOpen: isOpen && !!recycleCacheTarget,
+    dialogRef: recycleCacheDialogRef,
+    initialFocusRef: recycleCacheCancelRef,
+  });
+
+  useModalFocusTrap({
+    isOpen: isOpen && !!sourceClosePrompt,
+    dialogRef: sourceCloseDialogRef,
+    initialFocusRef: sourceCloseCancelRef,
   });
 
   const sectionKeys = Object.keys(pixivSections);
   const sectionTabKey = sectionKeys.join('\u0000');
   const isSearching = sectionFilter.trim().length > 0;
-  const rootDirectory = pixivSections.Settings?.rootdirectory
-    || pixivSections.Settings?.rootDirectory
-    || '.';
+  const rootDirectory = webConfig.librarySourceMode === 'folder'
+    ? webConfig.mediaRootPath || '.'
+    : pixivSections.Settings?.rootdirectory || pixivSections.Settings?.rootDirectory || '.';
+  const librarySourceHasUnsavedChanges = getLibrarySourceSignature(webConfig) !== savedLibrarySourceSignature;
 
   useEffect(() => {
     const tabsContainer = sectionTabsRef.current;
@@ -450,11 +490,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         });
         return;
       }
-      const errorSuffix = job.errors > 0 ? `，${job.errors} 個檔案處理失敗` : '';
-      const conflictSuffix = job.conflicts > 0 ? `，${job.conflicts} 個檔名衝突已保留` : '';
       setMessage({
         type: 'success',
-        text: `圖片資料庫更新完成：新增 ${job.added} 張、更新 ${job.updated} 張、分析 ${job.colors_created} 張色彩${errorSuffix}${conflictSuffix}。`,
+        text: `圖片資料庫更新完成：${getCompletedLibraryUpdateDescription(job)}`,
       });
       onSettingsSaved();
       return;
@@ -513,15 +551,20 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
          thumbnailWidth?: number;
          thumbnailHeight?: number;
       }>(webResponse);
-      const pixivData = await readJsonResponse<PixivConfigResponse>(pixivResponse);
+      const pixivData = pixivResponse.ok
+        ? await readJsonResponse<PixivConfigResponse>(pixivResponse)
+        : null;
       const libraryData = await readJsonResponse<LibraryJobResponse>(libraryJobResponse);
-      const nextSections = pixivData.sections || {};
+      const nextSections = pixivData?.sections || {};
       const nextSectionKeys = Object.keys(nextSections);
 
-       setWebConfig({
+       const nextWebConfig: WebViewerConfig = {
          ...normalizeWebConfig(webData),
          pixivConfigPath: webData.pixivConfigPath || '',
-       });
+       };
+      setWebConfig(nextWebConfig);
+      setSavedLibrarySourceSignature(getLibrarySourceSignature(nextWebConfig));
+      setLibrarySourceNeedsUpdate(false);
       setPixivSections(nextSections);
       setLibraryJob(libraryData.job);
       if (isLibraryJobActive(libraryData.job)) {
@@ -532,12 +575,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         stopLibraryPolling();
         setScanning(false);
       }
-      setHasBackup(!!pixivData.hasBackup);
+      setHasBackup(!!pixivData?.hasBackup);
       setConfigPathInfo({
-        configPath: pixivData.configPath || '',
-        backupPath: pixivData.backupPath || '',
-        defaultConfigPath: pixivData.defaultConfigPath || '',
-        usingDefaultPath: !!pixivData.usingDefaultPath,
+        configPath: pixivData?.configPath || '',
+        backupPath: pixivData?.backupPath || '',
+        defaultConfigPath: pixivData?.defaultConfigPath || '',
+        usingDefaultPath: !!pixivData?.usingDefaultPath,
       });
       void loadThumbnailCacheStats();
 
@@ -559,7 +602,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       stopLibraryPolling();
       setScanning(false);
       setShowSaveConfirm(false);
-      setHardDeleteTarget(null);
+      setSourceClosePrompt(null);
+      setRecycleCacheTarget(null);
       setExpandedRecoveryJobId(null);
       setRecoveryDetails(null);
       return;
@@ -573,25 +617,39 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   useEffect(() => () => stopLibraryPolling(), []);
 
+  const requestClose = useCallback(() => {
+    if (librarySourceHasUnsavedChanges) {
+      setSourceClosePrompt('unsaved');
+      return;
+    }
+    if (librarySourceNeedsUpdate) {
+      setSourceClosePrompt('update');
+      return;
+    }
+    onClose();
+  }, [librarySourceHasUnsavedChanges, librarySourceNeedsUpdate, onClose]);
+
   useEffect(() => {
     if (!isOpen) return undefined;
 
     const handleEscape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
-      if (hardDeleteTarget) {
-        if (!hardDeleteLoading) setHardDeleteTarget(null);
+      if (recycleCacheTarget) {
+        if (!recycleCacheLoading) setRecycleCacheTarget(null);
       } else if (showSaveConfirm) {
         setShowSaveConfirm(false);
+      } else if (sourceClosePrompt) {
+        setSourceClosePrompt(null);
       } else {
-        onClose();
+        requestClose();
       }
     };
 
     document.addEventListener('keydown', handleEscape);
     return () => document.removeEventListener('keydown', handleEscape);
-  }, [hardDeleteLoading, hardDeleteTarget, isOpen, onClose, showSaveConfirm]);
+  }, [isOpen, recycleCacheLoading, recycleCacheTarget, requestClose, showSaveConfirm, sourceClosePrompt]);
 
-  const handleSaveWebConfig = async () => {
+  const saveWebConfig = async (): Promise<boolean> => {
     setLoading(true);
     setMessage(null);
     try {
@@ -600,6 +658,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         ...defaultWebConfig,
         ...normalizedWebConfig,
         pixivConfigPath: webConfig.pixivConfigPath.trim(),
+        mediaRootPath: normalizedWebConfig.librarySourceMode === 'pixiv'
+          ? ''
+          : normalizedWebConfig.mediaRootPath.trim(),
       };
       const response = await fetch('/api/web-config', {
         method: 'POST',
@@ -607,14 +668,24 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         body: JSON.stringify(payload),
       });
       await readJsonResponse(response);
+      const nextSourceSignature = getLibrarySourceSignature(payload);
+      const sourceChanged = nextSourceSignature !== savedLibrarySourceSignature;
       setWebConfig(payload);
+      setSavedLibrarySourceSignature(nextSourceSignature);
+      if (sourceChanged) setLibrarySourceNeedsUpdate(true);
       setMessage({ type: 'success', text: 'Web Viewer 設定已儲存。' });
       onSettingsSaved();
+      return true;
     } catch (error) {
       setMessage({ type: 'error', text: `無法儲存 Web Viewer 設定：${getErrorMessage(error)}` });
+      return false;
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleSaveWebConfig = async () => {
+    await saveWebConfig();
   };
 
   const handleSaveConfigPath = async () => {
@@ -708,8 +779,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
   };
 
-  const handleRescanDirectory = async () => {
-    if (isLibraryJobActive(libraryJob)) return;
+  const startLibraryUpdate = async (): Promise<boolean> => {
+    if (isLibraryJobActive(libraryJob)) return false;
     setScanning(true);
     setMessage(null);
     try {
@@ -718,7 +789,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           type: 'update-library',
-          directory: rootDirectory,
           analyze_colors: webConfig.analyzeColorsAfterLibraryUpdate,
         }),
       });
@@ -729,10 +799,32 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       window.dispatchEvent(new Event('web-viewer-library-job-changed'));
       stopLibraryPolling();
       void pollLibraryJob(data.job.job_id);
+      setLibrarySourceNeedsUpdate(false);
+      return true;
     } catch (error) {
       setMessage({ type: 'error', text: `更新圖片資料庫失敗：${getErrorMessage(error)}` });
       setScanning(false);
+      return false;
     }
+  };
+
+  const handleRescanDirectory = async () => {
+    if (librarySourceHasUnsavedChanges) {
+      setMessage({ type: 'error', text: '媒體來源尚未儲存。請先儲存設定，再更新圖片資料庫。' });
+      return;
+    }
+    await startLibraryUpdate();
+  };
+
+  const handleConfirmSourceClose = async () => {
+    const prompt = sourceClosePrompt;
+    if (prompt === 'unsaved') {
+      if (!(await saveWebConfig())) return;
+      setSourceClosePrompt('update');
+    }
+    if (!(await startLibraryUpdate())) return;
+    setSourceClosePrompt(null);
+    onClose();
   };
 
   const handleUpdateSelectedArtists = async () => {
@@ -833,39 +925,39 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
   };
 
-  const handleHardDeleteThumbnailCache = async () => {
-    if (!hardDeleteTarget || libraryJobIsBusy) return;
-    setHardDeleteLoading(true);
+  const handleRecycleThumbnailCache = async () => {
+    if (!recycleCacheTarget || libraryJobIsBusy) return;
+    setRecycleCacheLoading(true);
     setMessage(null);
     try {
-      const response = await fetch(`/api/library/cache/${encodeURIComponent(hardDeleteTarget.job_id)}`, {
+      const response = await fetch(`/api/library/cache/${encodeURIComponent(recycleCacheTarget.job_id)}`, {
         method: 'DELETE',
       });
       const data = await readJsonResponse<{
-        deleted: number;
+        moved: number;
         bytes_freed: number;
         remaining: number;
         errors: string[];
       }>(response);
-      setHardDeleteTarget(null);
+      setRecycleCacheTarget(null);
       setExpandedRecoveryJobId(null);
       setRecoveryDetails(null);
       await loadThumbnailCacheStats();
       if (data.errors.length > 0) {
         setMessage({
           type: 'error',
-          text: `已將 ${data.deleted} 個縮圖送到資源回收筒、釋放 ${formatBytes(data.bytes_freed)}；仍有 ${data.remaining} 個檔案未完成。`,
+          text: `已將 ${data.moved} 個縮圖送到資源回收筒、釋放 ${formatBytes(data.bytes_freed)}；仍有 ${data.remaining} 個檔案未完成。`,
         });
       } else {
         setMessage({
           type: 'success',
-          text: `已將 ${data.deleted} 個縮圖送到資源回收筒，釋放 ${formatBytes(data.bytes_freed)}。原始圖片不受影響。`,
+          text: `已將 ${data.moved} 個縮圖送到資源回收筒，釋放 ${formatBytes(data.bytes_freed)}。原始圖片不受影響。`,
         });
       }
     } catch (error) {
       setMessage({ type: 'error', text: `無法將縮圖送到資源回收筒：${getErrorMessage(error)}` });
     } finally {
-      setHardDeleteLoading(false);
+      setRecycleCacheLoading(false);
     }
   };
 
@@ -1149,15 +1241,19 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   };
 
   const handleBackdropClick = (event: React.MouseEvent<HTMLDivElement>) => {
-    if (event.target === event.currentTarget) onClose();
+    if (event.target === event.currentTarget) requestClose();
   };
 
   const handleSaveConfirmBackdropClick = (event: React.MouseEvent<HTMLDivElement>) => {
     if (event.target === event.currentTarget) setShowSaveConfirm(false);
   };
 
-  const handleHardDeleteBackdropClick = (event: React.MouseEvent<HTMLDivElement>) => {
-    if (event.target === event.currentTarget && !hardDeleteLoading) setHardDeleteTarget(null);
+  const handleRecycleCacheBackdropClick = (event: React.MouseEvent<HTMLDivElement>) => {
+    if (event.target === event.currentTarget && !recycleCacheLoading) setRecycleCacheTarget(null);
+  };
+
+  const handleSourceCloseBackdropClick = (event: React.MouseEvent<HTMLDivElement>) => {
+    if (event.target === event.currentTarget && !loading) setSourceClosePrompt(null);
   };
 
   if (!isOpen) return null;
@@ -1187,7 +1283,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           <IconButton
             ref={closeButtonRef}
             type="button"
-            onClick={onClose}
+            onClick={requestClose}
             variant="ghost"
             aria-label="關閉設定"
             className="settings-modal__close"
@@ -1439,6 +1535,61 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   <p className="settings-modal__description mt-1 text-xs leading-5">尋找新增或變更的圖片，更新 Web Viewer 使用的圖片清單。不會修改或刪除原始圖片。</p>
                 </div>
 
+                <fieldset className="settings-modal__source-settings space-y-4">
+                  <legend className="settings-modal__label text-sm font-semibold">媒體來源</legend>
+                  <div className="settings-modal__source-mode grid gap-2 sm:grid-cols-2">
+                    <label className="settings-modal__check-row flex min-h-11 cursor-pointer items-center gap-3 rounded-xl px-3 py-2 text-sm">
+                      <input
+                        type="radio"
+                        name="library-source-mode"
+                        value="pixiv"
+                        checked={webConfig.librarySourceMode === 'pixiv'}
+                        onChange={() => setWebConfig(current => ({ ...current, librarySourceMode: 'pixiv' }))}
+                        disabled={libraryJobIsBusy}
+                        className="settings-modal__checkbox h-4 w-4 shrink-0"
+                      />
+                      <span><span className="block font-semibold">PixivUtil2</span><span className="settings-modal__description block text-xs">從 config.ini 讀取圖片根目錄與 Pixiv metadata。</span></span>
+                    </label>
+                    <label className="settings-modal__check-row flex min-h-11 cursor-pointer items-center gap-3 rounded-xl px-3 py-2 text-sm">
+                      <input
+                        type="radio"
+                        name="library-source-mode"
+                        value="folder"
+                        checked={webConfig.librarySourceMode === 'folder'}
+                        onChange={() => setWebConfig(current => ({ ...current, librarySourceMode: 'folder' }))}
+                        disabled={libraryJobIsBusy}
+                        className="settings-modal__checkbox h-4 w-4 shrink-0"
+                      />
+                      <span><span className="block font-semibold">僅使用資料夾</span><span className="settings-modal__description block text-xs">直接建立 Viewer 索引，不需要 PixivUtil2 或 db.sqlite。</span></span>
+                    </label>
+                  </div>
+                  {webConfig.librarySourceMode === 'folder' ? (
+                    <div>
+                      <label htmlFor="library-folder-path" className="settings-modal__label mb-1.5 block text-sm font-semibold">圖片資料夾</label>
+                      <PathPickerField
+                        id="library-folder-path"
+                        value={webConfig.mediaRootPath}
+                        label="圖片資料夾"
+                        placeholder="選擇圖片資料夾"
+                        metadata={{ mode: 'folder', purpose: 'root-directory', access: 'read' }}
+                        onChange={mediaRootPath => setWebConfig(current => ({ ...current, mediaRootPath }))}
+                      />
+                    </div>
+                  ) : (
+                    <div>
+                      <label htmlFor="library-pixiv-config-path" className="settings-modal__label mb-1.5 block text-sm font-semibold">PixivUtil2 config.ini</label>
+                      <PathPickerField
+                        id="library-pixiv-config-path"
+                        value={webConfig.pixivConfigPath}
+                        label="PixivUtil2 config.ini"
+                        placeholder="選擇 config.ini"
+                        metadata={{ mode: 'existing-file', purpose: 'pixiv-config', extensions: ['.ini'], access: 'read' }}
+                        onChange={pixivConfigPath => setWebConfig(current => ({ ...current, pixivConfigPath }))}
+                      />
+                    </div>
+                  )}
+                </fieldset>
+
                 <div className="settings-modal__library-source flex min-w-0 flex-col gap-1 rounded-xl p-4 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
                   <div className="min-w-0">
                     <span className="settings-modal__text-subtle block text-xs font-semibold">圖片資料夾</span>
@@ -1446,14 +1597,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   </div>
                   <span className="settings-modal__library-source-label shrink-0 text-xs">唯讀來源</span>
                 </div>
-                <p className="settings-modal__description text-xs leading-5">路徑來自 PixivUtil2 的 rootDirectory 設定。</p>
+                <p className="settings-modal__description text-xs leading-5">{webConfig.librarySourceMode === 'folder' ? 'Web Viewer 會直接掃描這個資料夾。' : '路徑來自 PixivUtil2 的 rootDirectory 設定。'}</p>
 
                 <div className="flex flex-wrap items-center gap-3">
-                  <Button type="button" onClick={handleRescanDirectory} disabled={libraryJobIsBusy} variant="primary">
+                  <Button type="button" onClick={handleRescanDirectory} disabled={libraryJobIsBusy || librarySourceHasUnsavedChanges} variant="primary">
                     <RefreshCw className={`settings-modal__library-status-icon h-4 w-4 ${libraryJobIsBusy ? 'is-active' : ''}`} aria-hidden="true" />
                     {libraryJobIsBusy ? '更新中…' : '更新圖片資料庫'}
                   </Button>
-                  <span className="settings-modal__description text-xs">工作會在背景執行，完成或取消時會保留已處理的資料。</span>
+                  <span className="settings-modal__description text-xs">
+                    {librarySourceHasUnsavedChanges
+                      ? '請先儲存新的媒體來源，再更新圖片資料庫。'
+                      : '工作會在背景執行，完成或取消時會保留已處理的資料。'}
+                  </span>
                 </div>
 
                 <div className="settings-modal__library-options space-y-3 rounded-xl p-4" aria-label="圖片色彩分析功能">
@@ -1669,7 +1824,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                               <Button type="button" onClick={() => handleRestoreThumbnailCache(job.job_id)} disabled={thumbnailCacheLoading || libraryJobIsBusy} variant="secondary">
                                 {thumbnailCacheLoading ? '處理中…' : '還原'}
                               </Button>
-                              <Button type="button" onClick={() => setHardDeleteTarget(job)} disabled={thumbnailCacheLoading || libraryJobIsBusy} variant="danger">
+                              <Button type="button" onClick={() => setRecycleCacheTarget(job)} disabled={thumbnailCacheLoading || libraryJobIsBusy} variant="danger">
                                 <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
                                 送到資源回收筒
                               </Button>
@@ -1945,7 +2100,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         </div>
 
         <footer className="settings-modal__footer flex shrink-0 flex-wrap items-center justify-end gap-3">
-          <Button type="button" onClick={onClose} variant="plain">
+          <Button type="button" onClick={requestClose} variant="plain">
             關閉
           </Button>
           {(mainTab === 'web' || mainTab === 'library') && (
@@ -1968,6 +2123,50 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         </footer>
       </div>
 
+      {sourceClosePrompt && (
+        <div
+          className="settings-modal__confirm-overlay fixed inset-0 z-[60] flex items-center justify-center p-4"
+          role="presentation"
+          onClick={handleSourceCloseBackdropClick}
+        >
+          <div
+            ref={sourceCloseDialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="source-close-title"
+            aria-describedby="source-close-description"
+            className="settings-modal__confirm-panel w-full max-w-md space-y-4 rounded-2xl p-5"
+          >
+            <h3 id="source-close-title" className="settings-modal__confirm-title text-base font-bold">
+              {sourceClosePrompt === 'unsaved' ? '媒體來源尚未儲存' : '圖片資料庫尚未更新'}
+            </h3>
+            <p id="source-close-description" className="settings-modal__confirm-text text-sm leading-6">
+              {sourceClosePrompt === 'unsaved'
+                ? '你已切換媒體來源或修改圖片資料夾。請儲存設定並更新圖片資料庫，否則圖庫仍會顯示舊來源的索引。'
+                : '新的媒體來源已儲存，但圖片資料庫尚未更新。現在開始更新，才能顯示新來源的圖片。'}
+            </p>
+            <div className="flex flex-wrap justify-end gap-3 pt-2">
+              <Button
+                ref={sourceCloseCancelRef}
+                type="button"
+                onClick={() => setSourceClosePrompt(null)}
+                disabled={loading}
+                variant="plain"
+              >
+                返回設定
+              </Button>
+              <Button type="button" onClick={handleConfirmSourceClose} disabled={loading} variant="primary">
+                {loading
+                  ? '處理中…'
+                  : sourceClosePrompt === 'unsaved'
+                    ? '儲存並開始更新'
+                    : '開始更新圖片資料庫'}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showSaveConfirm && (
         <div
           className="settings-modal__confirm-overlay fixed inset-0 z-[60] flex items-center justify-center p-4"
@@ -1989,30 +2188,30 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         </div>
       )}
 
-      {hardDeleteTarget && (
+      {recycleCacheTarget && (
         <div
           className="settings-modal__confirm-overlay fixed inset-0 z-[60] flex items-center justify-center p-4"
           role="presentation"
-          onClick={handleHardDeleteBackdropClick}
+          onClick={handleRecycleCacheBackdropClick}
         >
-          <div ref={hardDeleteDialogRef} role="dialog" aria-modal="true" aria-labelledby="thumbnail-hard-delete-title" className="settings-modal__confirm-panel w-full max-w-md space-y-4 rounded-2xl p-5">
+          <div ref={recycleCacheDialogRef} role="dialog" aria-modal="true" aria-labelledby="thumbnail-recycle-title" className="settings-modal__confirm-panel w-full max-w-md space-y-4 rounded-2xl p-5">
             <div className="flex items-start gap-3">
               <span className="settings-modal__danger-icon mt-0.5 rounded-lg p-2">
                 <Trash2 className="h-5 w-5" aria-hidden="true" />
               </span>
               <div className="min-w-0">
-                <h3 id="thumbnail-hard-delete-title" className="settings-modal__confirm-title text-base font-bold">將這批縮圖送到資源回收筒？</h3>
-                <p className="settings-modal__confirm-text mt-1 text-sm leading-6">這會將可復原位置中的 {hardDeleteTarget.recoverable_files.toLocaleString()} 個縮圖送到 Windows 資源回收筒，釋放約 {formatBytes(hardDeleteTarget.recoverable_bytes)}。之後可由 Windows 還原。</p>
+                <h3 id="thumbnail-recycle-title" className="settings-modal__confirm-title text-base font-bold">將這批縮圖送到資源回收筒？</h3>
+                <p className="settings-modal__confirm-text mt-1 text-sm leading-6">這會將可復原位置中的 {recycleCacheTarget.recoverable_files.toLocaleString()} 個縮圖送到 Windows 資源回收筒，釋放約 {formatBytes(recycleCacheTarget.recoverable_bytes)}。之後可由 Windows 還原。</p>
               </div>
             </div>
             <p className="settings-modal__danger-note rounded-lg px-3 py-2 text-xs leading-5">只會刪除縮圖快取，不會刪除原始圖片。</p>
             <div className="flex flex-wrap justify-end gap-3 pt-2">
-              <Button ref={hardDeleteCancelRef} type="button" onClick={() => setHardDeleteTarget(null)} disabled={hardDeleteLoading} variant="plain">
+              <Button ref={recycleCacheCancelRef} type="button" onClick={() => setRecycleCacheTarget(null)} disabled={recycleCacheLoading} variant="plain">
                 取消
               </Button>
-              <Button type="button" onClick={handleHardDeleteThumbnailCache} disabled={hardDeleteLoading} variant="danger">
+              <Button type="button" onClick={handleRecycleThumbnailCache} disabled={recycleCacheLoading} variant="danger">
                 <Trash2 className="h-4 w-4" aria-hidden="true" />
-                {hardDeleteLoading ? '移動中…' : '送到資源回收筒'}
+                {recycleCacheLoading ? '移動中…' : '送到資源回收筒'}
               </Button>
             </div>
           </div>

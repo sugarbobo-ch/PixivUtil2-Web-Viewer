@@ -17,6 +17,7 @@ import './styles/typography.css'
 import './styles/buttons.css'
 import './styles/controls.css'
 import './styles/badges.css'
+import './styles/onboarding.css'
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

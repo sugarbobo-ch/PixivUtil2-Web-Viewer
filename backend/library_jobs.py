@@ -40,20 +40,7 @@ _CACHE_ACCESS_THROTTLE_SECONDS = 30.0
 
 def _configured_root_directory() -> str:
     """Resolve rootDirectory without changing PixivUtil2 configuration."""
-    import configparser
-
-    root_directory = config_paths.WORKSPACE_ROOT
-    config_path = config_paths.get_pixiv_config_path()
-    if os.path.isfile(config_path):
-        try:
-            config = configparser.ConfigParser(interpolation=None)
-            config.read(config_path, encoding="utf-8")
-            configured = config.get("Settings", "rootDirectory", fallback=".")
-            if configured and configured != ".":
-                root_directory = os.path.abspath(configured)
-        except (OSError, configparser.Error):
-            pass
-    return os.path.abspath(root_directory)
+    return config_paths.get_media_root_directory()
 
 
 def note_interactive_media_activity() -> None:
@@ -394,18 +381,13 @@ def get_thumbnail_cache_recovery_path(job_id: str, recovery_name: str) -> str:
     return recovery_path
 
 
-def permanently_delete_thumbnail_cache(job_id: str) -> Dict[str, Any]:
-    """Send recovered cache files to the system Recycle Bin.
-
-    The endpoint name is retained for API compatibility, but Web Viewer never
-    permanently deletes recovered files. The Windows shell owns the reversible
-    move and the Viewer only removes its own metadata afterward.
-    """
+def move_thumbnail_cache_recovery_to_recycle_bin(job_id: str) -> Dict[str, Any]:
+    """Move recovered cache files to the system Recycle Bin."""
     job_directory, manifest = _load_recovery_manifest(job_id)
     remaining_entries: list[Dict[str, Any]] = []
     cache_names_to_remove: list[str] = []
     errors: list[str] = []
-    deleted = 0
+    moved = 0
     bytes_freed = 0
 
     for item in manifest.get("entries") or []:
@@ -433,7 +415,7 @@ def permanently_delete_thumbnail_cache(job_id: str) -> Dict[str, Any]:
             errors.append(f"{recovery_name}: {error}")
             continue
 
-        deleted += 1
+        moved += 1
         bytes_freed += max(0, cache_bytes)
         cache_name = _recovery_entry_name(item.get("cache_name"))
         if cache_name and not os.path.isfile(os.path.join(THUMB_CACHE_DIR, cache_name)):
@@ -446,9 +428,9 @@ def permanently_delete_thumbnail_cache(job_id: str) -> Dict[str, Any]:
         errors.append(f"thumbnail metadata: {error}")
 
     manifest["entries"] = remaining_entries
-    manifest["purged_at"] = db._utc_timestamp()
-    manifest["purge_summary"] = {
-        "deleted": deleted,
+    manifest["recycled_at"] = db._utc_timestamp()
+    manifest["recycle_summary"] = {
+        "moved": moved,
         "bytes_freed": bytes_freed,
         "metadata_removed": metadata_removed,
         "errors": len(errors),
@@ -456,7 +438,7 @@ def permanently_delete_thumbnail_cache(job_id: str) -> Dict[str, Any]:
     _write_cache_manifest(job_id, manifest)
 
     return {
-        "deleted": deleted,
+        "moved": moved,
         "bytes_freed": bytes_freed,
         "metadata_removed": metadata_removed,
         "remaining": len(remaining_entries),
@@ -762,14 +744,16 @@ def analyze_missing_dominant_colors(
         row for row in db.get_media_metadata_for_directory(directory)
         if os.path.isfile(row["normalized_path"])
     ]
-    existing_colors = db.get_dominant_colors([row["normalized_path"] for row in rows])
+    analysis_results = db.get_dominant_color_analysis_results(
+        [row["normalized_path"] for row in rows]
+    )
     result: Dict[str, Any] = {
         "phase": "analyzing_colors",
         "discovered": len(rows),
         "total": len(rows),
         "processed": 0,
         "colors_created": 0,
-        "colors_reused": len(existing_colors),
+        "colors_reused": len(analysis_results),
         "errors": 0,
         "error_details": [],
         "cancelled": False,
@@ -790,10 +774,11 @@ def analyze_missing_dominant_colors(
 
         path = row["normalized_path"]
         try:
-            if path not in existing_colors:
+            if path not in analysis_results:
                 dominant_color = _calculate_dominant_color(path)
                 db.save_dominant_color(path, row["fingerprint"], dominant_color)
-                result["colors_created"] += 1
+                if dominant_color is not None:
+                    result["colors_created"] += 1
         except Exception as error:
             result["errors"] += 1
             if len(result["error_details"]) < 20:
@@ -1107,6 +1092,12 @@ class LibraryJobManager:
     def _reconciliation_loop(self) -> None:
         """Shallow-probe scopes and enqueue low-priority background updates."""
         while not self._stop_event.is_set():
+            web_config = config_paths.read_web_config()
+            if not web_config.get("onboardingCompleted"):
+                # A fresh installation has no authorized media root yet. The
+                # blocking onboarding starts its own explicit first scan.
+                self._stop_event.wait(self._auto_reconcile_interval)
+                continue
             try:
                 # Source metadata import is deliberately outside request
                 # handlers. Gallery navigation can keep using the previous
@@ -1209,6 +1200,10 @@ class LibraryJobManager:
             )
 
             if job["job_type"] == "update-library":
+                # Import PixivUtil2 metadata when available. Folder-only mode
+                # points PIXIV_DB_PATH at a non-existent sentinel and safely
+                # skips this read-only synchronization.
+                db.sync_pixiv_snapshot()
                 scopes = job.get("scopes") or [{
                     "scope_key": db.get_index_scope_key(job["directory"]),
                     "scope_type": "directory",
@@ -1461,9 +1456,14 @@ class LibraryJobManager:
             "finished_at": db._utc_timestamp(),
         }
         if scan_result is not None:
+            scan_total = scan_result.get("total", current_job.get("total"))
             updates.update({
                 "discovered": scan_result.get("scanned", current_job.get("discovered", 0)),
-                "total": scan_result.get("total", current_job.get("total")),
+                "total": scan_total,
+                # Later color/cache phases reuse the same progress columns.
+                # Restore terminal progress to the scan phase so completed
+                # update jobs never combine counters from different phases.
+                "processed": scan_result.get("processed", scan_total),
                 "added": scan_result.get("added", current_job.get("added", 0)),
                 "updated": scan_result.get("updated", current_job.get("updated", 0)),
                 "unchanged": scan_result.get("unchanged", current_job.get("unchanged", 0)),

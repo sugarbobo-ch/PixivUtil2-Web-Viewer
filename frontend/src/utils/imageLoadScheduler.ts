@@ -281,18 +281,23 @@ export const useImageLoadPermission = ({
   owner,
   enabled = true,
 }: ImageLoadTask & { enabled?: boolean }) => {
-  const [admitted, setAdmitted] = useState(() => imageLoadScheduler.isLoaded(url));
+  const [admission, setAdmission] = useState(() => ({
+    url,
+    admitted: imageLoadScheduler.isLoaded(url),
+  }));
+  const admitted = admission.url === url && admission.admitted;
 
   useEffect(() => {
     if (!enabled || !url) {
-      setAdmitted(false);
+      setAdmission({ url, admitted: false });
       return undefined;
     }
 
     let active = true;
+    setAdmission({ url, admitted: imageLoadScheduler.isLoaded(url) });
     const handle = imageLoadScheduler.request({ url, priority, kind, owner });
     handle.admitted.then(() => {
-      if (active) setAdmitted(true);
+      if (active) setAdmission({ url, admitted: true });
     });
 
     return () => {

@@ -1,4 +1,5 @@
 import asyncio
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -75,6 +76,60 @@ class PathPickerValidationTests(unittest.TestCase):
                 path_picker.validate_selected_path(temporary, "unknown", "folder")
             with self.assertRaises(path_picker.PathPickerError):
                 path_picker.validate_selected_path(temporary, "root-directory", "save-file")
+
+    def test_switching_to_pixiv_discards_folder_only_source(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            web_config_path = Path(temporary) / "web_config.json"
+            web_config_path.write_text(json.dumps({
+                "librarySourceMode": "folder",
+                "mediaRootPath": str(Path(temporary) / "old-folder"),
+                "onboardingCompleted": True,
+            }), encoding="utf-8")
+
+            with patch.object(main, "WEB_CONFIG_PATH", str(web_config_path)), patch.object(
+                main.db, "PIXIV_DB_PATH", main.db.PIXIV_DB_PATH
+            ):
+                main.update_web_config({
+                    "librarySourceMode": "pixiv",
+                    "mediaRootPath": "Z:/folder-that-does-not-exist",
+                })
+
+            saved = json.loads(web_config_path.read_text(encoding="utf-8"))
+            self.assertEqual(saved["librarySourceMode"], "pixiv")
+            self.assertEqual(saved["mediaRootPath"], "")
+
+    def test_media_source_never_falls_back_to_workspace(self):
+        with self.assertRaises(main.config_paths.MediaSourceConfigurationError):
+            main.config_paths.get_media_root_directory({
+                "librarySourceMode": "unconfigured",
+            })
+        with self.assertRaises(main.config_paths.MediaSourceConfigurationError):
+            main.config_paths.get_media_root_directory({
+                "librarySourceMode": "folder",
+                "mediaRootPath": "",
+            })
+        with self.assertRaises(main.config_paths.MediaSourceConfigurationError):
+            main.config_paths.get_media_root_directory({
+                "librarySourceMode": "pixiv",
+                "pixivConfigPath": "Z:/missing/config.ini",
+            })
+
+    def test_media_resolution_and_rescan_stay_inside_configured_root(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "media"
+            root.mkdir()
+            inside = root / "inside.jpg"
+            inside.write_bytes(b"inside")
+            outside = Path(temporary) / "outside.jpg"
+            outside.write_bytes(b"outside")
+
+            with patch.object(main, "get_root_directory", return_value=str(root)):
+                self.assertEqual(main.resolve_image_path(None, str(inside)), str(inside.resolve()))
+                self.assertIsNone(main.resolve_image_path(None, str(outside)))
+                with self.assertRaises(main.HTTPException) as raised:
+                    main.rescan_directory(main.RescanRequest(directory=str(outside.parent)))
+
+            self.assertEqual(raised.exception.status_code, 422)
 
 
 if __name__ == "__main__":

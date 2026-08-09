@@ -46,6 +46,8 @@ body {
     --brand-press: #33abfb;
     --brand-focus-ring: color-mix(in srgb, var(--brand-default) 32%, transparent);
     --brand-ink: oklch(1 0 0);
+    --text-selection-surface: color-mix(in oklch, var(--brand-default) 24%, var(--neutral-surface));
+    --text-selection-text: var(--neutral-text-1);
 
     --neutral-canvas: oklch(0.970 0 0);
     --neutral-surface: oklch(1 0 0);
@@ -229,6 +231,8 @@ body {
     --neutral-border-strong: oklch(1 0 0 / 0.16);
     --link-default: oklch(0.677 0.079 236.6);
     --link-hover: oklch(0.735 0.07 236.6);
+    --text-selection-surface: color-mix(in oklch, var(--brand-default) 38%, var(--neutral-surface));
+    --text-selection-text: var(--neutral-text-1);
     --header-overlay: oklch(0 0 0 / 0.72);
 
     --header-danger: oklch(0.58 0.2 25);
@@ -283,6 +287,11 @@ body {
 }
 
 @layer base {
+  ::selection {
+    color: var(--text-selection-text);
+    background: var(--text-selection-surface);
+  }
+
   /* Give any physical button a rounded fallback; component rules can still
      choose a pill, compact radius, or flat tab indicator explicitly. */
   button {

@@ -82,6 +82,11 @@ export const normalizeWebConfig = (value: WebConfigInput | null | undefined): We
       128,
       102400,
     ),
+    librarySourceMode: source.librarySourceMode === 'pixiv' || source.librarySourceMode === 'folder'
+      ? source.librarySourceMode
+      : DEFAULT_WEB_CONFIG.librarySourceMode,
+    mediaRootPath: typeof source.mediaRootPath === 'string' ? source.mediaRootPath : '',
+    onboardingCompleted: toBoolean(source.onboardingCompleted, DEFAULT_WEB_CONFIG.onboardingCompleted),
   };
 
   if (source.pixivConfigPath !== undefined) {

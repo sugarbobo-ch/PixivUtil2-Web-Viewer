@@ -162,6 +162,9 @@ DEFAULT_WEB_CONFIG = {
     "itemsPerPage": 200,
     "autoOpenBrowser": True,
     "pixivConfigPath": "",
+    "librarySourceMode": "unconfigured",
+    "mediaRootPath": "",
+    "onboardingCompleted": False,
     "groupMangaPosts": False,
     "blurEnabled": False,
     "demoMode": False,
@@ -190,6 +193,12 @@ def normalize_web_config_file(data: Any) -> Dict[str, Any]:
     current.pop("mosaicEnabled", None)
 
     normalized = {**DEFAULT_WEB_CONFIG, **current}
+    if "onboardingCompleted" not in current:
+        legacy_config_exists = os.path.isfile(config_paths.get_pixiv_config_path(current))
+        legacy_viewer_exists = os.path.isfile(config_paths.VIEWER_DB_PATH)
+        normalized["onboardingCompleted"] = legacy_config_exists or legacy_viewer_exists
+    if "librarySourceMode" not in current and normalized["onboardingCompleted"]:
+        normalized["librarySourceMode"] = "pixiv"
     # The preferred browsing mode is a reader mode only. Older configs used
     # ``grid`` for the library entry screen; migrate that value to fullscreen.
     normalized["defaultViewMode"] = (
@@ -210,6 +219,7 @@ def normalize_web_config_file(data: Any) -> Dict[str, Any]:
         "manageThumbnailCache",
         "fullscreenToolbarSimpleMode",
         "fullscreenShowThumbnails",
+        "onboardingCompleted",
     ):
         value = normalized.get(key)
         if isinstance(value, str):
@@ -242,34 +252,26 @@ def normalize_web_config_file(data: Any) -> Dict[str, Any]:
 
 
 def get_root_directory() -> str:
-    config_path = config_paths.get_pixiv_config_path()
-    if os.path.exists(config_path):
-        try:
-            config = configparser.ConfigParser(interpolation=None)
-            config.read(config_path, encoding="utf-8")
-            root_dir = config.get("Settings", "rootDirectory", fallback=".")
-            if root_dir and root_dir != ".":
-                return os.path.abspath(root_dir)
-        except Exception:
-            pass
-    return WORKSPACE_ROOT
+    return config_paths.get_media_root_directory()
 
 
 def resolve_image_path(image_id: Optional[int], save_name: Optional[str]) -> Optional[str]:
     """Dynamically resolves local media file path without mutating SQLite DB."""
-    if save_name and not db.is_internal_media_path(save_name) and os.path.isfile(save_name):
-        return os.path.abspath(save_name)
+    try:
+        root_dir = os.path.abspath(get_root_directory())
+    except config_paths.MediaSourceConfigurationError:
+        return None
 
-    root_dir = get_root_directory()
-
-    # Attempt 1: Relative save_name combined with rootDirectory or WORKSPACE_ROOT
     if save_name:
-        candidate = os.path.abspath(os.path.join(root_dir, save_name))
-        if not db.is_internal_media_path(candidate) and os.path.isfile(candidate):
+        candidate = os.path.abspath(
+            save_name if os.path.isabs(save_name) else os.path.join(root_dir, save_name)
+        )
+        if (
+            db._is_path_within(candidate, root_dir)
+            and not db.is_internal_media_path(candidate)
+            and os.path.isfile(candidate)
+        ):
             return candidate
-        candidate2 = os.path.abspath(os.path.join(WORKSPACE_ROOT, save_name))
-        if not db.is_internal_media_path(candidate2) and os.path.isfile(candidate2):
-            return candidate2
 
     # Do not fall back to a recursive source-tree search. Gallery snapshots
     # already carry the canonical path; a missing path should be reported as
@@ -310,6 +312,11 @@ class LibraryJobRequest(BaseModel):
     all_artists: bool = False
     analyze_colors: bool = True
     priority: Optional[int] = None
+
+
+class LibrarySourceInspectRequest(BaseModel):
+    mode: Literal["pixiv", "folder"]
+    path: str
 
 
 class PixivConfigItemUpdate(BaseModel):
@@ -423,8 +430,30 @@ def update_web_config(data: Dict[str, Any]):
                     )
                 except path_picker.PathPickerError as error:
                     raise HTTPException(status_code=422, detail=str(error)) from error
+        if "librarySourceMode" in data and data.get("librarySourceMode") not in {
+            "unconfigured", "pixiv", "folder"
+        }:
+            raise HTTPException(status_code=422, detail="不支援的媒體來源模式。")
+        effective_source_mode = incoming.get("librarySourceMode", current.get("librarySourceMode"))
+        if "mediaRootPath" in data:
+            configured_root = data.get("mediaRootPath")
+            if effective_source_mode == "pixiv":
+                incoming["mediaRootPath"] = ""
+            elif configured_root:
+                try:
+                    incoming["mediaRootPath"] = path_picker.validate_selected_path(
+                        str(configured_root), "root-directory", "folder"
+                    )
+                except path_picker.PathPickerError as error:
+                    raise HTTPException(status_code=422, detail=str(error)) from error
 
         current.update(incoming)
+        current = normalize_web_config_file(current)
+        if current.get("librarySourceMode") == "pixiv":
+            # Pixiv mode derives its read-only media root exclusively from
+            # config.ini. Never retain a folder-only source beside it.
+            current["mediaRootPath"] = ""
+        db.PIXIV_DB_PATH = config_paths.get_pixiv_database_path(current)
         if "thumbnailSize" in incoming:
             current.pop("thumbnailWidth", None)
             current.pop("thumbnailHeight", None)
@@ -438,6 +467,42 @@ def update_web_config(data: Dict[str, Any]):
 
 
 # --- PixivUtil2 Complete config.ini All-Section API ---
+
+@app.post("/api/library/source/inspect")
+def inspect_library_source(req: LibrarySourceInspectRequest):
+    try:
+        if req.mode == "folder":
+            root_directory = path_picker.validate_selected_path(req.path, "root-directory", "folder")
+            return {
+                "mode": "folder",
+                "rootDirectory": root_directory,
+                "databaseDetected": False,
+                "databasePath": None,
+            }
+
+        config_path = path_picker.validate_selected_path(req.path, "pixiv-config", "existing-file")
+        parser = configparser.ConfigParser(interpolation=None)
+        try:
+            parser.read(config_path, encoding="utf-8")
+        except (OSError, configparser.Error) as error:
+            raise HTTPException(status_code=422, detail=f"無法讀取 config.ini：{error}") from error
+        root_directory = parser.get("Settings", "rootDirectory", fallback="").strip()
+        if not root_directory:
+            raise HTTPException(status_code=422, detail="config.ini 缺少 Settings.rootDirectory。")
+        root_directory = os.path.abspath(os.path.expandvars(os.path.expanduser(root_directory)))
+        if not os.path.isdir(root_directory):
+            raise HTTPException(status_code=422, detail=f"config.ini 指向的圖片資料夾不存在：{root_directory}")
+        database_path = os.path.join(os.path.dirname(config_path), "db.sqlite")
+        return {
+            "mode": "pixiv",
+            "configPath": config_path,
+            "rootDirectory": root_directory,
+            "databaseDetected": os.path.isfile(database_path),
+            "databasePath": database_path,
+        }
+    except path_picker.PathPickerError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
 
 @app.get("/api/pixiv-config")
 def get_pixiv_config():
@@ -457,7 +522,9 @@ def get_pixiv_config():
             "configPath": config_path,
             "backupPath": backup_path,
             "defaultConfigPath": config_paths.DEFAULT_CONFIG_INI_PATH,
-            "usingDefaultPath": os.path.normcase(config_path) == os.path.normcase(config_paths.DEFAULT_CONFIG_INI_PATH)
+            "usingDefaultPath": os.path.normcase(config_path) == os.path.normcase(config_paths.DEFAULT_CONFIG_INI_PATH),
+            "databasePath": config_paths.get_pixiv_database_path(),
+            "databaseDetected": os.path.isfile(config_paths.get_pixiv_database_path()),
         }
     except Exception as err:
         raise HTTPException(status_code=500, detail=f"Failed to parse config.ini: {err}")
@@ -543,14 +610,21 @@ def restore_settings():
 
 @app.post("/api/rescan", status_code=status.HTTP_202_ACCEPTED)
 def rescan_directory(req: RescanRequest):
-    manager = get_library_job_manager()
-    target_dir = req.directory or get_root_directory()
-    target_dir = os.path.abspath(target_dir)
+    try:
+        target_dir = os.path.abspath(get_root_directory())
+    except config_paths.MediaSourceConfigurationError as error:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)) from error
+    if req.directory and os.path.normcase(os.path.abspath(req.directory)) != os.path.normcase(target_dir):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="只能更新目前設定的媒體來源根目錄。",
+        )
     if not os.path.isdir(target_dir):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"Directory does not exist: {target_dir}",
         )
+    manager = get_library_job_manager()
     try:
         job = manager.start(
             "update-library",
@@ -574,8 +648,16 @@ def rescan_directory(req: RescanRequest):
 
 @app.post("/api/library/jobs", status_code=status.HTTP_202_ACCEPTED)
 def start_library_job(req: LibraryJobRequest):
-    manager = get_library_job_manager()
-    target_dir = os.path.abspath(req.directory or get_root_directory())
+    try:
+        configured_root = os.path.abspath(get_root_directory())
+    except config_paths.MediaSourceConfigurationError as error:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)) from error
+    target_dir = configured_root
+    if req.directory and os.path.normcase(os.path.abspath(req.directory)) != os.path.normcase(configured_root):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="只能更新目前設定的媒體來源根目錄。",
+        )
     if req.type != "organize-thumbnail-cache" and not os.path.isdir(target_dir):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -603,15 +685,29 @@ def start_library_job(req: LibraryJobRequest):
                     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                     detail=f"Artist scope not discovered: {member_id}",
                 )
+            scope_directory = os.path.abspath(scope["directory"])
+            if (
+                not db._is_path_within(scope_directory, configured_root)
+                or os.path.normcase(os.path.dirname(scope_directory)) != os.path.normcase(configured_root)
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=f"Artist scope is outside the configured media source: {member_id}",
+                )
             scopes.append({
                 "scope_key": scope["scope_key"],
                 "scope_type": "artist",
                 "member_id": int(member_id),
-                "directory": scope["directory"],
+                "directory": scope_directory,
             })
 
         for directory in req.directories:
             resolved_directory = os.path.abspath(directory)
+            if not db._is_path_within(resolved_directory, configured_root):
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=f"Directory is outside the configured media source: {resolved_directory}",
+                )
             if not os.path.isdir(resolved_directory):
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -637,6 +733,7 @@ def start_library_job(req: LibraryJobRequest):
         priority = 0 if req.member_id is not None else 20 if req.member_ids else 50
     priority = max(0, min(100, int(priority)))
 
+    manager = get_library_job_manager()
     try:
         job = manager.start(
             req.type,
@@ -711,7 +808,7 @@ def read_library_cache_preview(job_id: str, recovery_name: str):
 
 
 @app.delete("/api/library/cache/{job_id}")
-def permanently_delete_library_cache(job_id: str):
+def move_library_cache_to_recycle_bin(job_id: str):
     active_job = get_library_job_manager().current()
     if active_job and active_job.get("status") in db.LIBRARY_JOB_ACTIVE_STATUSES:
         raise HTTPException(
@@ -719,7 +816,7 @@ def permanently_delete_library_cache(job_id: str):
             detail="請先等待目前的縮圖整理或還原工作完成。",
         )
     try:
-        result = library_jobs.permanently_delete_thumbnail_cache(job_id)
+        result = library_jobs.move_thumbnail_cache_recovery_to_recycle_bin(job_id)
     except FileNotFoundError as error:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
     except ValueError as error:

@@ -1,5 +1,7 @@
 # Web Viewer 媒體資料庫、載入預覽與快取管理實作 TODO
 
+> 狀態：歷史實作規格。主要功能已落地，未勾選項目不代表目前缺少功能；現況以 `docs/ai-agent-project-map.md`、`backend/README.md`、根目錄 README 與程式碼／測試為準。此文件保留原始需求與驗收背景，不再作為即時進度清單。
+
 > 文件用途：交接給負責實作的 AI agent。開始修改前必須先閱讀專案根目錄的 `agents.md`，保留現有資料流與使用者尚未提交的修改。
 
 ## 1. 目標
@@ -153,7 +155,7 @@ last_error
 ## 6. 背景排程與效能要求
 
 - 維護工作 concurrency 固定為 1。
-- 互動圖片請求（`/api/media`、`/api/thumbnail`）永遠優先於背景分析。
+- 互動圖片請求（`/api/file`、`/api/thumbnail`）永遠優先於背景分析。
 - 後端記錄最近一次互動圖片請求時間；有新請求時，背景工作在檔案邊界暫停短暫時間。
 - 背景工作每處理一個小批次後主動 yield/sleep，避免長時間占滿 CPU 與磁碟。
 - dominant color 優先讀取現有 WebP 縮圖；找不到可用縮圖時才讀取原圖。

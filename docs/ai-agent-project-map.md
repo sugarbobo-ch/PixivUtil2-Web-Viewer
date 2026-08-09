@@ -7,7 +7,7 @@
 - 這是 Windows-first 的本機 Web Viewer：React/Vite 前端在 3000，FastAPI 後端在 8000。
 - `frontend/src/App.tsx` 是前端資料與檢視模式的主要 orchestrator；大型 UI 分拆在 `components/`。
 - `backend/main.py` 定義 API；`backend/db.py` 管理 SQLite 查詢與 Viewer 快照；`backend/library_jobs.py` 執行掃描、色彩分析與縮圖整理背景工作。
-- PixivUtil2 的 `../db.sqlite` 是唯讀來源。Viewer 的寫入只能進入 `backend/viewer.sqlite`、`backend/cache_thumbs`、可復原資料夾或明確的使用者設定檔。
+- Pixiv 模式使用所選 `config.ini` 同位置的 `db.sqlite` 作為唯讀來源；資料夾模式不讀取 PixivUtil2 資料庫。Viewer 的寫入只能進入 `backend/viewer.sqlite`、`backend/cache_thumbs`、可復原資料夾或明確的使用者設定檔。
 - `web_config.json` 是已由 Git 忽略的本機使用者設定，介面操作會改寫它；可提交的預設範本是 `web_config.example.json`。
 - Windows 使用者入口是 `install.bat`、`run_viewer.bat`、`update.bat`；實作集中在 `scripts/*.ps1`。安裝器把 Node、pnpm、uv、Python 與 backend venv 放在 `.runtime/`，不要改成依賴系統環境。
 - UI 顏色先找 `frontend/src/index.css` semantic tokens；動作按鈕用 `Button`／`IconButton`，資訊標籤用 `Badge`。
@@ -34,9 +34,10 @@ Browser :3000
 資料邊界：
 
 ```text
-PixivUtil2 ../db.sqlite ──唯讀匯入──> backend/viewer.sqlite
-PixivUtil2 config.ini ──讀取路徑設定──> backend API
-本機原圖目錄 ──讀取／明確操作──> 預覽、索引、回收流程
+Pixiv config.ini ──rootDirectory──┐
+同位置 db.sqlite ──唯讀匯入─────┼──> backend/viewer.sqlite
+直接選取的本機資料夾 ──────────┘
+唯一啟用的媒體根目錄 ──讀取／明確操作──> 預覽、索引、回收流程
 backend/cache_thumbs <──可重建縮圖快取── backend API
 web_config.json <──設定 API 讀寫── Browser
 ```
@@ -46,7 +47,7 @@ web_config.json <──設定 API 讀寫── Browser
 | 路徑 | 責任 | 修改提示 |
 | --- | --- | --- |
 | `frontend/src/App.tsx` | 全域 state、API 載入、filter、分頁、viewer mode、modal 串接 | 先確認是否能留在既有 callback／effect；避免再塞入可獨立測試的 domain logic |
-| `frontend/src/components/` | Gallery、Fullscreen、Webtoon、Settings、Sidebar 等畫面 | 保留資料流；視覺優先改 subsystem CSS |
+| `frontend/src/components/` | Onboarding、Gallery、Fullscreen、Webtoon、Settings、Sidebar 等畫面 | 保留資料流；視覺優先改 subsystem CSS |
 | `frontend/src/components/ui/` | Button、Badge、Input、Select 等 shared primitives | 新 action control 優先重用，不另造幾何與顏色 |
 | `frontend/src/utils/` | 分組、時間 filter、虛擬化、影像排程、設定與系統操作 | 適合放純函式或跨元件共享行為 |
 | `frontend/src/index.css` | light/dark semantic token 主要來源 | 新顏色角色先在此定義，不在 JSX 拼色票 |
@@ -54,7 +55,7 @@ web_config.json <──設定 API 讀寫── Browser
 | `backend/main.py` | FastAPI routes、request validation、媒體與縮圖回應 | route 保持薄；資料查詢放 `db.py`，長工作放 `library_jobs.py` |
 | `backend/db.py` | Viewer schema、Pixiv snapshot、gallery/query 與 metadata | `PIXIV_DB_PATH` 僅能唯讀；寫入使用 Viewer connection |
 | `backend/library_jobs.py` | 單一背景 worker、index、dominant color、cache recovery | 保留 cancel、commit 與 interactive quiet-window 語意 |
-| `backend/config_paths.py` | 本機 `web_config.json`、`config.ini`、Viewer DB 路徑 | 所有路徑應由這裡統一解析；設定預設值需同步範本與前後端 normalize |
+| `backend/config_paths.py` | 本機 `web_config.json`、Pixiv `config.ini`、資料夾模式 root、Viewer DB 路徑 | 媒體來源只能是 Pixiv root 或直接選取資料夾，不得 fallback workspace；設定預設值需同步範本與前後端 normalize |
 | `backend/path_picker.py` | Windows native picker 與 authoritative path validation | 前端輸入不能取代後端驗證 |
 | `backend/recycle_bin.py` | Windows 系統資源回收筒 | 不要改成永久刪除 |
 | `backend/source_resolver.py` | Pixiv/FANBOX URL 推導與快取 | 外部解析失敗時應安全降級 |
@@ -65,8 +66,8 @@ web_config.json <──設定 API 讀寫── Browser
 
 ### 啟動與 Gallery
 
-1. `frontend/src/main.tsx` 載入 CSS 並 render `App`。
-2. `App` 讀取 `/api/web-config`，再載入 `/api/artists`、`/api/months` 與 `/api/images`。
+1. `frontend/src/main.tsx` 載入 CSS 並 render `App`；未完成設定時先顯示 `FirstUseOnboarding`。
+2. 首次導引選擇 Pixiv `config.ini` 或本機資料夾，儲存唯一來源並完成首次索引後，`App` 才載入 `/api/artists`、`/api/months` 與 `/api/images`。
 3. `GalleryGrid`／`GalleryMonthSection` 虛擬化作品卡片；`GalleryThumbnail` 透過 `imageLoadScheduler` 控制併發。
 4. filter、月份跳轉與分頁由 `App` 組成 API query；Gallery 不同步遞迴掃描硬碟。
 
@@ -108,7 +109,7 @@ web_config.json <──設定 API 讀寫── Browser
 | 設定欄位 | 前後端 defaults、normalize、`types.ts`、`SettingsModal.tsx`、`web_config.json` migration 必須一起檢查 |
 | 新 API | `main.py` route → `db.py`／domain module → frontend caller → backend test |
 | 索引或快取 | `library_jobs.py`、`db.py`、`backend/README.md` 與 indexing 設計文件 |
-| 路徑或刪除 | `path_picker.py`、`recycle_bin.py`、`agents.md` 的可復原要求 |
+| 媒體來源、路徑或刪除 | `config_paths.py`、`path_picker.py`、`recycle_bin.py`、`agents.md` 的單一來源與可復原要求 |
 
 ## 修改前檢查
 

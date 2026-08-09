@@ -13,6 +13,7 @@ import { WebtoonFeed } from './components/WebtoonFeed';
 import { BatchEditToolbar } from './components/BatchEditToolbar';
 import { ConfirmModal } from './components/ConfirmModal';
 import { SettingsModal } from './components/SettingsModal';
+import { FirstUseOnboarding } from './components/FirstUseOnboarding';
 import { ArtistSettingsModal } from './components/ArtistSettingsModal';
 import { RecycleBinModal } from './components/RecycleBinModal';
 import { MangaGroupModal } from './components/MangaGroupModal';
@@ -98,11 +99,21 @@ const isLibraryJobTerminal = (job: LibraryJob | null) => (
   !!job && ['completed', 'cancelled', 'failed', 'interrupted'].includes(job.status)
 );
 
+const getLibraryUpdateAnnouncement = (job: LibraryJob) => {
+  const changes: string[] = [];
+  if (job.added > 0) changes.push(`新增 ${job.added} 張`);
+  if (job.updated > 0) changes.push(`更新 ${job.updated} 張`);
+  if (job.colors_created > 0) changes.push(`建立 ${job.colors_created} 筆圖片色彩資料`);
+  return changes.length > 0
+    ? `圖片資料庫更新完成：${changes.join('、')}。`
+    : '圖片資料庫更新完成，沒有新增或變更的圖片。';
+};
+
 const getLibraryJobAnnouncement = (job: LibraryJob) => {
   if (job.status === 'completed') {
     return job.job_type === 'organize-thumbnail-cache'
       ? `縮圖整理完成，移出 ${job.cache_moved} 個縮圖。`
-      : `圖片資料庫更新完成，新增 ${job.added} 張、更新 ${job.updated} 張。`;
+      : getLibraryUpdateAnnouncement(job);
   }
   if (job.status === 'cancelled') return '媒體資料庫工作已取消，已完成的資料仍會保留。';
   if (job.status === 'interrupted') return '媒體資料庫工作已中斷，請從設定重新執行。';
@@ -243,6 +254,7 @@ export const App: React.FC = () => {
   const [blurEnabled, setBlurEnabled] = useState(DEFAULT_WEB_CONFIG.blurEnabled);
   const [demoMode, setDemoMode] = useState(DEFAULT_WEB_CONFIG.demoMode);
   const [isWebConfigReady, setIsWebConfigReady] = useState(false);
+  const [webConfigSnapshot, setWebConfigSnapshot] = useState<WebConfig>(DEFAULT_WEB_CONFIG);
   const [libraryJob, setLibraryJob] = useState<LibraryJob | null>(null);
   const [libraryAnnouncement, setLibraryAnnouncement] = useState('');
 
@@ -1235,6 +1247,7 @@ export const App: React.FC = () => {
 
   const applyWebConfig = useCallback((data: Partial<WebConfig>) => {
     const config = normalizeWebConfig(data);
+    setWebConfigSnapshot(config);
     preferredViewerModeRef.current = config.defaultViewMode;
     setPreferredViewerMode(config.defaultViewMode);
     setTheme(config.webTheme);
@@ -1770,6 +1783,10 @@ export const App: React.FC = () => {
         載入 Web Viewer 設定中…
       </div>
     );
+  }
+
+  if (!webConfigSnapshot.onboardingCompleted) {
+    return <FirstUseOnboarding initialConfig={webConfigSnapshot} onComplete={applyWebConfig} />;
   }
 
   return (

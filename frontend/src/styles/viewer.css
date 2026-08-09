@@ -897,6 +897,13 @@
       grid-template-columns: repeat(3, minmax(0, 1fr));
     }
 
+    /* The mobile top bar already keeps the information action visible. Avoid
+       an empty content group when the simplified toolbar hides its other
+       content controls. */
+    .fullscreen-viewer__topbar-actions.is-mobile-open.is-simple .fullscreen-viewer__toolbar-group--content {
+      display: none;
+    }
+
     .fullscreen-viewer__topbar-actions.is-mobile-open .fullscreen-viewer__toolbar-settings {
       width: 100%;
       grid-template-columns: repeat(2, minmax(0, 1fr));

@@ -20,13 +20,13 @@
 
 ### 2.1 Root 與繪師
 
-`rootDirectory` 是 PixivUtil2 設定中的圖片根目錄。只有符合以下條件的項目才是繪師：
+`rootDirectory` 在本文件泛指目前唯一啟用的媒體根目錄：Pixiv 模式取自所選 `config.ini` 的 `[Settings] rootDirectory`，資料夾模式則直接使用 `mediaRootPath`。兩種模式都不允許退回 workspace。只有符合以下條件的項目才是繪師：
 
 1. 是 root 的直接子項目。
 2. 是實體資料夾，不是檔案，也不是不跟隨 symlink 的資料夾連結。
 3. 名稱不是隱藏項目，也不是 Web Viewer／PixivUtil2 的內部資料夾。
 
-目前內部資料夾名稱沿用 `backend/db.py` 的 `INTERNAL_DIRECTORY_NAMES`，包含 `_state` 與 `.pixivutil2-trash`。這些目錄及其內容永遠不列入繪師或作品。
+目前內部資料夾名稱沿用 `backend/db.py` 的 `INTERNAL_DIRECTORY_NAMES`，包含 `_state`、`__pycache__` 與 `.pixivutil2-trash`；Viewer 自己的 `backend/cache_thumbs` 也會依完整路徑排除。這些目錄及其內容永遠不列入繪師或作品。
 
 ### 2.2 歸屬規則
 
@@ -325,8 +325,9 @@ App
 完成實作後至少執行：
 
 ```powershell
-E:\PixivUtil2-20251112\web-viewer\backend\.venv\Scripts\python.exe -m unittest discover -s backend/tests -p 'test_*.py'
-pnpm.cmd build
+.\.runtime\backend-venv\Scripts\python.exe -m unittest discover -s .\backend\tests -v
+Set-Location .\frontend
+..\.runtime\pnpm\pnpm.cmd build
 git diff --check
 ```
 

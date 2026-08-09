@@ -1493,7 +1493,7 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
           <IconButton
             type="button"
             onClick={() => setShowDetails(value => !value)}
-            aria-label="顯示圖片詳細資訊"
+            aria-label={showDetails ? '隱藏圖片詳細資訊' : '顯示圖片詳細資訊'}
             aria-pressed={showDetails}
             aria-controls="fullscreen-details-panel"
             variant={showDetails ? 'primary' : 'plain'}
@@ -1763,13 +1763,12 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
             </div>
             )}
 
-            {!simpleToolbar && (
             <div className="fullscreen-viewer__toolbar-group fullscreen-viewer__toolbar-group--content" role="group" aria-label="內容顯示設定">
               <span className="fullscreen-viewer__mobile-group-heading" aria-hidden="true">
                 <Layers className="h-4 w-4" />
                 <span>內容顯示設定</span>
               </span>
-              {onToggleGroupMangaPosts && (
+              {!simpleToolbar && onToggleGroupMangaPosts && (
                 <IconButton
                   type="button"
                   onClick={onToggleGroupMangaPosts}
@@ -1782,7 +1781,7 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
                   <Layers className="w-5 h-5" aria-hidden="true" />
                 </IconButton>
               )}
-              {onToggleBlur && (
+              {!simpleToolbar && onToggleBlur && (
                 <IconButton
                   type="button"
                   onClick={onToggleBlur}
@@ -1798,7 +1797,7 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
               <IconButton
                 type="button"
                 onClick={() => setShowDetails(!showDetails)}
-                aria-label="顯示圖片詳細資訊"
+                aria-label={showDetails ? '隱藏圖片詳細資訊' : '顯示圖片詳細資訊'}
                 aria-pressed={showDetails}
                 aria-controls="fullscreen-details-panel"
                 className="fullscreen-viewer__details-toolbar-button"
@@ -1809,7 +1808,6 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
                 <Info className="w-5 h-5" aria-hidden="true" />
               </IconButton>
             </div>
-            )}
           </div>
 
           <div className="fullscreen-viewer__toolbar-group fullscreen-viewer__toolbar-group--settings fullscreen-viewer__toolbar-settings" role="group" aria-label="工具列設定">

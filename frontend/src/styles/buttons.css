@@ -81,6 +81,10 @@
   border-radius: 50%;
 }
 
+.ui-button[data-shape='card'] {
+  border-radius: var(--ui-field-radius);
+}
+
 .ui-button--icon[data-size='sm'] {
   width: 2.25rem;
   min-width: 2.25rem;

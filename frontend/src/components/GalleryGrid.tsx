@@ -1,5 +1,5 @@
 import React from 'react';
-import { Artist, ImageItem, WorkGroup } from '../types';
+import { Artist, ImageItem, SortMode, WorkGroup } from '../types';
 import { getItemGroupKey } from '../utils/grouping';
 import { ArtistStickyNav } from './ArtistStickyNav';
 import { CustomSelect } from './CustomSelect';
@@ -18,8 +18,8 @@ interface GalleryGridProps {
   thumbnailSize: number;
   onPageChange: (page: number) => void;
   onItemsPerPageChange: (num: number) => void;
-  sortMode: 'newest_month' | 'oldest_month' | 'oldest' | 'natural_name';
-  onSortModeChange: (mode: 'newest_month' | 'oldest_month' | 'oldest' | 'natural_name') => void;
+  sortMode: SortMode;
+  onSortModeChange: (mode: SortMode) => void;
   isEditMode: boolean;
   onToggleEditMode?: () => void;
   selectedIds: Set<number>;
@@ -91,10 +91,12 @@ const getMonthKeyForLayout = (dateStr?: string) => {
 };
 
 const sortOptions = [
-  { value: 'newest_month', label: '最新月份', description: '月份新到舊・作品正序 1-1 → 1-10' },
-  { value: 'oldest_month', label: '舊月份在前', description: '月份舊到新・作品正序 1-1 → 1-10' },
-  { value: 'oldest', label: '舊作品在前', description: '時間與作品舊到新' },
-  { value: 'natural_name', label: '檔名自然排序', description: '1-1、1-2 … 1-10' },
+  { value: 'newest_month', label: '圖片新到舊', description: '月份：新 → 舊｜圖片時間：新 → 舊' },
+  { value: 'newest_works_pages_ascending', label: '作品新到舊・頁碼正序', description: '月份：新 → 舊｜作品：新 → 舊｜作品內：p1 → p2 → p3' },
+  { value: 'newest_month_oldest_works', label: '圖片舊到新', description: '月份：新 → 舊｜圖片時間：舊 → 新' },
+  { value: 'oldest_month', label: '月份舊到新・作品新到舊', description: '月份：舊 → 新｜作品：新 → 舊｜作品內：自然正序' },
+  { value: 'oldest', label: '全部舊到新', description: '圖片時間：舊 → 新｜同時間：檔名自然正序' },
+  { value: 'natural_name', label: '檔名自然正序', description: '數字：1-1 → 1-2 → 1-10｜字母：a → b → c' },
 ] as const;
 
 const itemsPerPageOptions = [
@@ -170,7 +172,7 @@ export const GalleryGrid: React.FC<GalleryGridProps> = ({
           return (leftRank ?? Number.MAX_SAFE_INTEGER) - (rightRank ?? Number.MAX_SAFE_INTEGER)
             || left.index - right.index;
         }
-        const monthOrder = sortMode === 'newest_month' ? -1 : 1;
+        const monthOrder = sortMode === 'oldest' || sortMode === 'oldest_month' || sortMode === 'natural_name' ? 1 : -1;
         return monthOrder * left.monthKey.localeCompare(right.monthKey) || left.index - right.index;
       });
 

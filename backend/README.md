@@ -5,7 +5,9 @@ FastAPI backend service for PixivUtil2 Web Viewer.
 ## Media library jobs
 
 The media library update runs in one daemon worker and persists its state in
-the Viewer-owned `viewer_library_job` table in `db.sqlite`. A restart marks
+the Viewer-owned `viewer_library_job` table in `backend/viewer.sqlite`. PixivUtil2's
+`db.sqlite` is an optional read-only import source and is never used for Viewer
+writes. A restart marks
 queued, running, and cancelling jobs as `interrupted`; unfinished work is not
 automatically resumed.
 
@@ -52,3 +54,17 @@ Supported purposes are `root-directory`, `pixiv-config`,
 selected path, file type, extension, permissions, and `config.ini` structure
 before returning it. Picker requests are restricted to the configured local
 origins and one native dialog at a time.
+
+## Media source boundary
+
+The viewer accepts exactly one active source:
+
+- `pixiv`: `pixivConfigPath` identifies a PixivUtil2 `config.ini`; its
+  `[Settings] rootDirectory` is the media root and a neighboring `db.sqlite`
+  may be imported read-only.
+- `folder`: `mediaRootPath` is the media root; PixivUtil2 configuration and
+  database files are not required or consulted.
+
+There is no fallback to the repository or workspace directory. Source changes
+must be saved before a library update, and gallery queries only expose rows
+inside the currently configured root.

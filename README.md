@@ -8,7 +8,9 @@ A Windows-first local web viewer for a PixivUtil2 library or a compatible local 
 
 ## Highlights
 
-- Browse large libraries in a responsive month-based grid with artist, date, search, sorting, and pagination controls.
+- Scrub the time scale or select a year or month to jump directly across the library, with target thumbnails prefetched as you navigate.
+- Keep even large libraries fluid with thumbnail-first rendering, bounded image loading, and virtualized month grids that mount only the rows around the viewport.
+- Refine the current view with artist and date filters, search, sorting, and pagination controls.
 - Switch between the grid, a focused fullscreen viewer, and continuous vertical webtoon reading without losing your place.
 - Group related pages into manga packs, preview every page, then play the pack in fullscreen or webtoon mode.
 - Keep sensitive media covered with the blur toggle while retaining page counts, grouping, and navigation.
@@ -21,14 +23,15 @@ We recommend [PixivUtil2](https://github.com/Nandaka/PixivUtil2) for downloading
 
 PixivUtil2 is optional for local browsing. The viewer can scan supported media directly from a configured folder and build its own Viewer index; you do not need to install PixivUtil2 or provide its `db.sqlite`.
 
-For folder-only use, create or select a minimal `config.ini` that points to the media folder:
+For folder-only use, choose **Browse a local folder** during first-run setup, or select the folder later under **Settings → Media database**. The selected folder is stored in the ignored local `web_config.json`; no `config.ini` is required.
 
-```ini
-[Settings]
-rootDirectory = D:\Pictures
-```
+For PixivUtil2 use, select its `config.ini`. The viewer reads `[Settings] rootDirectory` as the only media root and, when available, imports Pixiv metadata from the `db.sqlite` beside that configuration file. Both PixivUtil2 files remain read-only.
 
-The configuration file only supplies the media root. Pixiv-specific metadata is available when the corresponding PixivUtil2 files are present.
+Exactly one source is active at a time. Switching the source or changing the folder requires saving the setting and updating the image database before the gallery uses the new source.
+
+## Sorting and page order
+
+The sort menu distinguishes image time from work order. **Works newest first · pages ascending** keeps newer works ahead while preserving natural page order inside each work, such as `p1 → p2 → p3`, `1-1 → 1-2 → 1-10`, and `a → b → c`. Pixiv filenames use their artwork ID and `_pN` suffix; compatible non-Pixiv libraries use filename and folder heuristics.
 
 ## Screenshots
 
@@ -83,11 +86,11 @@ No administrator privileges are required. An internet connection is required for
 
 1. Run `install.bat`, then start the viewer with `run_viewer.bat`.
 2. Choose a source:
-   - For a PixivUtil2 library, let the viewer discover PixivUtil2 or select its `config.ini` in **Settings → Pixiv settings**.
-   - For folder-only browsing, select a `config.ini` whose `[Settings] rootDirectory` points to your local media folder. PixivUtil2 itself and its `db.sqlite` are not required.
-3. Open **Settings → Image database** and select **Update image database**. The background job refreshes the viewer snapshot and can analyze image colors.
+   - For a PixivUtil2 library, select its `config.ini`; the viewer uses only that file's `rootDirectory` and optional neighboring `db.sqlite`.
+   - For folder-only browsing, select the media folder directly. PixivUtil2, `config.ini`, and `db.sqlite` are not required.
+3. Open **Settings → Media database** and select **Update image database**. The background job refreshes the viewer snapshot and can analyze image colors.
 4. Browse with artist and month filters, then open a manga pack in fullscreen or webtoon mode. Enable **Blur** before sharing your screen or taking screenshots.
-5. When the thumbnail cache grows, use **Settings → Image database → Organize thumbnails**. Organized files move to a recoverable location and can be restored.
+5. When the thumbnail cache grows, use **Settings → Media database → Organize thumbnails**. Organized files move to a recoverable location and can be restored.
 
 ## Run and stop
 
@@ -97,7 +100,9 @@ Double-click `run_viewer.bat`. It starts both services without opening additiona
 - API: <http://127.0.0.1:8000>
 - API documentation: <http://127.0.0.1:8000/docs>
 
-The one visible terminal owns both processes. Press `Ctrl+C` there to stop the frontend and backend together. Timestamped service logs are stored under `.runtime/logs/`.
+The one visible terminal owns both process trees. Press `Ctrl+C` or close that terminal window to stop the frontend, backend, and reload workers together. A Windows Job Object provides cleanup even when the terminal is closed directly. Timestamped service logs are stored under `.runtime/logs/`.
+
+If you launch the same project again while it is already running, the launcher reports the existing Viewer and exits normally instead of treating its ports as an error. Ports owned by another application still stop startup with the owning PID.
 
 PowerShell users may run the equivalent entry point:
 
@@ -119,18 +124,28 @@ The updater never runs `reset`, `clean`, `stash`, or a forced pull. If Git canno
 
 ## Local configuration
 
-On first setup, `web_config.example.json` is copied to the ignored `web_config.json` only when the local file is missing. Existing settings are never overwritten.
+On first setup, `web_config.example.json` is copied to the ignored `web_config.json` only when the local file is missing. Existing settings are never overwritten. On first launch, the setup guide asks for either a PixivUtil2 `config.ini` or a local media folder, then scans the source and builds the initial Viewer index before opening the gallery.
 
-The viewer normally discovers PixivUtil2 data from the parent directory:
+When PixivUtil2 mode is selected without a custom path, the viewer looks in the parent PixivUtil2 directory for:
 
 - `../db.sqlite` — the PixivUtil2 metadata database;
 - `../config.ini` — including the image root in `[Settings] rootDirectory`.
 
-If your PixivUtil2 files are elsewhere, edit `web_config.json` or select the paths in the viewer settings.
+If your PixivUtil2 files are elsewhere, select `config.ini` under **Settings → Media database**. Folder-only mode instead stores the selected directory in `mediaRootPath`; it never falls back to the project directory or a PixivUtil2 root.
 
 ## Developer workflow
 
 The one-click setup also prepares everything needed for local development. Use the project-local commands so the same pinned toolchain is used on every machine.
+
+One-command development mode on Windows:
+
+```bat
+dev_viewer.bat
+```
+
+This starts FastAPI with automatic reload and Vite with HMR in one terminal. Open <http://localhost:3000>, then press `Ctrl+C` or close that terminal window to stop both process trees. The launcher checks ports `8000` and `3000` before startup.
+
+To run each service in a separate terminal instead, use the commands below.
 
 Backend development server:
 
@@ -159,7 +174,8 @@ GitHub Actions runs the backend tests and frontend build on pushes and pull requ
 
 - [AI agent project map](docs/ai-agent-project-map.md)
 - [Backend and native picker notes](backend/README.md)
-- [Media-library implementation notes](docs/media-library-implementation-todo.md)
+- [Artist indexing, cache, and gallery-grid design](docs/artist-list-indexing-cache-grid-design.md)
+- [Historical media-library implementation plan](docs/media-library-implementation-todo.md)
 - [Pixiv UI adjustment report](docs/pixiv-ui-style-adjustment-report.md)
 - [Project rules for coding agents](agents.md)
 

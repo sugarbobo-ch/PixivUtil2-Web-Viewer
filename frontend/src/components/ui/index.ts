@@ -1,5 +1,5 @@
 export { Button, IconButton } from './Button';
-export type { ButtonProps, ButtonSize, ButtonVariant, IconButtonProps } from './Button';
+export type { ButtonProps, ButtonShape, ButtonSize, ButtonVariant, IconButtonProps } from './Button';
 export { Badge } from './Badge';
 export type { BadgeProps, BadgeSize, BadgeVariant } from './Badge';
 export { Input, Textarea } from './Input';

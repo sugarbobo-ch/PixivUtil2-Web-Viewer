@@ -24,6 +24,10 @@ class MediaLibraryTests(unittest.TestCase):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.root = Path(self.temp_dir.name) / "media"
         self.root.mkdir()
+        self.original_media_root_reader = config_paths.get_media_root_directory
+        config_paths.get_media_root_directory = lambda config=None: (
+            self.original_media_root_reader(config) if config is not None else str(self.root)
+        )
         self.original_thumb_cache_dir = library_jobs.THUMB_CACHE_DIR
         self.original_thumb_recovery_dir = library_jobs.THUMB_CACHE_RECOVERY_DIR
         library_jobs.THUMB_CACHE_DIR = str(Path(self.temp_dir.name) / "cache_thumbs")
@@ -42,6 +46,7 @@ class MediaLibraryTests(unittest.TestCase):
         db.invalidate_scan_cache()
         db.DB_PATH = self.original_db_path
         db.PIXIV_DB_PATH = self.original_pixiv_db_path
+        config_paths.get_media_root_directory = self.original_media_root_reader
         library_jobs.THUMB_CACHE_DIR = self.original_thumb_cache_dir
         library_jobs.THUMB_CACHE_RECOVERY_DIR = self.original_thumb_recovery_dir
         library_jobs._CACHE_ACCESS_LAST_TOUCH.clear()
@@ -126,6 +131,97 @@ class MediaLibraryTests(unittest.TestCase):
         self.assertEqual(first["added"], 1)
         self.assertEqual(second["unchanged"], 1)
         self.assertEqual(third["updated"], 1)
+
+    def test_newest_month_oldest_images_uses_created_date(self):
+        items = [
+            {
+                "image_id": 1,
+                "save_name": "new-month-new-image.jpg",
+                "created_date": "2026-08-20 12:00:00",
+                "last_update_date": "2020-01-01 00:00:00",
+            },
+            {
+                "image_id": 2,
+                "save_name": "old-month.jpg",
+                "created_date": "2026-07-31 12:00:00",
+                "last_update_date": "2030-01-01 00:00:00",
+            },
+            {
+                "image_id": 3,
+                "save_name": "new-month-old-image.jpg",
+                "created_date": "2026-08-01 12:00:00",
+                "last_update_date": "2031-01-01 00:00:00",
+            },
+        ]
+
+        sorted_items = db._sort_gallery_items(items, "newest_month_oldest_works")
+
+        self.assertEqual([item["image_id"] for item in sorted_items], [3, 1, 2])
+
+    def test_newest_works_keep_pages_in_natural_order(self):
+        items = [
+            {
+                "image_id": 12,
+                "save_name": "F:/Pixiv/artist/20000002_p2.png",
+                "created_date": "2026-08-20 12:00:00",
+            },
+            {
+                "image_id": 3,
+                "save_name": "F:/Pixiv/artist/10000001_p3.png",
+                "created_date": "2026-08-19 12:00:00",
+            },
+            {
+                "image_id": 11,
+                "save_name": "F:/Pixiv/artist/20000002_p1.png",
+                "created_date": "2026-08-21 12:00:00",
+            },
+            {
+                "image_id": 1,
+                "save_name": "F:/Pixiv/artist/10000001_p1.png",
+                "created_date": "2026-08-19 12:00:00",
+            },
+            {
+                "image_id": 10,
+                "save_name": "F:/Pixiv/artist/20000002_p10.png",
+                "created_date": "2026-08-18 12:00:00",
+            },
+            {
+                "image_id": 2,
+                "save_name": "F:/Pixiv/artist/10000001_p2.png",
+                "created_date": "2026-08-19 12:00:00",
+            },
+            {
+                "image_id": 99,
+                "save_name": "F:/Pixiv/artist/99999999_p1.png",
+                "created_date": "2026-07-31 12:00:00",
+            },
+        ]
+
+        sorted_items = db._sort_gallery_items(items, "newest_works_pages_ascending")
+
+        self.assertEqual(
+            [item["image_id"] for item in sorted_items],
+            [11, 12, 10, 1, 2, 3, 99],
+        )
+
+    def test_pixiv_media_root_ignores_folder_only_path(self):
+        pixiv_root = Path(self.temp_dir.name) / "pixiv-root"
+        pixiv_root.mkdir()
+        folder_only_root = Path(self.temp_dir.name) / "folder-only-root"
+        folder_only_root.mkdir()
+        config_path = Path(self.temp_dir.name) / "config.ini"
+        config_path.write_text(
+            f"[Settings]\nrootDirectory = {pixiv_root}\n",
+            encoding="utf-8",
+        )
+
+        resolved = config_paths.get_media_root_directory({
+            "librarySourceMode": "pixiv",
+            "pixivConfigPath": str(config_path),
+            "mediaRootPath": str(folder_only_root),
+        })
+
+        self.assertEqual(resolved, str(pixiv_root.resolve()))
 
     def test_indexing_does_not_modify_source_media_bytes(self):
         path = self._write_media("65432109.jpg", b"source-bytes")
@@ -252,6 +348,48 @@ class MediaLibraryTests(unittest.TestCase):
                 config_paths.get_pixiv_config_path = original_config_path_reader
         finally:
             moved_directory.rename(artist_directory)
+
+    def test_root_discovery_deactivates_scopes_from_another_root(self):
+        old_root = Path(self.temp_dir.name) / "old-media"
+        old_artist = old_root / "Old Artist"
+        old_artist.mkdir(parents=True)
+        old_scopes = db.discover_root_scopes(str(old_root))
+
+        db.discover_root_scopes(str(self.root))
+
+        with db.get_db_connection() as conn:
+            old_scope = conn.execute(
+                "SELECT is_active, status FROM viewer_index_scope WHERE scope_key = ?",
+                (old_scopes[0]["scope_key"],),
+            ).fetchone()
+            old_root_scope = conn.execute(
+                "SELECT is_active, status FROM viewer_index_scope WHERE scope_key = ?",
+                (db.get_root_scope_key(str(old_root)),),
+            ).fetchone()
+        self.assertEqual((old_scope["is_active"], old_scope["status"]), (0, "stale"))
+        self.assertEqual((old_root_scope["is_active"], old_root_scope["status"]), (0, "stale"))
+
+    def test_gallery_only_returns_media_inside_configured_root(self):
+        inside = self._write_media("Inside Artist/12345678.jpg", b"inside")
+        db.scan_and_index_directory(str(self.root))
+        outside = Path(self.temp_dir.name) / "cache_thumbs" / "outside.webp"
+        outside.parent.mkdir()
+        outside.write_bytes(b"outside")
+        with db.get_db_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO pixiv_master_image
+                    (image_id, member_id, title, save_name, created_date, last_update_date)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (876543210, None, "Viewer cache", str(outside), "2026-08-01", "2026-08-01"),
+            )
+            conn.commit()
+
+        images, total, _months = db.get_images(limit=100)
+
+        self.assertEqual(total, 1)
+        self.assertEqual(images[0]["save_name"], str(inside))
 
     def test_folder_member_id_is_not_process_local(self):
         folder = self.root / "Archive without Pixiv id"
@@ -450,6 +588,7 @@ class MediaLibraryTests(unittest.TestCase):
         self.assertIsNotNone(final)
         self.assertEqual(final["status"], "completed")
         self.assertEqual(final["added"], 1)
+        self.assertEqual(final["processed"], final["total"])
         self.assertIsNotNone(final["finished_at"])
 
     def test_library_job_progress_does_not_lock_indexing_transaction(self):
@@ -510,6 +649,27 @@ class MediaLibraryTests(unittest.TestCase):
         third_final = self._wait_for_terminal(third["job_id"])
         self.assertEqual(third_final["colors_created"], 1)
 
+    def test_video_without_thumbnail_is_not_reanalyzed_as_a_created_color(self):
+        video_path = self._write_media("27182818.mp4", b"video")
+        db.scan_and_index_directory(str(self.root))
+        self.manager = LibraryJobManager()
+
+        first = self.manager.start("analyze-missing-colors", str(self.root))
+        first_final = self._wait_for_terminal(first["job_id"])
+        second = self.manager.start("analyze-missing-colors", str(self.root))
+        second_final = self._wait_for_terminal(second["job_id"])
+
+        normalized_path = db._normalise_media_path(str(video_path))
+        self.assertEqual(first_final["colors_created"], 0)
+        self.assertEqual(second_final["colors_created"], 0)
+        self.assertIn(
+            normalized_path,
+            db.get_dominant_color_analysis_results([normalized_path]),
+        )
+        self.assertIsNone(
+            db.get_dominant_color_analysis_results([normalized_path])[normalized_path]
+        )
+
     def test_thumbnail_cache_organization_is_recoverable(self):
         source = self._write_media("11223344.jpg", b"source")
         source_stat = source.stat()
@@ -544,7 +704,7 @@ class MediaLibraryTests(unittest.TestCase):
         self.assertTrue(cache_path.exists())
         self.assertEqual(library_jobs.get_thumbnail_cache_stats()["active_files"], 1)
 
-    def test_thumbnail_cache_recovery_details_and_hard_delete(self):
+    def test_thumbnail_cache_recovery_details_and_recycle_bin_move(self):
         source = self._write_media("55667788.jpg", b"source")
         source_stat = source.stat()
         cache_name = library_jobs.thumbnail_cache_name(str(source), 320, 320, source_stat)
@@ -580,11 +740,11 @@ class MediaLibraryTests(unittest.TestCase):
             Path(path).with_suffix(".recycled")
         )
         try:
-            deleted = library_jobs.permanently_delete_thumbnail_cache(created["job_id"])
+            recycled = library_jobs.move_thumbnail_cache_recovery_to_recycle_bin(created["job_id"])
         finally:
             library_jobs.recycle_bin.send_path_to_system_recycle_bin = original_send_to_recycle_bin
-        self.assertEqual(deleted["deleted"], 1)
-        self.assertEqual(deleted["errors"], [])
+        self.assertEqual(recycled["moved"], 1)
+        self.assertEqual(recycled["errors"], [])
         self.assertFalse(recovery_path.exists())
         self.assertEqual(library_jobs.get_thumbnail_cache_stats()["recoverable_files"], 0)
         self.assertEqual(db.get_thumbnail_cache_entries([cache_name]), [])
