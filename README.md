@@ -2,7 +2,49 @@
 
 **English** | [繁體中文](README.zh-TW.md)
 
+[![CI and release](https://github.com/sugarbobo-ch/PixivUtil2-Web-Viewer/actions/workflows/ci-cd.yml/badge.svg)](https://github.com/sugarbobo-ch/PixivUtil2-Web-Viewer/actions/workflows/ci-cd.yml)
+
 A Windows-first local web viewer for a PixivUtil2 library. The React/Vite frontend provides gallery, fullscreen, and webtoon reading modes, while the FastAPI backend reads PixivUtil2 metadata and manages viewer-side indexes and thumbnail caches.
+
+## Highlights
+
+- Browse large libraries in a responsive month-based grid with artist, date, search, sorting, and pagination controls.
+- Switch between the grid, a focused fullscreen viewer, and continuous vertical webtoon reading without losing your place.
+- Group related pages into manga packs, preview every page, then play the pack in fullscreen or webtoon mode.
+- Keep sensitive media covered with the blur toggle while retaining page counts, grouping, and navigation.
+- Refresh the viewer index and optional dominant-color metadata in the background without writing to the PixivUtil2 source database.
+- Organize thumbnail caches through a recoverable workflow instead of permanently deleting generated files.
+
+## Screenshots
+
+The examples below use the built-in blur mode. Media stays local; only these blurred screenshots are committed.
+
+<table>
+  <tr>
+    <th>Desktop grid</th>
+    <th>Mobile grid</th>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/desktop-grid.png" alt="Desktop gallery grid with filters and blurred manga packs" width="620"></td>
+    <td><img src="docs/screenshots/mobile-grid.png" alt="Responsive mobile gallery grid with blurred manga packs" width="220"></td>
+  </tr>
+  <tr>
+    <th>Desktop fullscreen</th>
+    <th>Mobile fullscreen</th>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/desktop-fullscreen.png" alt="Desktop fullscreen reader with thumbnails and blur enabled" width="620"></td>
+    <td><img src="docs/screenshots/mobile-fullscreen.png" alt="Mobile fullscreen reader with compact controls and blur enabled" width="220"></td>
+  </tr>
+  <tr>
+    <th>Desktop manga pack</th>
+    <th>Mobile webtoon</th>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/desktop-manga-pack.png" alt="Desktop manga pack preview with numbered blurred pages" width="620"></td>
+    <td><img src="docs/screenshots/mobile-webtoon.png" alt="Mobile continuous webtoon reader with blur enabled" width="220"></td>
+  </tr>
+</table>
 
 ## One-click setup on Windows
 
@@ -21,6 +63,14 @@ The installer downloads a project-local toolchain into `.runtime/`:
 - frontend dependencies in `frontend/node_modules/`.
 
 No administrator privileges are required. An internet connection is required for the first installation.
+
+## Typical workflow
+
+1. Run `install.bat`, then start the viewer with `run_viewer.bat`.
+2. If auto-discovery does not find PixivUtil2, open **Settings → Pixiv settings** and select `config.ini`.
+3. Open **Settings → Image database** and select **Update image database**. The background job refreshes the viewer snapshot and can analyze image colors.
+4. Browse with artist and month filters, then open a manga pack in fullscreen or webtoon mode. Enable **Blur** before sharing your screen or taking screenshots.
+5. When the thumbnail cache grows, use **Settings → Image database → Organize thumbnails**. Organized files move to a recoverable location and can be restored.
 
 ## Run and stop
 
@@ -85,6 +135,8 @@ Checks:
 Set-Location .\frontend
 ..\.runtime\pnpm\pnpm.cmd build
 ```
+
+GitHub Actions runs the backend tests and frontend build on pushes and pull requests. A `v*` tag publishes a GitHub Release containing a source ZIP that retains the one-click Windows setup files.
 
 ## Project map
 

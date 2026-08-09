@@ -2,6 +2,50 @@
 
 [English](README.md) | **繁體中文**
 
+[![CI 與版本發布](https://github.com/sugarbobo-ch/PixivUtil2-Web-Viewer/actions/workflows/ci-cd.yml/badge.svg)](https://github.com/sugarbobo-ch/PixivUtil2-Web-Viewer/actions/workflows/ci-cd.yml)
+
+這是 PixivUtil2 的 Windows 本機圖片瀏覽器。圖片由本機後端讀取，不需要上傳到外部服務；React/Vite 前端提供 Grid、全螢幕與條漫閱讀，FastAPI 後端負責 Viewer 索引與縮圖快取。
+
+## 功能特色
+
+- 以月份 Grid 瀏覽大型圖庫，並使用繪師、日期、搜尋、排序與分頁快速縮小範圍。
+- 在 Grid、專注的全螢幕閱讀器與連續直向條漫間切換，返回時保留原本瀏覽位置。
+- 將相關頁面合併成圖包，先預覽所有頁面，再用全螢幕或條漫模式播放。
+- 開啟模糊遮罩後仍保留頁數、圖包與導覽資訊，適合分享畫面或擷取操作截圖。
+- 在背景更新 Viewer 索引與選用的主色分析，不寫入 PixivUtil2 原始資料庫。
+- 透過可復原流程整理縮圖快取，不直接永久刪除產生的檔案。
+
+## 操作畫面
+
+以下畫面均開啟內建模糊遮罩；媒體仍留在本機，Git 只收錄這些模糊後的操作截圖。
+
+<table>
+  <tr>
+    <th>電腦版 Grid</th>
+    <th>手機版 Grid</th>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/desktop-grid.png" alt="電腦版圖片 Grid、篩選器與模糊圖包" width="620"></td>
+    <td><img src="docs/screenshots/mobile-grid.png" alt="手機版響應式圖片 Grid 與模糊圖包" width="220"></td>
+  </tr>
+  <tr>
+    <th>電腦版全螢幕</th>
+    <th>手機版全螢幕</th>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/desktop-fullscreen.png" alt="電腦版全螢幕閱讀器、縮圖導覽與模糊遮罩" width="620"></td>
+    <td><img src="docs/screenshots/mobile-fullscreen.png" alt="手機版全螢幕閱讀器與精簡控制項" width="220"></td>
+  </tr>
+  <tr>
+    <th>電腦版圖包</th>
+    <th>手機版條漫</th>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/desktop-manga-pack.png" alt="電腦版圖包預覽與編號頁面" width="620"></td>
+    <td><img src="docs/screenshots/mobile-webtoon.png" alt="手機版連續條漫閱讀器與模糊遮罩" width="220"></td>
+  </tr>
+</table>
+
 ## Windows 一鍵安裝與啟動
 
 一般使用者不需要預先安裝 Node.js 或 Python，也不需要修改系統 `PATH`：
@@ -18,7 +62,13 @@
 - API：<http://127.0.0.1:8000>
 - API 文件：<http://127.0.0.1:8000/docs>
 
-這是 PixivUtil2 的 Windows 本機圖片瀏覽器。前端使用 React、TypeScript 與 Vite，後端使用 FastAPI、SQLite 與 Pillow/OpenCV；所有圖片都由本機後端讀取，不需要把媒體上傳到外部服務。
+## 建議使用流程
+
+1. 執行 `install.bat`，完成後使用 `run_viewer.bat` 啟動。
+2. 若沒有自動找到 PixivUtil2，開啟「設定 → Pixiv 設定」並選擇 `config.ini`。
+3. 到「設定 → 圖片資料庫」選擇「更新圖片資料庫」。背景工作會更新 Viewer 快照，並可依設定分析圖片主色。
+4. 使用繪師與月份篩選作品，再以全螢幕或條漫播放圖包；分享畫面或擷取操作截圖前可開啟「模糊遮罩」。
+5. 縮圖快取變大時，到「設定 → 圖片資料庫」執行「整理縮圖」。檔案會移到可復原位置，之後仍能還原。
 
 ## 確認 PixivUtil2 資料來源
 
@@ -92,6 +142,8 @@ Vite 會把 `/api` 代理到 `http://127.0.0.1:8000`。
 Set-Location .\frontend
 ..\.runtime\pnpm\pnpm.cmd build
 ```
+
+GitHub Actions 會在 push 與 pull request 執行後端測試及前端 build。建立 `v*` tag 後，CD job 會發布 GitHub Release，並附上保留 Windows 一鍵安裝檔案的 source ZIP。
 
 文件與 patch 格式：
 
