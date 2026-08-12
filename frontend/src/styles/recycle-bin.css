@@ -81,7 +81,8 @@
   width: 100%;
 }
 
-.recycle-bin-modal__select .custom-select__menu {
+.recycle-bin-modal__select .custom-select__menu,
+.custom-select__menu.recycle-bin-modal__select {
   min-width: 100%;
 }
 
@@ -98,7 +99,7 @@
   padding-inline: var(--ui-overlay-gutter);
   border-bottom: 1px solid color-mix(in srgb, var(--settings-danger) 28%, var(--settings-border));
   background: var(--settings-danger-soft);
-  color: var(--settings-danger);
+  color: var(--settings-danger-text);
   font-size: var(--ui-font-min);
   line-height: 1.5rem;
 }

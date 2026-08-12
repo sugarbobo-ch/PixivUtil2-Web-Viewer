@@ -46,8 +46,8 @@ body {
     --brand-press: #33abfb;
     --brand-focus-ring: color-mix(in srgb, var(--brand-default) 32%, transparent);
     --brand-ink: oklch(1 0 0);
-    --text-selection-surface: color-mix(in oklch, var(--brand-default) 24%, var(--neutral-surface));
-    --text-selection-text: var(--neutral-text-1);
+    --text-selection-surface: var(--brand-default);
+    --text-selection-text: var(--brand-ink);
 
     --neutral-canvas: oklch(0.970 0 0);
     --neutral-surface: oklch(1 0 0);
@@ -164,6 +164,9 @@ body {
     --status-danger-hover: oklch(0.47 0.18 25);
     --status-danger-press: oklch(0.42 0.18 25);
     --status-danger-soft: oklch(0.95 0.04 25);
+    /* Text role for soft danger surfaces; it is intentionally separate from
+       the filled danger-control background role. */
+    --status-danger-text: oklch(0.37 0.14 25);
     --status-danger-ink: oklch(1 0 0);
     --settings-success: var(--status-success);
     --settings-success-hover: var(--status-success-hover);
@@ -175,6 +178,7 @@ body {
     --settings-danger-press: var(--status-danger-press);
     --settings-danger-ink: var(--status-danger-ink);
     --settings-danger-soft: var(--status-danger-soft);
+    --settings-danger-text: var(--status-danger-text);
 
     --sidebar-surface: var(--neutral-surface);
     --sidebar-surface-raised: var(--neutral-control);
@@ -231,8 +235,8 @@ body {
     --neutral-border-strong: oklch(1 0 0 / 0.16);
     --link-default: oklch(0.677 0.079 236.6);
     --link-hover: oklch(0.735 0.07 236.6);
-    --text-selection-surface: color-mix(in oklch, var(--brand-default) 38%, var(--neutral-surface));
-    --text-selection-text: var(--neutral-text-1);
+    --text-selection-surface: var(--brand-default);
+    --text-selection-text: var(--brand-ink);
     --header-overlay: oklch(0 0 0 / 0.72);
 
     --header-danger: oklch(0.58 0.2 25);
@@ -250,6 +254,9 @@ body {
     --status-danger-hover: oklch(0.47 0.18 25);
     --status-danger-press: oklch(0.42 0.18 25);
     --status-danger-soft: oklch(0.34 0.05 25);
+    /* Lift the text lightness in dark mode so soft danger surfaces remain
+       readable without changing the filled danger-control color. */
+    --status-danger-text: oklch(0.86 0.06 25);
     --status-danger-ink: var(--brand-ink);
     --settings-success: var(--status-success);
     --settings-success-hover: var(--status-success-hover);
@@ -261,6 +268,7 @@ body {
     --settings-danger-press: var(--status-danger-press);
     --settings-danger-ink: var(--status-danger-ink);
     --settings-danger-soft: var(--status-danger-soft);
+    --settings-danger-text: var(--status-danger-text);
     --sidebar-scrollbar-thumb: color-mix(in oklch, var(--neutral-text-2) 68%, transparent);
     --sidebar-scrollbar-thumb-hover: color-mix(in oklch, var(--neutral-text-1) 88%, transparent);
   }
@@ -275,7 +283,8 @@ body {
   /* Fullscreen is a reading surface, so its appearance follows the selected
      theme without changing the dark HUD used by gallery image overlays. */
   .light .fullscreen-viewer {
-    --viewer-stage: var(--neutral-canvas);
+    --viewer-stage: var(--neutral-surface);
+    --viewer-checker: oklch(0 0 0 / 0.18);
     --viewer-hud-surface: color-mix(in oklch, var(--neutral-surface) 92%, transparent);
     --viewer-hud-surface-strong: color-mix(in oklch, var(--neutral-surface) 98%, transparent);
     --viewer-hud-border: var(--neutral-border-strong);

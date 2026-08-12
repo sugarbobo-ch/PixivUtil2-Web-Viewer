@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { Artist, LibraryJob, MonthItem, ImageItem, SortMode, ViewMode, ViewerMode, ThemeMode, WorkGroup, WebConfig, DEFAULT_WEB_CONFIG } from './types';
+import { Artist, LibraryJob, MonthItem, ImageItem, SortMode, ViewMode, ViewerMode, ThemeMode, WorkGroup, WebConfig, VideoPreferencePatch, DEFAULT_WEB_CONFIG } from './types';
 import { ArrowUp } from 'lucide-react';
 import { groupImagesIntoWorkGroups } from './utils/grouping';
 import { buildThumbnailUrl, normalizeWebConfig } from './utils/webConfig';
@@ -8,6 +8,7 @@ import { WebtoonMobileHeader } from './components/WebtoonMobileHeader';
 import { MobileMenuDrawer } from './components/MobileMenuDrawer';
 import { Sidebar } from './components/Sidebar';
 import { GalleryGrid } from './components/GalleryGrid';
+import type { GalleryPageChangeOptions } from './components/GalleryGrid';
 import { FullscreenViewer } from './components/FullscreenViewer';
 import { WebtoonFeed } from './components/WebtoonFeed';
 import { BatchEditToolbar } from './components/BatchEditToolbar';
@@ -17,7 +18,7 @@ import { FirstUseOnboarding } from './components/FirstUseOnboarding';
 import { ArtistSettingsModal } from './components/ArtistSettingsModal';
 import { RecycleBinModal } from './components/RecycleBinModal';
 import { MangaGroupModal } from './components/MangaGroupModal';
-import { IconButton } from './components/ui/Button';
+import { IconButton, Toast, ToastVariant } from './components/ui';
 import { MonthJumpItem, MonthJumpNavigationOptions, MonthNavigationPhase } from './components/MonthQuickNav';
 import {
   getFirstVisibleGridCardIndex,
@@ -25,55 +26,22 @@ import {
   MIN_VISIBLE_AREA_RATIO,
   getScrollTopForElement,
   scrollElementToContainerStart,
-  getTargetPageAndLocalIndex,
 } from './utils/galleryLayout';
 import { imageLoadScheduler, ImagePreloadHandle } from './utils/imageLoadScheduler';
-import { normalizeSelectedMonths } from './utils/timeFilters';
-
-const getMonthKeyFromDate = (dateStr?: string) => {
-  const value = dateStr?.trim() ?? '';
-  const match = value.match(/^(\d{4})[\-/](\d{1,2})/);
-  if (match) return `${match[1]}-${match[2].padStart(2, '0')}`;
-
-  const compactMatch = value.match(/^(\d{4})(\d{2})/);
-  return compactMatch ? `${compactMatch[1]}-${compactMatch[2]}` : null;
-};
-
-const getMonthJumpItemsFromImages = (items: ImageItem[]): MonthJumpItem[] => {
-  const counts = new Map<string, number>();
-  items.forEach(item => {
-    const monthKey = getMonthKeyFromDate(item.created_date);
-    if (monthKey) counts.set(monthKey, (counts.get(monthKey) ?? 0) + 1);
-  });
-
-  return Array.from(counts, ([key, count]) => {
-    const [year, month] = key.split('-');
-    return {
-      key,
-      label: year && month ? `${year} 年 ${month} 月` : key,
-      count,
-    };
-  });
-};
-
-const getMonthJumpItemsFromApi = (value: unknown): MonthJumpItem[] => {
-  if (!Array.isArray(value)) return [];
-
-  return value.flatMap(item => {
-    if (!item || typeof item.month !== 'string') return [];
-    const count = Number(item.count);
-    if (!Number.isFinite(count) || count <= 0) return [];
-
-    const [year, month] = item.month.split('-');
-    const offset = Number(item.offset);
-    return [{
-      key: item.month,
-      label: year && month ? `${year} 年 ${month.padStart(2, '0')} 月` : item.month,
-      count,
-      ...(Number.isFinite(offset) && offset >= 0 ? { offset } : {}),
-    }];
-  });
-};
+import { parseFilterUrl, syncFilterUrl } from './utils/filterWorkflow';
+import { resolveMonthTarget as resolveMonthTargetForItem, sortMonthIndexItems } from './utils/monthNavigation';
+import { getMotionAwareScrollBehavior } from './utils/motion';
+import { useImagePageLoader } from './hooks/useImagePageLoader';
+import { isLibraryJobActive, useLibraryJobStore } from './hooks/useLibraryJobStore';
+import { useWebConfigLifecycle } from './hooks/useWebConfigLifecycle';
+import { useSelectionWorkflow } from './hooks/useSelectionWorkflow';
+import { apiClient } from './api/client';
+import { isScrollPerformanceProbeRequested, startScrollPerformanceProbe } from './utils/scrollPerformance';
+import { getArtistScopeKey } from './utils/artistIdentity';
+import {
+  clampSidebarWidth,
+  getSidebarMaxWidth,
+} from './utils/sidebarLayout';
 
 const getDynamicThumbnailPrefetchCount = (thumbnailSize: number) => {
   if (typeof window === 'undefined') return 1;
@@ -91,22 +59,15 @@ const getDynamicThumbnailPrefetchCount = (thumbnailSize: number) => {
   return rows * columns;
 };
 
-const isLibraryJobActive = (job: LibraryJob | null) => (
-  !!job && ['queued', 'running', 'cancelling'].includes(job.status)
-);
-
-const isLibraryJobTerminal = (job: LibraryJob | null) => (
-  !!job && ['completed', 'cancelled', 'failed', 'interrupted'].includes(job.status)
-);
-
 const getLibraryUpdateAnnouncement = (job: LibraryJob) => {
   const changes: string[] = [];
   if (job.added > 0) changes.push(`新增 ${job.added} 張`);
   if (job.updated > 0) changes.push(`更新 ${job.updated} 張`);
+  if ((job.removed ?? 0) > 0) changes.push(`清除 ${job.removed} 張遺失檔案`);
   if (job.colors_created > 0) changes.push(`建立 ${job.colors_created} 筆圖片色彩資料`);
   return changes.length > 0
     ? `圖片資料庫更新完成：${changes.join('、')}。`
-    : '圖片資料庫更新完成，沒有新增或變更的圖片。';
+    : '圖片資料庫更新完成，沒有新增或遺失的圖片。';
 };
 
 const getLibraryJobAnnouncement = (job: LibraryJob) => {
@@ -120,102 +81,10 @@ const getLibraryJobAnnouncement = (job: LibraryJob) => {
   return '媒體資料庫工作失敗，請從設定查看錯誤。';
 };
 
-interface ImagePageCacheEntry {
-  images: ImageItem[];
-  total: number;
-  monthIndexItems: MonthJumpItem[];
-}
-
-interface ImagePageRequest {
-  promise: Promise<ImagePageCacheEntry>;
-  controller: AbortController;
-  kind: 'navigation' | 'scrub-settle' | 'hover-prefetch';
-}
-
-interface FilterUrlState {
-  selectedMonths: string[];
-  selectedArtist: number | null;
-  searchQuery: string;
-}
-
 interface ViewAnchorRequest {
   index: number;
   requestId: number;
 }
-
-const getFilterStateFromUrl = (): FilterUrlState => {
-  if (typeof window === 'undefined') {
-    return { selectedMonths: [], selectedArtist: null, searchQuery: '' };
-  }
-
-  const params = new URLSearchParams(window.location.search);
-  const artistValue = params.get('artist_id');
-  const artistId = artistValue === null ? NaN : Number(artistValue);
-  const selectedArtist = Number.isInteger(artistId) && artistId !== 0 ? artistId : null;
-  const selectedMonths = normalizeSelectedMonths(Array.from(new Set(
-    params.getAll('month')
-      .flatMap(value => value.split(','))
-      .map(value => value.trim())
-      .filter(Boolean),
-  )));
-
-  return {
-    selectedMonths,
-    selectedArtist,
-    searchQuery: params.get('search') ?? '',
-  };
-};
-
-const syncFilterStateToUrl = ({ selectedMonths, selectedArtist, searchQuery }: FilterUrlState) => {
-  if (typeof window === 'undefined') return;
-
-  const url = new URL(window.location.href);
-  const normalizedSelectedMonths = normalizeSelectedMonths(selectedMonths);
-  if (normalizedSelectedMonths.length > 0) {
-    url.searchParams.set('month', normalizedSelectedMonths.join(','));
-  } else {
-    url.searchParams.delete('month');
-  }
-
-  if (selectedArtist !== null) {
-    url.searchParams.set('artist_id', String(selectedArtist));
-  } else {
-    url.searchParams.delete('artist_id');
-  }
-
-  if (searchQuery) {
-    url.searchParams.set('search', searchQuery);
-  } else {
-    url.searchParams.delete('search');
-  }
-
-  const nextUrl = `${url.pathname}${url.search}${url.hash}`;
-  const currentUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`;
-  if (nextUrl !== currentUrl) {
-    window.history.replaceState(window.history.state, '', nextUrl);
-  }
-};
-
-const normalizeImagePage = (data: any): ImagePageCacheEntry => {
-  if (Array.isArray(data)) {
-    return {
-      images: data,
-      total: data.length,
-      monthIndexItems: getMonthJumpItemsFromImages(data),
-    };
-  }
-
-  const images = Array.isArray(data?.images) ? data.images : [];
-  const total = Number(data?.total);
-
-  return {
-    images,
-    total: Number.isFinite(total) ? total : images.length,
-    monthIndexItems: Array.isArray(data?.months)
-      ? getMonthJumpItemsFromApi(data.months)
-      : getMonthJumpItemsFromImages(images),
-  };
-};
 
 export const App: React.FC = () => {
   const [theme, setTheme] = useState<ThemeMode>(DEFAULT_WEB_CONFIG.webTheme);
@@ -223,7 +92,6 @@ export const App: React.FC = () => {
   const [isMobileViewport, setIsMobileViewport] = useState(initialIsMobileViewport);
   const isMobileViewportRef = useRef(initialIsMobileViewport);
   const preferredViewerModeRef = useRef<ViewerMode>(DEFAULT_WEB_CONFIG.defaultViewMode);
-  const fullscreenReturnModeRef = useRef<ViewMode>('grid');
   const [preferredViewerMode, setPreferredViewerMode] = useState<ViewerMode>(DEFAULT_WEB_CONFIG.defaultViewMode);
   // Entering or reloading the site always starts at the work list. The
   // persisted preferred browsing mode is applied only when opening a work.
@@ -231,6 +99,11 @@ export const App: React.FC = () => {
   const [isSidebarOpen, setIsSidebarOpen] = useState(() => (
     typeof window === 'undefined' ? true : window.innerWidth > 640
   ));
+  const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_WEB_CONFIG.sidebarWidth);
+  const [viewportWidth, setViewportWidth] = useState(() => (
+    typeof window === 'undefined' ? 1024 : window.innerWidth
+  ));
+  const sidebarWidthSaveQueueRef = useRef<Promise<unknown>>(Promise.resolve());
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isEditMode, setIsEditMode] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -242,6 +115,7 @@ export const App: React.FC = () => {
   const [groupMangaPosts, setGroupMangaPosts] = useState(DEFAULT_WEB_CONFIG.groupMangaPosts);
   const [preloadImageCount, setPreloadImageCount] = useState(DEFAULT_WEB_CONFIG.preloadImageCount);
   const [fullscreenToolbarSimpleMode, setFullscreenToolbarSimpleMode] = useState(DEFAULT_WEB_CONFIG.fullscreenToolbarSimpleMode);
+  const [fullscreenShowToolbar, setFullscreenShowToolbar] = useState(DEFAULT_WEB_CONFIG.fullscreenShowToolbar);
   const [fullscreenShowThumbnails, setFullscreenShowThumbnails] = useState(DEFAULT_WEB_CONFIG.fullscreenShowThumbnails);
   const [thumbnailSize, setThumbnailSize] = useState(DEFAULT_WEB_CONFIG.thumbnailSize);
   const [webtoonImageScale, setWebtoonImageScale] = useState(DEFAULT_WEB_CONFIG.webtoonImageScale);
@@ -253,16 +127,22 @@ export const App: React.FC = () => {
   const [isMangaModalOpen, setIsMangaModalOpen] = useState(false);
   const [blurEnabled, setBlurEnabled] = useState(DEFAULT_WEB_CONFIG.blurEnabled);
   const [demoMode, setDemoMode] = useState(DEFAULT_WEB_CONFIG.demoMode);
-  const [isWebConfigReady, setIsWebConfigReady] = useState(false);
   const [webConfigSnapshot, setWebConfigSnapshot] = useState<WebConfig>(DEFAULT_WEB_CONFIG);
-  const [libraryJob, setLibraryJob] = useState<LibraryJob | null>(null);
   const [libraryAnnouncement, setLibraryAnnouncement] = useState('');
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [toastVariant, setToastVariant] = useState<ToastVariant>('info');
+
+  const showToast = useCallback((message: string, variant: ToastVariant = 'info') => {
+    setToastMessage(message);
+    setToastVariant(variant);
+  }, []);
 
   useEffect(() => {
     const mediaQuery = window.matchMedia('(max-width: 640px)');
     const updateViewportMode = () => {
       const isMobile = mediaQuery.matches;
       isMobileViewportRef.current = isMobile;
+      setViewportWidth(window.innerWidth);
       setIsMobileViewport(current => current === isMobile ? current : isMobile);
       if (isMobile) {
         setIsMobileMenuOpen(false);
@@ -275,54 +155,87 @@ export const App: React.FC = () => {
     return () => mediaQuery.removeEventListener?.('change', updateViewportMode);
   }, []);
 
+  useEffect(() => {
+    const updateViewportWidth = () => setViewportWidth(window.innerWidth);
+    window.addEventListener('resize', updateViewportWidth);
+    return () => window.removeEventListener('resize', updateViewportWidth);
+  }, []);
+
+  useEffect(() => {
+    if (!import.meta.env.DEV || !isScrollPerformanceProbeRequested()) return undefined;
+    return startScrollPerformanceProbe();
+  }, []);
+
   // Data States
   const [artists, setArtists] = useState<Artist[]>([]);
   const [isLoadingArtists, setIsLoadingArtists] = useState(false);
   const [months, setMonths] = useState<MonthItem[]>([]);
-  const [images, setImages] = useState<ImageItem[]>([]);
-  const [availableMonthIndexItems, setAvailableMonthIndexItems] = useState<MonthJumpItem[]>([]);
 
   // Filter States
-  const [selectedMonths, setSelectedMonths] = useState<string[]>(() => getFilterStateFromUrl().selectedMonths);
-  const [selectedArtist, setSelectedArtist] = useState<number | null>(() => getFilterStateFromUrl().selectedArtist);
-  const [searchQuery, setSearchQuery] = useState(() => getFilterStateFromUrl().searchQuery);
+  const [selectedMonths, setSelectedMonths] = useState<string[]>(() => parseFilterUrl().selectedMonths);
+  const [selectedArtist, setSelectedArtist] = useState<string | null>(() => parseFilterUrl().selectedArtist);
+  const [searchQuery, setSearchQuery] = useState(() => parseFilterUrl().searchQuery);
+
+  // Pagination & Sort States
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(DEFAULT_WEB_CONFIG.itemsPerPage);
+  const [sortMode, setSortMode] = useState<SortMode>('newest_month');
+  const {
+    images,
+    totalImages,
+    availableMonthIndexItems,
+    isLoadingImages,
+    loadedPage,
+    buildImageRequestParams,
+    loadImagePage,
+    fetchImages,
+    clearCache: clearImagePageCache,
+    hasCachedPage,
+    cancelSpeculativePageRequests: cancelImagePageRequests,
+    supersedeNavigationPageRequests,
+  } = useImagePageLoader({
+    selectedMonths,
+    selectedArtist,
+    searchQuery,
+    sortMode,
+    itemsPerPage,
+    currentPage,
+  });
 
   const applyArtistList = useCallback((data: unknown) => {
     const nextArtists = Array.isArray(data) ? data as Artist[] : [];
     setArtists(nextArtists);
     setSelectedArtist(current => {
       if (current === null || nextArtists.length === 0) return current;
-      return nextArtists.some(artist => Number(artist.member_id) === current) ? current : null;
+      if (nextArtists.some(artist => getArtistScopeKey(artist) === current)) return current;
+
+      const legacyScopeMatch = nextArtists.find(artist => artist.index_scope_key === current);
+      if (legacyScopeMatch) return getArtistScopeKey(legacyScopeMatch);
+
+      if (/^\d+$/.test(current)) {
+        const memberMatches = nextArtists.filter(artist => String(artist.member_id) === current);
+        if (memberMatches.length === 1) return getArtistScopeKey(memberMatches[0]);
+      }
+      return null;
     });
   }, []);
 
   const refreshDirectoryMetadata = useCallback(async () => {
     setIsLoadingArtists(true);
     try {
-      const [artistsResponse, monthsResponse] = await Promise.all([
-        fetch('/api/artists', { cache: 'no-store' }),
-        fetch('/api/months', { cache: 'no-store' }),
-      ]);
-      if (!artistsResponse.ok) throw new Error(`artists request failed: ${artistsResponse.status}`);
-      if (!monthsResponse.ok) throw new Error(`months request failed: ${monthsResponse.status}`);
       const [artistsData, monthsData] = await Promise.all([
-        artistsResponse.json(),
-        monthsResponse.json(),
+        apiClient.directory.artists(),
+        apiClient.directory.months(),
       ]);
       applyArtistList(artistsData);
-      setMonths(Array.isArray(monthsData) ? monthsData : []);
+      setMonths(monthsData);
     } finally {
       setIsLoadingArtists(false);
     }
   }, [applyArtistList]);
 
   // Selection & Modal States
-  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [fullscreenIndex, setFullscreenIndex] = useState<number | null>(null);
-  const [showConfirmModal, setShowConfirmModal] = useState(false);
-  const [deleteTargets, setDeleteTargets] = useState<number[]>([]);
-  const [isDownloadingSelection, setIsDownloadingSelection] = useState(false);
-  const [downloadSelectionError, setDownloadSelectionError] = useState<string | null>(null);
   const [showScrollTop, setShowScrollTop] = useState(false);
   const [isGridAtBottom, setIsGridAtBottom] = useState(false);
   const [gridScrollTopBottom, setGridScrollTopBottom] = useState<number | null>(null);
@@ -336,14 +249,14 @@ export const App: React.FC = () => {
   const webtoonStartRequestIdRef = useRef(0);
   const previousMainScrollTopRef = useRef(0);
   const webtoonUserScrollIntentRef = useRef(false);
-  const imageRequestIdRef = useRef(0);
-  const imagePageCacheRef = useRef(new Map<string, ImagePageCacheEntry>());
-  const imagePageRequestsRef = useRef(new Map<string, ImagePageRequest>());
   const thumbnailPreloadRequestsRef = useRef(new Map<string, ImagePreloadHandle>());
   const blurSaveRequestRef = useRef(0);
   const groupSaveRequestRef = useRef(0);
   const fullscreenToolbarModeSaveRequestRef = useRef(0);
-  const [isLoadingImages, setIsLoadingImages] = useState(false);
+  const fullscreenShowToolbarSaveRequestRef = useRef(0);
+  const fullscreenShowThumbnailsSaveRequestRef = useRef(0);
+  const fullscreenCheckerboardSaveRequestRef = useRef(0);
+  const fullscreenZoomModeSaveRequestRef = useRef(0);
   const [pendingMonthKey, setPendingMonthKey] = useState<string | null>(null);
   const pendingMonthScrollBehaviorRef = useRef<ScrollBehavior>('smooth');
   const [navigationMode, setNavigationMode] = useState<'idle' | 'click-scrolling' | 'scrubbing-preview' | 'scrubbing-settle' | 'scrubbing-commit'>('idle');
@@ -357,25 +270,130 @@ export const App: React.FC = () => {
     targetPage: number | null;
   }>({ timer: null, cacheKey: null, active: false, targetKey: null, targetPage: null });
   const paginationScrollResetRef = useRef<number | null>(null);
-  const libraryJobPollTimerRef = useRef<number | null>(null);
-  const previousLibraryJobRef = useRef<LibraryJob | null>(null);
   const libraryAnnouncementTimerRef = useRef<number | null>(null);
+
+  const selectionWorkflow = useSelectionWorkflow({
+    images,
+    fullscreenImageId: fullscreenIndex === null ? null : images[fullscreenIndex]?.image_id ?? null,
+    onFullscreenSelectionDeleted: () => setFullscreenIndex(null),
+    refreshImages: fetchImages,
+  });
+  const {
+    selectedIds,
+    showConfirmModal,
+    setShowConfirmModal,
+    deleteTargets,
+    isDownloadingSelection,
+    downloadSelectionError,
+    toggleSelectImage,
+    setSelectedImages,
+    replaceSelectedImages,
+    handleDownloadSelected,
+    handleSelectAll,
+    handleDeselectAll,
+    clearSelectionError,
+    promptDeleteSelected,
+    promptDeleteSingle,
+    confirmExecuteDelete,
+  } = selectionWorkflow;
+
+  const handleLibraryJobFinished = useCallback((job: LibraryJob) => {
+    if (libraryAnnouncementTimerRef.current !== null) {
+      window.clearTimeout(libraryAnnouncementTimerRef.current);
+    }
+    const announcement = getLibraryJobAnnouncement(job);
+    setLibraryAnnouncement(announcement);
+    const variant: ToastVariant = job.status === 'completed'
+      ? 'success'
+      : job.status === 'cancelled'
+      ? 'warning'
+      : 'error';
+    showToast(announcement, variant);
+    libraryAnnouncementTimerRef.current = window.setTimeout(() => setLibraryAnnouncement(''), 8000);
+  }, [showToast]);
+
+  const handleLibraryPollingError = useCallback((error: unknown) => {
+    console.error('Failed to poll library job:', error);
+  }, []);
+
+  const {
+    libraryJob,
+    startLibraryJob,
+  } = useLibraryJobStore({
+    onJobFinished: handleLibraryJobFinished,
+    onPollingError: handleLibraryPollingError,
+  });
+
+  const applyWebConfig = useCallback((data: Partial<WebConfig>) => {
+    const config = normalizeWebConfig(data);
+    setWebConfigSnapshot(config);
+    preferredViewerModeRef.current = config.defaultViewMode;
+    setPreferredViewerMode(config.defaultViewMode);
+    setTheme(config.webTheme);
+    setThumbnailSize(config.thumbnailSize);
+    setItemsPerPage(config.itemsPerPage);
+    setSidebarWidth(config.sidebarWidth);
+    setGroupMangaPosts(config.groupMangaPosts);
+    setBlurEnabled(config.blurEnabled);
+    setDemoMode(config.demoMode);
+    setPreloadImageCount(config.preloadImageCount);
+    setFullscreenToolbarSimpleMode(config.fullscreenToolbarSimpleMode);
+    setFullscreenShowToolbar(config.fullscreenShowToolbar);
+    setFullscreenShowThumbnails(config.fullscreenShowThumbnails);
+    setWebtoonImageScale(config.webtoonImageScale);
+    setWebtoonImageGap(config.webtoonImageGap);
+    setWebtoonShowInfo(config.webtoonShowInfo);
+    setWebtoonShowPageNumber(config.webtoonShowPageNumber);
+    setWebtoonShowThumbnails(config.webtoonShowThumbnails);
+    setCurrentPage(1);
+  }, []);
+
+  const handleWebConfigError = useCallback((error: unknown) => {
+    console.error('Failed to fetch web-config:', error);
+  }, []);
+
+  const {
+    isReady: isWebConfigReady,
+    loadWebConfig,
+    persistWebConfigPatch,
+  } = useWebConfigLifecycle({
+    onConfigLoaded: applyWebConfig,
+    onError: handleWebConfigError,
+  });
+
+  const maxSidebarWidth = getSidebarMaxWidth(viewportWidth);
+  const effectiveSidebarWidth = clampSidebarWidth(sidebarWidth, maxSidebarWidth);
+
+  const handleSidebarWidthChange = useCallback((nextWidth: number) => {
+    setSidebarWidth(clampSidebarWidth(nextWidth, maxSidebarWidth));
+  }, [maxSidebarWidth]);
+
+  const handleSidebarWidthCommit = useCallback((nextWidth: number) => {
+    const normalizedWidth = clampSidebarWidth(nextWidth, maxSidebarWidth);
+    setSidebarWidth(normalizedWidth);
+    sidebarWidthSaveQueueRef.current = sidebarWidthSaveQueueRef.current
+      .catch(() => undefined)
+      .then(() => persistWebConfigPatch({ sidebarWidth: normalizedWidth }))
+      .catch(error => {
+        console.error('Failed to save sidebarWidth setting:', error);
+      });
+  }, [maxSidebarWidth, persistWebConfigPatch]);
 
   const handleEditModeChange = useCallback((edit: boolean) => {
     const nextEditMode = edit && viewMode !== 'webtoon';
     setIsEditMode(nextEditMode);
-    setDownloadSelectionError(null);
-    if (!nextEditMode) setSelectedIds(new Set());
-  }, [viewMode]);
+    clearSelectionError();
+    if (!nextEditMode) handleDeselectAll();
+  }, [clearSelectionError, handleDeselectAll, viewMode]);
 
   const handleToggleEditMode = useCallback(() => {
     setIsEditMode(current => {
       const next = viewMode !== 'webtoon' && !current;
-      setDownloadSelectionError(null);
-      if (!next) setSelectedIds(new Set());
+      clearSelectionError();
+      if (!next) handleDeselectAll();
       return next;
     });
-  }, [viewMode]);
+  }, [clearSelectionError, handleDeselectAll, viewMode]);
 
   const handleNavigateFullscreen = useCallback((index: number) => {
     setFullscreenIndex(index);
@@ -584,29 +602,18 @@ export const App: React.FC = () => {
   }, []);
 
   const handleCloseFullscreen = useCallback(() => {
-    const returnMode = fullscreenReturnModeRef.current;
-    if (returnMode === 'webtoon') {
-      const safeIndex = normalizeViewAnchorIndex(fullscreenIndex);
-      requestWebtoonStart(safeIndex);
-      setFullscreenIndex(null);
-      setViewMode('webtoon');
-      cancelMonthNavigation();
-      return;
-    }
-
     requestGridRestore(fullscreenIndex);
     setFullscreenIndex(null);
     setViewMode('grid');
     cancelMonthNavigation();
-  }, [cancelMonthNavigation, fullscreenIndex, normalizeViewAnchorIndex, requestGridRestore, requestWebtoonStart]);
+  }, [cancelMonthNavigation, fullscreenIndex, requestGridRestore]);
 
   const handleScrollToTop = () => {
-    const prefersReducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
     const scrollContainer = getGalleryScrollContainer();
     setIsWebtoonHeaderHidden(false);
     scrollContainer?.scrollTo({
       top: 0,
-      behavior: prefersReducedMotion ? 'auto' : 'smooth',
+      behavior: getMotionAwareScrollBehavior(),
     });
   };
 
@@ -623,56 +630,6 @@ export const App: React.FC = () => {
     }
   }, [theme]);
 
-  useEffect(() => {
-    let cancelled = false;
-
-    const schedulePoll = (delay: number) => {
-      if (cancelled) return;
-      if (libraryJobPollTimerRef.current !== null) window.clearTimeout(libraryJobPollTimerRef.current);
-      libraryJobPollTimerRef.current = window.setTimeout(() => {
-        void pollCurrentLibraryJob();
-      }, delay);
-    };
-
-    const pollCurrentLibraryJob = async () => {
-      try {
-        const response = await fetch('/api/library/jobs/current', { cache: 'no-store' });
-        if (!response.ok) throw new Error(`library job request failed: ${response.status}`);
-        const data = await response.json() as { job?: LibraryJob | null };
-        const nextJob = data.job ?? null;
-        const previousJob = previousLibraryJobRef.current;
-        previousLibraryJobRef.current = nextJob;
-        if (!cancelled) setLibraryJob(nextJob);
-
-        if (nextJob && previousJob && nextJob.job_id === previousJob.job_id && isLibraryJobActive(previousJob) && isLibraryJobTerminal(nextJob)) {
-          if (libraryAnnouncementTimerRef.current !== null) window.clearTimeout(libraryAnnouncementTimerRef.current);
-          setLibraryAnnouncement(getLibraryJobAnnouncement(nextJob));
-          libraryAnnouncementTimerRef.current = window.setTimeout(() => setLibraryAnnouncement(''), 8000);
-          if (nextJob.job_type === 'update-library' && ['completed', 'cancelled'].includes(nextJob.status)) {
-            window.dispatchEvent(new Event('web-viewer-library-data-changed'));
-          }
-        }
-        schedulePoll(isLibraryJobActive(nextJob) ? 1000 : 10000);
-      } catch {
-        schedulePoll(15000);
-      }
-    };
-
-    const handleLibraryJobChanged = () => {
-      if (libraryJobPollTimerRef.current !== null) window.clearTimeout(libraryJobPollTimerRef.current);
-      void pollCurrentLibraryJob();
-    };
-
-    window.addEventListener('web-viewer-library-job-changed', handleLibraryJobChanged);
-    void pollCurrentLibraryJob();
-    return () => {
-      cancelled = true;
-      window.removeEventListener('web-viewer-library-job-changed', handleLibraryJobChanged);
-      if (libraryJobPollTimerRef.current !== null) window.clearTimeout(libraryJobPollTimerRef.current);
-      if (libraryAnnouncementTimerRef.current !== null) window.clearTimeout(libraryAnnouncementTimerRef.current);
-    };
-  }, []);
-
   // Fetch Artists & Months
   useEffect(() => {
     void refreshDirectoryMetadata().catch(err => console.error('Failed to fetch directory metadata:', err));
@@ -681,12 +638,12 @@ export const App: React.FC = () => {
   // Keep filter state shareable and restore it when the browser navigates to a
   // URL that already contains filter parameters.
   useEffect(() => {
-    syncFilterStateToUrl({ selectedMonths, selectedArtist, searchQuery });
+    syncFilterUrl({ selectedMonths, selectedArtist, searchQuery });
   }, [selectedMonths, selectedArtist, searchQuery]);
 
   useEffect(() => {
     const handlePopState = () => {
-      const nextState = getFilterStateFromUrl();
+      const nextState = parseFilterUrl();
       setSelectedMonths(previous => (
         previous.length === nextState.selectedMonths.length
         && previous.every((month, index) => month === nextState.selectedMonths[index])
@@ -701,21 +658,6 @@ export const App: React.FC = () => {
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
 
-  // Pagination & Sort States
-  const [currentPage, setCurrentPage] = useState(1);
-  const [totalImages, setTotalImages] = useState(0);
-  const [itemsPerPage, setItemsPerPage] = useState(DEFAULT_WEB_CONFIG.itemsPerPage);
-  const [sortMode, setSortMode] = useState<SortMode>('newest_month');
-
-  const monthIndexItems = useMemo<MonthJumpItem[]>(() => {
-    const monthList = [...availableMonthIndexItems].sort((a, b) => {
-      const shouldSortAscending = sortMode === 'oldest' || sortMode === 'oldest_month';
-      return shouldSortAscending ? a.key.localeCompare(b.key) : b.key.localeCompare(a.key);
-    });
-
-    return monthList;
-  }, [availableMonthIndexItems, sortMode]);
-
   // Reset the page, gallery scroll position, and any pending month jump when
   // the result set changes. A new artist must start from that artist's first
   // available month instead of inheriting the previous artist's viewport.
@@ -727,113 +669,25 @@ export const App: React.FC = () => {
     scrollContainer?.scrollTo({ top: 0, behavior: 'auto' });
   }, [getGalleryScrollContainer, selectedMonths, selectedArtist, searchQuery, sortMode]);
 
-  const buildImageRequestParams = useCallback((page: number) => {
-    const params = new URLSearchParams();
-    const normalizedSelectedMonths = normalizeSelectedMonths(selectedMonths);
-    if (normalizedSelectedMonths.length > 0) params.append('month', normalizedSelectedMonths.join(','));
-    if (selectedArtist !== null) params.append('artist_id', selectedArtist.toString());
-    if (searchQuery) params.append('search', searchQuery);
-    params.append('sort_mode', sortMode);
-    params.append('limit', itemsPerPage.toString());
-    params.append('offset', ((page - 1) * itemsPerPage).toString());
-    return params;
-  }, [selectedMonths, selectedArtist, searchQuery, sortMode, itemsPerPage]);
-
-  const applyImagePage = useCallback((page: ImagePageCacheEntry) => {
-    setImages(page.images);
-    setTotalImages(page.total);
-    setAvailableMonthIndexItems(page.monthIndexItems);
-  }, []);
-
-  const loadImagePage = useCallback((params: URLSearchParams, kind: ImagePageRequest['kind'] = 'navigation') => {
-    const cacheKey = params.toString();
-    const cachedPage = imagePageCacheRef.current.get(cacheKey);
-    if (cachedPage) return Promise.resolve(cachedPage);
-
-    const pendingRequest = imagePageRequestsRef.current.get(cacheKey);
-    if (pendingRequest) {
-      if (kind === 'navigation') pendingRequest.kind = 'navigation';
-      return pendingRequest.promise;
-    }
-
-    const controller = new AbortController();
-    const request = fetch(`/api/images?${cacheKey}`, { signal: controller.signal })
-      .then(res => {
-        if (!res.ok) throw new Error(`Images request failed: ${res.status}`);
-        return res.json();
-      })
-      .then(data => {
-        const page = normalizeImagePage(data);
-        imagePageCacheRef.current.delete(cacheKey);
-        imagePageCacheRef.current.set(cacheKey, page);
-        while (imagePageCacheRef.current.size > 24) {
-          const oldestKey = imagePageCacheRef.current.keys().next().value as string | undefined;
-          if (!oldestKey) break;
-          imagePageCacheRef.current.delete(oldestKey);
-        }
-        return page;
-      });
-
-    const requestEntry: ImagePageRequest = { promise: request, controller, kind };
-    imagePageRequestsRef.current.set(cacheKey, requestEntry);
-    request.then(
-      () => {
-        if (imagePageRequestsRef.current.get(cacheKey) === requestEntry) imagePageRequestsRef.current.delete(cacheKey);
-      },
-      () => {
-        if (imagePageRequestsRef.current.get(cacheKey) === requestEntry) imagePageRequestsRef.current.delete(cacheKey);
-      },
-    );
-    return request;
-  }, []);
-
-  // Fetch Images based on Filters & Pagination
-  const fetchImages = useCallback(() => {
-    const requestId = ++imageRequestIdRef.current;
-    const params = buildImageRequestParams(currentPage);
-    const cacheKey = params.toString();
-    const cachedPage = imagePageCacheRef.current.get(cacheKey);
-
-    if (cachedPage) {
-      applyImagePage(cachedPage);
-      setIsLoadingImages(false);
-      return;
-    }
-
-    setIsLoadingImages(true);
-    loadImagePage(params)
-      .then(page => {
-        if (requestId !== imageRequestIdRef.current) return;
-        applyImagePage(page);
-      })
-      .catch(err => {
-        if (requestId === imageRequestIdRef.current) {
-          if (err instanceof DOMException && err.name === 'AbortError') return;
-          console.error('Failed to fetch images:', err);
-        }
-      })
-      .finally(() => {
-        if (requestId === imageRequestIdRef.current) {
-          setIsLoadingImages(false);
-        }
-      });
-  }, [applyImagePage, buildImageRequestParams, currentPage, loadImagePage]);
-
   useEffect(() => {
     if (!isWebConfigReady) return;
     fetchImages();
   }, [fetchImages, isWebConfigReady]);
 
+  const monthIndexItems = useMemo<MonthJumpItem[]>(() => {
+    return sortMonthIndexItems(availableMonthIndexItems, sortMode);
+  }, [availableMonthIndexItems, sortMode]);
+
   useEffect(() => {
     const handleLibraryDataChanged = () => {
-      imagePageCacheRef.current.clear();
+      clearImagePageCache();
       void refreshDirectoryMetadata().catch(err => console.error('Failed to refresh directory metadata:', err));
       fetchImages();
     };
 
     window.addEventListener('web-viewer-library-data-changed', handleLibraryDataChanged);
     return () => window.removeEventListener('web-viewer-library-data-changed', handleLibraryDataChanged);
-  }, [fetchImages, refreshDirectoryMetadata]);
+  }, [clearImagePageCache, fetchImages, refreshDirectoryMetadata]);
 
   useEffect(() => {
     const galleryInactive = fullscreenIndex !== null || viewMode !== 'grid';
@@ -861,20 +715,9 @@ export const App: React.FC = () => {
     return undefined;
   }, [demoMode]);
 
-  const resolveMonthTarget = useCallback((item: MonthJumpItem) => {
-    const fallbackIndex = monthIndexItems.findIndex(month => month.key === item.key);
-    const fallbackOffset = fallbackIndex >= 0
-      ? monthIndexItems.slice(0, fallbackIndex).reduce((total, month) => total + month.count, 0)
-      : 0;
-    const targetOffset = Number.isFinite(item.offset) && (item.offset ?? 0) >= 0
-      ? item.offset ?? 0
-      : fallbackOffset;
-
-    return {
-      offset: targetOffset,
-      ...getTargetPageAndLocalIndex(targetOffset, itemsPerPage),
-    };
-  }, [itemsPerPage, monthIndexItems]);
+  const resolveMonthTarget = useCallback((item: MonthJumpItem) => (
+    resolveMonthTargetForItem(item, monthIndexItems, itemsPerPage)
+  ), [itemsPerPage, monthIndexItems]);
 
   const cancelSpeculativePageRequests = useCallback((preserveCacheKey?: string) => {
     if (scrubSettleRef.current.timer !== null) {
@@ -886,25 +729,8 @@ export const App: React.FC = () => {
       preload.cancel();
       thumbnailPreloadRequestsRef.current.delete(url);
     }
-    for (const [cacheKey, request] of imagePageRequestsRef.current) {
-      if (cacheKey === preserveCacheKey) {
-        request.kind = 'navigation';
-        continue;
-      }
-      if (request.kind !== 'navigation') {
-        request.controller.abort();
-        imagePageRequestsRef.current.delete(cacheKey);
-      }
-    }
-  }, []);
-
-  const supersedeNavigationPageRequests = useCallback((preserveCacheKey: string) => {
-    for (const [cacheKey, request] of imagePageRequestsRef.current) {
-      if (cacheKey === preserveCacheKey || request.kind !== 'navigation') continue;
-      request.controller.abort();
-      imagePageRequestsRef.current.delete(cacheKey);
-    }
-  }, []);
+    cancelImagePageRequests(preserveCacheKey);
+  }, [cancelImagePageRequests]);
 
   const preloadThumbnail = useCallback((item: ImageItem, priority: 0 | 1 | 2 | 3 = 3) => {
     if (demoMode || item.media_status) return;
@@ -986,7 +812,7 @@ export const App: React.FC = () => {
       const params = buildImageRequestParams(target.page);
       const cacheKey = params.toString();
       scrubSettleRef.current.cacheKey = cacheKey;
-      if (imagePageCacheRef.current.has(cacheKey)) {
+      if (hasCachedPage(params)) {
         applyScrubPreviewPage(item, target);
         return;
       }
@@ -1002,7 +828,7 @@ export const App: React.FC = () => {
           if (error instanceof DOMException && error.name === 'AbortError') return;
         });
     }, 100);
-  }, [applyScrubPreviewPage, buildImageRequestParams, cancelSpeculativePageRequests, currentPage, loadImagePage, navigationMode, preloadThumbnail, prefetchCurrentPageWindow, resolveMonthTarget, thumbnailSize]);
+  }, [applyScrubPreviewPage, buildImageRequestParams, cancelSpeculativePageRequests, currentPage, hasCachedPage, loadImagePage, navigationMode, preloadThumbnail, prefetchCurrentPageWindow, resolveMonthTarget, thumbnailSize]);
 
   const handleJumpToMonth = useCallback((item: MonthJumpItem, options: MonthJumpNavigationOptions = {}) => {
     scrubSettleRef.current.active = false;
@@ -1090,20 +916,32 @@ export const App: React.FC = () => {
     }
   }, [buildImageRequestParams, cancelSpeculativePageRequests, resolveMonthTarget, supersedeNavigationPageRequests]);
 
-  const handlePageChange = useCallback((page: number) => {
-    const preserveCacheKey = buildImageRequestParams(page).toString();
+  const loadSelectionPage = useCallback((page: number) => {
+    const params = buildImageRequestParams(page);
+    return loadImagePage(params, 'navigation');
+  }, [buildImageRequestParams, loadImagePage]);
+
+  const handlePageChange = useCallback((page: number, options: GalleryPageChangeOptions = {}) => {
+    const totalPages = Math.max(1, Math.ceil(totalImages / Math.max(1, itemsPerPage)));
+    const safePage = Math.max(1, Math.min(totalPages, Math.floor(page)));
+    const preserveCacheKey = buildImageRequestParams(safePage).toString();
     supersedeNavigationPageRequests(preserveCacheKey);
     cancelSpeculativePageRequests(preserveCacheKey);
-    paginationScrollResetRef.current = page;
-    pendingMonthScrollBehaviorRef.current = 'smooth';
     cancelMonthNavigation();
     setShowScrollTop(false);
     setIsGridAtBottom(false);
     setGridScrollTopBottom(null);
     setGridScrollTopInlineEnd(null);
-    getGalleryScrollContainer()?.scrollTo({ top: 0, behavior: 'auto' });
-    setCurrentPage(page);
-  }, [buildImageRequestParams, cancelMonthNavigation, cancelSpeculativePageRequests, getGalleryScrollContainer, supersedeNavigationPageRequests]);
+    if (options.preserveScroll) {
+      paginationScrollResetRef.current = null;
+      pendingMonthScrollBehaviorRef.current = 'auto';
+    } else {
+      paginationScrollResetRef.current = safePage;
+      pendingMonthScrollBehaviorRef.current = 'smooth';
+      getGalleryScrollContainer()?.scrollTo({ top: 0, behavior: 'auto' });
+    }
+    setCurrentPage(safePage);
+  }, [buildImageRequestParams, cancelMonthNavigation, cancelSpeculativePageRequests, getGalleryScrollContainer, itemsPerPage, supersedeNavigationPageRequests, totalImages]);
 
   const handleWebtoonPageChange = useCallback((page: number, anchorIndex = 0) => {
     const totalPages = Math.max(1, Math.ceil(totalImages / Math.max(1, itemsPerPage)));
@@ -1184,8 +1022,7 @@ export const App: React.FC = () => {
     let stableFrames = 0;
     let previousTargetTop: number | null = null;
     let previousScrollTop: number | null = null;
-    const prefersReducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-    const behavior = prefersReducedMotion ? 'auto' : pendingMonthScrollBehaviorRef.current;
+    const behavior = getMotionAwareScrollBehavior(pendingMonthScrollBehaviorRef.current);
 
     const alignTarget = () => {
       const container = getGalleryScrollContainer();
@@ -1245,58 +1082,50 @@ export const App: React.FC = () => {
     };
   }, [getGalleryScrollContainer, images, isLoadingImages, pendingMonthKey]);
 
-  const applyWebConfig = useCallback((data: Partial<WebConfig>) => {
-    const config = normalizeWebConfig(data);
-    setWebConfigSnapshot(config);
-    preferredViewerModeRef.current = config.defaultViewMode;
-    setPreferredViewerMode(config.defaultViewMode);
-    setTheme(config.webTheme);
-    setThumbnailSize(config.thumbnailSize);
-    setItemsPerPage(config.itemsPerPage);
-    setGroupMangaPosts(config.groupMangaPosts);
-    setBlurEnabled(config.blurEnabled);
-    setDemoMode(config.demoMode);
-    setPreloadImageCount(config.preloadImageCount);
-    setFullscreenToolbarSimpleMode(config.fullscreenToolbarSimpleMode);
-    setFullscreenShowThumbnails(config.fullscreenShowThumbnails);
-    setWebtoonImageScale(config.webtoonImageScale);
-    setWebtoonImageGap(config.webtoonImageGap);
-    setWebtoonShowInfo(config.webtoonShowInfo);
-    setWebtoonShowPageNumber(config.webtoonShowPageNumber);
-    setWebtoonShowThumbnails(config.webtoonShowThumbnails);
-    setCurrentPage(1);
-  }, []);
-
-  const loadWebConfig = useCallback(async () => {
-    const response = await fetch('/api/web-config');
-    if (!response.ok) {
-      throw new Error(`Failed to load web-config (${response.status})`);
-    }
-    const data = await response.json();
-    applyWebConfig(data);
-    return normalizeWebConfig(data);
-  }, [applyWebConfig]);
-
-  const persistWebConfigPatch = useCallback(async (patch: Partial<WebConfig>) => {
-    const currentResponse = await fetch('/api/web-config');
-    if (!currentResponse.ok) {
-      throw new Error(`Failed to load web-config before update (${currentResponse.status})`);
-    }
-    const current = await currentResponse.json();
-    const nextConfig = normalizeWebConfig({ ...current, ...patch });
-    const saveResponse = await fetch('/api/web-config', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(nextConfig),
-    });
-    if (!saveResponse.ok) {
-      throw new Error(`Failed to save web-config (${saveResponse.status})`);
-    }
-    return nextConfig;
-  }, []);
-
   const webtoonConfigSaveQueueRef = useRef<Promise<unknown>>(Promise.resolve());
   const viewerModeSaveQueueRef = useRef<Promise<unknown>>(Promise.resolve());
+  const videoPreferenceSaveQueueRef = useRef<Promise<unknown>>(Promise.resolve());
+  const videoPreferenceSaveTimerRef = useRef<number | null>(null);
+  const pendingVideoPreferencePatchRef = useRef<VideoPreferencePatch>({});
+
+  const enqueueVideoPreferenceSave = useCallback((patch: VideoPreferencePatch) => {
+    videoPreferenceSaveQueueRef.current = videoPreferenceSaveQueueRef.current
+      .catch(() => undefined)
+      .then(() => persistWebConfigPatch(patch))
+      .catch(error => {
+        console.error('Failed to save video preference:', error);
+      });
+  }, [persistWebConfigPatch]);
+
+  const handleVideoPreferenceChange = useCallback((patch: VideoPreferencePatch) => {
+    const normalized = normalizeWebConfig(patch);
+    const nextPatch: VideoPreferencePatch = {};
+    if (patch.videoMuted !== undefined) nextPatch.videoMuted = normalized.videoMuted;
+    if (patch.videoVolume !== undefined) nextPatch.videoVolume = normalized.videoVolume;
+    if (Object.keys(nextPatch).length === 0) return;
+
+    setWebConfigSnapshot(current => normalizeWebConfig({ ...current, ...nextPatch }));
+    pendingVideoPreferencePatchRef.current = {
+      ...pendingVideoPreferencePatchRef.current,
+      ...nextPatch,
+    };
+    if (videoPreferenceSaveTimerRef.current !== null) {
+      window.clearTimeout(videoPreferenceSaveTimerRef.current);
+    }
+    videoPreferenceSaveTimerRef.current = window.setTimeout(() => {
+      videoPreferenceSaveTimerRef.current = null;
+      const pendingPatch = pendingVideoPreferencePatchRef.current;
+      pendingVideoPreferencePatchRef.current = {};
+      if (Object.keys(pendingPatch).length > 0) enqueueVideoPreferenceSave(pendingPatch);
+    }, 250);
+  }, [enqueueVideoPreferenceSave]);
+
+  useEffect(() => () => {
+    if (videoPreferenceSaveTimerRef.current !== null) {
+      window.clearTimeout(videoPreferenceSaveTimerRef.current);
+    }
+  }, []);
+
   const handleWebtoonSettingsChange = useCallback((patch: Partial<WebConfig>) => {
     const normalized = normalizeWebConfig(patch);
     if (patch.webtoonImageScale !== undefined) setWebtoonImageScale(normalized.webtoonImageScale);
@@ -1312,21 +1141,6 @@ export const App: React.FC = () => {
         console.error('Failed to save webtoon setting:', error);
       });
   }, [persistWebConfigPatch]);
-
-  // Apply persisted Web Viewer settings before the user starts interacting with the app.
-  useEffect(() => {
-    let cancelled = false;
-
-    loadWebConfig()
-      .catch(err => console.error('Failed to fetch web-config:', err))
-      .finally(() => {
-        if (!cancelled) setIsWebConfigReady(true);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [loadWebConfig]);
 
   const handlePreferredViewerModeChange = useCallback((nextMode: ViewerMode) => {
     preferredViewerModeRef.current = nextMode;
@@ -1360,7 +1174,6 @@ export const App: React.FC = () => {
     cancelMonthNavigation();
 
     if (nextMode === 'fullscreen') {
-      if (viewMode !== 'fullscreen') fullscreenReturnModeRef.current = viewMode;
       setFullscreenIndex(safeAnchorIndex ?? (images.length > 0 ? 0 : null));
     } else if (nextMode === 'webtoon') {
       handleEditModeChange(false);
@@ -1406,7 +1219,6 @@ export const App: React.FC = () => {
       return;
     }
 
-    fullscreenReturnModeRef.current = 'grid';
     setFullscreenIndex(safeIndex);
     setViewMode('fullscreen');
   }, [cancelMonthNavigation, normalizeViewAnchorIndex, requestWebtoonStart]);
@@ -1449,147 +1261,6 @@ export const App: React.FC = () => {
     if (viewMode === 'webtoon' && isEditMode) handleEditModeChange(false);
   }, [handleEditModeChange, isEditMode, viewMode]);
 
-  // Multi-select handlers
-  const toggleSelectImage = (imageId: number) => {
-    setSelectedIds(prev => {
-      const next = new Set(prev);
-      if (next.has(imageId)) next.delete(imageId);
-      else next.add(imageId);
-      return next;
-    });
-    setDownloadSelectionError(null);
-  };
-
-  const setSelectedImages = useCallback((imageIds: number[], selected: boolean) => {
-    if (imageIds.length === 0) return;
-
-    setSelectedIds(prev => {
-      const next = new Set(prev);
-      imageIds.forEach(imageId => {
-        if (selected) next.add(imageId);
-        else next.delete(imageId);
-      });
-      return next;
-    });
-    setDownloadSelectionError(null);
-  }, []);
-
-  const replaceSelectedImages = useCallback((imageIds: number[]) => {
-    setSelectedIds(new Set(imageIds));
-    setDownloadSelectionError(null);
-  }, []);
-
-  const handleDownloadSelected = useCallback(async () => {
-    if (selectedIds.size === 0 || isDownloadingSelection) return;
-
-    setIsDownloadingSelection(true);
-    setDownloadSelectionError(null);
-
-    try {
-      const selectedItems = images
-        .filter(image => selectedIds.has(image.image_id))
-        .map(image => ({ image_id: image.image_id, path: image.save_name }));
-      const response = await fetch('/api/images/download-zip', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          image_ids: Array.from(selectedIds),
-          items: selectedItems,
-        }),
-      });
-
-      if (!response.ok) {
-        let message = `ZIP 下載失敗（${response.status}）`;
-        try {
-          const payload = await response.json() as { detail?: unknown };
-          if (typeof payload.detail === 'string' && payload.detail) message = payload.detail;
-        } catch {
-          // Keep the status-based message when the API response is not JSON.
-        }
-        throw new Error(message);
-      }
-
-      const blob = await response.blob();
-      const contentDisposition = response.headers.get('Content-Disposition');
-      const filename = contentDisposition?.match(/filename="?([^";]+)"?/i)?.[1]
-        ?? 'pixivutil2-selected-works.zip';
-      const objectUrl = URL.createObjectURL(blob);
-      const downloadLink = document.createElement('a');
-      downloadLink.href = objectUrl;
-      downloadLink.download = filename;
-      document.body.appendChild(downloadLink);
-      downloadLink.click();
-      downloadLink.remove();
-      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'ZIP 下載失敗';
-      console.error('Failed to download selected images:', err);
-      setDownloadSelectionError(message);
-    } finally {
-      setIsDownloadingSelection(false);
-    }
-  }, [images, isDownloadingSelection, selectedIds]);
-
-  const handleSelectAll = () => {
-    const all = new Set(images.map(img => img.image_id));
-    setSelectedIds(all);
-    setDownloadSelectionError(null);
-  };
-
-  const handleDeselectAll = () => {
-    setSelectedIds(new Set());
-    setDownloadSelectionError(null);
-  };
-
-  // Delete Actions
-  const promptDeleteSelected = () => {
-    if (selectedIds.size === 0) return;
-    setDeleteTargets(Array.from(selectedIds));
-    setShowConfirmModal(true);
-  };
-
-  const promptDeleteSingle = (imageId: number) => {
-    setDeleteTargets([imageId]);
-    setShowConfirmModal(true);
-  };
-
-  const confirmExecuteDelete = async () => {
-    if (!deleteTargets.length) return;
-    try {
-      const items = deleteTargets.flatMap(imageId => {
-        const image = images.find(candidate => candidate.image_id === imageId);
-        return image?.save_name
-          ? [{ image_id: imageId, path: image.save_name }]
-          : [];
-      });
-      const res = await fetch('/api/images/batch-trash', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ image_ids: deleteTargets, items }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data?.detail || '無法將作品移至回收區');
-      }
-      console.log('Moved selected works to recycle bin:', data);
-
-      // Refresh list and clear selection
-      fetchImages();
-      setSelectedIds(prev => {
-        const next = new Set(prev);
-        deleteTargets.forEach(id => next.delete(id));
-        return next;
-      });
-      setShowConfirmModal(false);
-      setDeleteTargets([]);
-      if (fullscreenIndex !== null && deleteTargets.includes(images[fullscreenIndex]?.image_id)) {
-        setFullscreenIndex(null);
-      }
-    } catch (err) {
-      console.error('Failed to move selected works to recycle bin:', err);
-    }
-  };
-
   const handleToggleGroupMangaPosts = useCallback(() => {
     const previousValue = groupMangaPosts;
     const nextVal = !previousValue;
@@ -1621,37 +1292,81 @@ export const App: React.FC = () => {
     const requestId = ++fullscreenToolbarModeSaveRequestRef.current;
 
     setFullscreenToolbarSimpleMode(simpleMode);
+    setWebConfigSnapshot(current => ({ ...current, fullscreenToolbarSimpleMode: simpleMode }));
     persistWebConfigPatch({ fullscreenToolbarSimpleMode: simpleMode }).catch(err => {
       if (requestId !== fullscreenToolbarModeSaveRequestRef.current) return;
       console.error('Failed to save fullscreenToolbarSimpleMode setting:', err);
       setFullscreenToolbarSimpleMode(previousValue);
+      setWebConfigSnapshot(current => ({ ...current, fullscreenToolbarSimpleMode: previousValue }));
     });
   }, [fullscreenToolbarSimpleMode, persistWebConfigPatch]);
 
+  const handleFullscreenShowToolbarChange = useCallback((showToolbar: boolean) => {
+    const previousValue = fullscreenShowToolbar;
+    const requestId = ++fullscreenShowToolbarSaveRequestRef.current;
+
+    setFullscreenShowToolbar(showToolbar);
+    setWebConfigSnapshot(current => ({ ...current, fullscreenShowToolbar: showToolbar }));
+    persistWebConfigPatch({ fullscreenShowToolbar: showToolbar }).catch(error => {
+      if (requestId !== fullscreenShowToolbarSaveRequestRef.current) return;
+      console.error('Failed to save fullscreenShowToolbar setting:', error);
+      setFullscreenShowToolbar(previousValue);
+      setWebConfigSnapshot(current => ({ ...current, fullscreenShowToolbar: previousValue }));
+    });
+  }, [fullscreenShowToolbar, persistWebConfigPatch]);
+
+  const handleFullscreenShowFilmstripChange = useCallback((showFilmstrip: boolean) => {
+    const previousValue = fullscreenShowThumbnails;
+    const requestId = ++fullscreenShowThumbnailsSaveRequestRef.current;
+
+    setFullscreenShowThumbnails(showFilmstrip);
+    setWebConfigSnapshot(current => ({ ...current, fullscreenShowThumbnails: showFilmstrip }));
+    persistWebConfigPatch({ fullscreenShowThumbnails: showFilmstrip }).catch(error => {
+      if (requestId !== fullscreenShowThumbnailsSaveRequestRef.current) return;
+      console.error('Failed to save fullscreenShowThumbnails setting:', error);
+      setFullscreenShowThumbnails(previousValue);
+      setWebConfigSnapshot(current => ({ ...current, fullscreenShowThumbnails: previousValue }));
+    });
+  }, [fullscreenShowThumbnails, persistWebConfigPatch]);
+
+  const handleFullscreenCheckerboardChange = useCallback((enabled: boolean) => {
+    const previousValue = webConfigSnapshot.fullscreenShowCheckerboard;
+    const requestId = ++fullscreenCheckerboardSaveRequestRef.current;
+
+    setWebConfigSnapshot(current => ({ ...current, fullscreenShowCheckerboard: enabled }));
+    persistWebConfigPatch({ fullscreenShowCheckerboard: enabled }).catch(error => {
+      if (requestId !== fullscreenCheckerboardSaveRequestRef.current) return;
+      console.error('Failed to save fullscreenShowCheckerboard setting:', error);
+      setWebConfigSnapshot(current => ({ ...current, fullscreenShowCheckerboard: previousValue }));
+    });
+  }, [persistWebConfigPatch, webConfigSnapshot.fullscreenShowCheckerboard]);
+
+  const handleFullscreenZoomModeChange = useCallback((mode: WebConfig['fullscreenZoomMode']) => {
+    const previousValue = webConfigSnapshot.fullscreenZoomMode;
+    const requestId = ++fullscreenZoomModeSaveRequestRef.current;
+
+    setWebConfigSnapshot(current => ({ ...current, fullscreenZoomMode: mode }));
+    persistWebConfigPatch({ fullscreenZoomMode: mode }).catch(error => {
+      if (requestId !== fullscreenZoomModeSaveRequestRef.current) return;
+      console.error('Failed to save fullscreenZoomMode setting:', error);
+      setWebConfigSnapshot(current => ({ ...current, fullscreenZoomMode: previousValue }));
+    });
+  }, [persistWebConfigPatch, webConfigSnapshot.fullscreenZoomMode]);
+
+  const displayArtists = artists;
+  const displayImages = images;
+
   // Group images into WorkGroups for current page
   const allWorkGroups = useMemo(() => {
-    return groupImagesIntoWorkGroups(images);
-  }, [images]);
+    return groupImagesIntoWorkGroups(displayImages);
+  }, [displayImages]);
 
   // Current Fullscreen Active Work Group & Item Index
-  const currentFullscreenItem = fullscreenIndex !== null ? images[fullscreenIndex] : null;
+  const currentFullscreenItem = fullscreenIndex !== null ? displayImages[fullscreenIndex] : null;
   const currentFullscreenGroup = useMemo(() => {
     if (!currentFullscreenItem) return null;
     return allWorkGroups.find(g => g.items.some(it => it.save_name === currentFullscreenItem.save_name)) || null;
   }, [currentFullscreenItem, allWorkGroups]);
-
-  const currentGroupItems = currentFullscreenGroup ? currentFullscreenGroup.items : (currentFullscreenItem ? [currentFullscreenItem] : []);
-  const currentGroupPageIndex = currentGroupItems.findIndex(it => it.save_name === currentFullscreenItem?.save_name);
-  const safeGroupPageIndex = currentGroupPageIndex >= 0 ? currentGroupPageIndex : 0;
-
-  const handleNavigateWorkGroupPage = (newGroupPageIndex: number) => {
-    if (!currentGroupItems[newGroupPageIndex]) return;
-    const targetItem = currentGroupItems[newGroupPageIndex];
-    const globalIdx = images.findIndex(x => x.save_name === targetItem.save_name);
-    if (globalIdx !== -1) {
-      setFullscreenIndex(globalIdx);
-    }
-  };
 
   const handleNavigateNextWork = () => {
     if (!currentFullscreenGroup) {
@@ -1705,14 +1420,17 @@ export const App: React.FC = () => {
   };
 
   const currentArtist = useMemo(
-    () => (selectedArtist === null ? null : artists.find(artist => artist.member_id === selectedArtist) ?? null),
-    [artists, selectedArtist],
+    () => (selectedArtist === null ? null : displayArtists.find(artist => getArtistScopeKey(artist) === selectedArtist) ?? null),
+    [displayArtists, selectedArtist],
   );
 
+  const currentArtistScopeKey = currentArtist ? getArtistScopeKey(currentArtist) : null;
   const isArtistUpdating = isLibraryJobActive(libraryJob)
     && libraryJob?.job_type === 'update-library'
-    && (currentArtist?.member_id === undefined
-      || libraryJob.scopes?.some(scope => scope.member_id === currentArtist.member_id));
+    && (currentArtistScopeKey === null
+      || libraryJob.scopes?.some(scope => (
+        scope.folder_id === currentArtistScopeKey || scope.scope_key === currentArtistScopeKey
+      )));
 
   const handleRequestArtistUpdate = useCallback(() => {
     if (isArtistUpdating) return;
@@ -1727,37 +1445,36 @@ export const App: React.FC = () => {
 
     setIsArtistUpdateNoticeOpen(false);
     try {
-      const response = await fetch('/api/library/jobs', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      const data = await apiClient.libraryJobs.start({
           type: 'update-library',
-          member_id: currentArtist.member_id,
+          folder_id: currentArtistScopeKey || undefined,
+          member_id: currentArtistScopeKey ? undefined : currentArtist.member_id,
           analyze_colors: true,
           priority: 0,
-        }),
-      });
-      const data = await response.json().catch(() => ({})) as { job?: LibraryJob; detail?: string };
-      if (!response.ok || !data.job) throw new Error(data.detail || `背景更新啟動失敗（${response.status}）`);
-      setLibraryJob(data.job);
+        });
+      if (!data.job) throw new Error('背景更新啟動失敗');
+      startLibraryJob(data.job);
       setLibraryAnnouncement('已開始在背景更新目前繪師；既有索引可繼續瀏覽，完成後列表會自動更新。');
-      window.dispatchEvent(new Event('web-viewer-library-job-changed'));
     } catch (error) {
       setLibraryAnnouncement(error instanceof Error ? error.message : '背景更新啟動失敗');
     }
-  }, [currentArtist]);
+  }, [currentArtist, startLibraryJob]);
 
   const handleArtistChanged = useCallback(() => {
-    imagePageCacheRef.current.clear();
+    clearImagePageCache();
     setSelectedArtist(null);
     void refreshDirectoryMetadata().catch(err => console.error('Failed to refresh after artist action:', err));
+  }, [clearImagePageCache, refreshDirectoryMetadata]);
+
+  const handleArtistMetadataChanged = useCallback(() => {
+    void refreshDirectoryMetadata().catch(err => console.error('Failed to refresh managed folder metadata:', err));
   }, [refreshDirectoryMetadata]);
 
   const handleArtistVisibilityChanged = useCallback(() => {
-    imagePageCacheRef.current.clear();
+    clearImagePageCache();
     void refreshDirectoryMetadata().catch(err => console.error('Failed to refresh artist list after visibility action:', err));
     fetchImages();
-  }, [fetchImages, refreshDirectoryMetadata]);
+  }, [clearImagePageCache, fetchImages, refreshDirectoryMetadata]);
 
   const handleOpenRecycleBin = useCallback(() => {
     setIsSettingsOpen(false);
@@ -1777,6 +1494,10 @@ export const App: React.FC = () => {
     void refreshDirectoryMetadata().catch(err => console.error(err));
   }, [applyWebConfig, fetchImages, loadWebConfig, refreshDirectoryMetadata]);
 
+  const handleOnboardingComplete = useCallback((config: WebConfig) => {
+    applyWebConfig(config);
+  }, [applyWebConfig]);
+
   if (!isWebConfigReady) {
     return (
       <div className="app-root__loading" aria-busy="true">
@@ -1786,7 +1507,7 @@ export const App: React.FC = () => {
   }
 
   if (!webConfigSnapshot.onboardingCompleted) {
-    return <FirstUseOnboarding initialConfig={webConfigSnapshot} onComplete={applyWebConfig} />;
+    return <FirstUseOnboarding initialConfig={webConfigSnapshot} onComplete={handleOnboardingComplete} />;
   }
 
   return (
@@ -1846,7 +1567,11 @@ export const App: React.FC = () => {
 
       <div
         className="webtoon-layout-shell relative flex flex-1 min-h-0 overflow-hidden"
-        style={{ '--viewer-sidebar-offset': isSidebarOpen ? '18rem' : '0px' } as React.CSSProperties}
+        style={{
+          '--viewer-sidebar-offset': isSidebarOpen && !isMobileViewport
+            ? `${effectiveSidebarWidth}px`
+            : '0px',
+        } as React.CSSProperties}
       >
         {isSidebarOpen && (
           <button
@@ -1860,9 +1585,13 @@ export const App: React.FC = () => {
 
         <Sidebar
           isOpen={isSidebarOpen}
+          sidebarWidth={effectiveSidebarWidth}
+          maxSidebarWidth={maxSidebarWidth}
+          onSidebarWidthChange={handleSidebarWidthChange}
+          onSidebarWidthCommit={handleSidebarWidthCommit}
           onClose={() => setIsSidebarOpen(false)}
           months={months}
-          artists={artists}
+          artists={displayArtists}
           selectedMonths={selectedMonths}
           setSelectedMonths={setSelectedMonths}
           selectedArtist={selectedArtist}
@@ -1890,12 +1619,13 @@ export const App: React.FC = () => {
         >
           {viewMode === 'grid' && (
           <GalleryGrid
-            images={images}
+            images={displayImages}
             totalImages={totalImages}
             currentPage={currentPage}
             itemsPerPage={itemsPerPage}
             thumbnailSize={thumbnailSize}
             onPageChange={handlePageChange}
+            onLoadPage={loadSelectionPage}
             onItemsPerPageChange={(num) => setItemsPerPage(num)}
             sortMode={sortMode}
             onSortModeChange={(mode) => setSortMode(mode)}
@@ -1915,7 +1645,7 @@ export const App: React.FC = () => {
             onResetAllFilters={handleResetAllFilters}
             groupMangaPosts={groupMangaPosts}
             onOpenWorkGroup={handleOpenWorkGroupModal}
-            artists={artists}
+            artists={displayArtists}
              monthIndexItems={monthIndexItems}
              onJumpToMonth={handleJumpToMonth}
              onPrefetchMonth={prefetchMonthPage}
@@ -1925,6 +1655,7 @@ export const App: React.FC = () => {
              destinationGlobalIndex={destinationGlobalIndex}
              restoreGlobalIndex={gridRestoreAnchor?.index ?? null}
              restoreRequestId={gridRestoreAnchor?.requestId ?? 0}
+             loadedPage={loadedPage}
              isLoading={isLoadingImages}
              isArtistLoading={isLoadingImages && selectedArtist !== null}
             isArtistUpdating={isArtistUpdating}
@@ -1937,7 +1668,7 @@ export const App: React.FC = () => {
 
           {viewMode === 'webtoon' && (
             <WebtoonFeed
-              images={images}
+              images={displayImages}
               blurEnabled={blurEnabled}
               demoMode={demoMode}
               initialIndex={webtoonStartAnchor?.index ?? null}
@@ -1955,8 +1686,12 @@ export const App: React.FC = () => {
               totalPages={Math.max(1, Math.ceil(totalImages / Math.max(1, itemsPerPage)))}
               mobileToolbarOpen={isWebtoonToolbarOpen}
               isMobileViewport={isMobileViewport}
+              videoMuted={webConfigSnapshot.videoMuted}
+              videoVolume={webConfigSnapshot.videoVolume}
+              videoAutoplay={webConfigSnapshot.videoAutoplay}
               onPageChange={handleWebtoonPageChange}
               onSettingsChange={handleWebtoonSettingsChange}
+              onVideoPreferenceChange={handleVideoPreferenceChange}
             />
           )}
 
@@ -2000,7 +1735,7 @@ export const App: React.FC = () => {
       {(fullscreenIndex !== null || viewMode === 'fullscreen') && images.length > 0 && (
         <FullscreenViewer
           key="fullscreen-viewer"
-          images={images}
+          images={displayImages}
           currentIndex={fullscreenIndex ?? 0}
           onClose={handleCloseFullscreen}
           onNavigate={handleNavigateFullscreen}
@@ -2019,7 +1754,20 @@ export const App: React.FC = () => {
           onToggleBlur={handleToggleBlur}
           simpleToolbar={fullscreenToolbarSimpleMode}
           onSimpleToolbarChange={handleFullscreenToolbarSimpleModeChange}
+          showToolbarByDefault={fullscreenShowToolbar}
+          onShowToolbarChange={handleFullscreenShowToolbarChange}
           showFilmstripByDefault={fullscreenShowThumbnails}
+          onShowFilmstripChange={handleFullscreenShowFilmstripChange}
+          fullscreenShowCheckerboard={webConfigSnapshot.fullscreenShowCheckerboard}
+          onCheckerboardChange={handleFullscreenCheckerboardChange}
+          fullscreenZoomMode={webConfigSnapshot.fullscreenZoomMode}
+          onZoomModeChange={handleFullscreenZoomModeChange}
+          videoSeekSeconds={webConfigSnapshot.fullscreenVideoSeekSeconds}
+          videoHoldPlaybackRate={webConfigSnapshot.fullscreenVideoHoldPlaybackRate}
+          videoMuted={webConfigSnapshot.videoMuted}
+          videoVolume={webConfigSnapshot.videoVolume}
+          videoAutoplay={webConfigSnapshot.videoAutoplay}
+          onVideoPreferenceChange={handleVideoPreferenceChange}
           pageOffset={Math.max(0, (currentPage - 1) * itemsPerPage)}
           totalImages={totalImages}
         />
@@ -2029,7 +1777,7 @@ export const App: React.FC = () => {
       {isEditMode && (
         <BatchEditToolbar
           selectedCount={selectedIds.size}
-          totalCount={images.length}
+          totalCount={totalImages}
           onSelectAll={handleSelectAll}
           onDeselectAll={handleDeselectAll}
           onDownloadSelected={handleDownloadSelected}
@@ -2069,7 +1817,7 @@ export const App: React.FC = () => {
         onSettingsSaved={handleSettingsSaved}
         onArtistVisibilityChanged={handleArtistVisibilityChanged}
         onOpenRecycleBin={handleOpenRecycleBin}
-        artists={artists}
+        artists={displayArtists}
       />
 
       <ArtistSettingsModal
@@ -2077,11 +1825,19 @@ export const App: React.FC = () => {
         artist={currentArtist}
         onClose={() => setIsArtistSettingsOpen(false)}
         onArtistChanged={handleArtistChanged}
+        onArtistMetadataChanged={handleArtistMetadataChanged}
       />
 
       <RecycleBinModal
         isOpen={isRecycleBinOpen}
         onClose={() => setIsRecycleBinOpen(false)}
+      />
+
+      <Toast
+        isOpen={!!toastMessage}
+        message={toastMessage || ''}
+        variant={toastVariant}
+        onClose={() => setToastMessage(null)}
       />
     </div>
   );

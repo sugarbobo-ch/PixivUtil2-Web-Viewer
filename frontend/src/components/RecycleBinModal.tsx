@@ -4,15 +4,11 @@ import { ConfirmModal } from './ConfirmModal';
 import { CustomSelect } from './CustomSelect';
 import { Badge, Button, IconButton, Input } from './ui';
 import { RecycleEntry } from '../types';
+import { apiClient } from '../api/client';
 
 interface RecycleBinModalProps {
   isOpen: boolean;
   onClose: () => void;
-}
-
-interface RecycleBinResponse {
-  entries?: RecycleEntry[];
-  total?: number;
 }
 
 const focusableSelector = [
@@ -54,10 +50,8 @@ export const RecycleBinModal: React.FC<RecycleBinModalProps> = ({ isOpen, onClos
     setLoading(true);
     setError(null);
     try {
-      const response = await fetch('/api/recycle-bin', { cache: 'no-store' });
-      const data = await response.json().catch(() => ({})) as RecycleBinResponse & { detail?: string };
-      if (!response.ok) throw new Error(data.detail || `讀取回收區失敗（${response.status}）`);
-      setEntries(Array.isArray(data.entries) ? data.entries : []);
+      const data = await apiClient.recycleBin.list();
+      setEntries(data.entries);
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : '讀取回收區失敗');
     } finally {
@@ -131,7 +125,7 @@ export const RecycleBinModal: React.FC<RecycleBinModalProps> = ({ isOpen, onClos
     Array.from(new Map(
       entries
         .filter(entry => entry.artist_name)
-        .map(entry => [String(entry.member_id ?? entry.artist_name), entry.artist_name]),
+        .map(entry => [entry.folder_id || String(entry.member_id ?? entry.artist_name), entry.artist_name]),
     ).entries())
       .map(([value, label]) => ({ value, label }))
       .sort((a, b) => a.label.localeCompare(b.label, 'zh-Hant'))
@@ -145,7 +139,7 @@ export const RecycleBinModal: React.FC<RecycleBinModalProps> = ({ isOpen, onClos
   const visibleEntries = useMemo(() => {
     const query = searchQuery.trim().toLocaleLowerCase();
     return entries.filter(entry => {
-      if (artistFilter !== 'all' && String(entry.member_id ?? entry.artist_name) !== artistFilter) return false;
+      if (artistFilter !== 'all' && (entry.folder_id || String(entry.member_id ?? entry.artist_name)) !== artistFilter) return false;
       if (!query) return true;
       return [entry.file_name, entry.artist_name, entry.original_path]
         .some(value => String(value || '').toLocaleLowerCase().includes(query));
@@ -153,11 +147,14 @@ export const RecycleBinModal: React.FC<RecycleBinModalProps> = ({ isOpen, onClos
   }, [artistFilter, entries, searchQuery]);
 
   const groupedEntries = useMemo(() => {
-    const groups = new Map<string, RecycleEntry[]>();
+    const groups = new Map<string, { label: string; entries: RecycleEntry[] }>();
     visibleEntries.forEach(entry => {
-      const key = entry.artist_name || '未分類作品';
-      const group = groups.get(key) || [];
-      group.push(entry);
+      const key = entry.folder_id || `legacy:${entry.member_id ?? entry.artist_name}`;
+      const group = groups.get(key) || {
+        label: entry.artist_name || '未分類作品',
+        entries: [],
+      };
+      group.entries.push(entry);
       groups.set(key, group);
     });
     return Array.from(groups.entries());
@@ -168,15 +165,14 @@ export const RecycleBinModal: React.FC<RecycleBinModalProps> = ({ isOpen, onClos
     setActionLoading(true);
     setError(null);
     try {
-      const endpoint = confirmTarget === 'all'
-        ? '/api/recycle-bin/send-all-to-system'
-        : `/api/recycle-bin/${encodeURIComponent(confirmTarget.trash_id)}/send-to-system`;
-      const response = await fetch(endpoint, { method: 'POST' });
-      const data = await response.json().catch(() => ({})) as { moved?: number; errors?: string[]; detail?: string };
-      if (!response.ok) throw new Error(data.detail || `移至系統資源回收筒失敗（${response.status}）`);
+      const data = confirmTarget === 'all'
+        ? await apiClient.recycleBin.sendAll()
+        : await apiClient.recycleBin.send(confirmTarget.trash_id);
       setConfirmTarget(null);
       await loadEntries();
-      if (data.errors?.length) setError(`已處理 ${data.moved ?? 0} 項，但仍有部分項目未完成：${data.errors.join('；')}`);
+      if (Array.isArray(data.errors) && data.errors.length > 0) {
+        setError(`已處理 ${typeof data.moved === 'number' ? data.moved : 0} 項，但仍有部分項目未完成：${data.errors.join('；')}`);
+      }
     } catch (actionError) {
       setError(actionError instanceof Error ? actionError.message : '移至系統資源回收筒失敗');
     } finally {
@@ -271,17 +267,17 @@ export const RecycleBinModal: React.FC<RecycleBinModalProps> = ({ isOpen, onClos
               </div>
             ) : (
               <div className="space-y-6">
-                {groupedEntries.map(([artistName, group]) => (
-                  <section key={artistName} aria-labelledby={`recycle-group-${artistName}`}>
+                {groupedEntries.map(([folderKey, group]) => (
+                  <section key={folderKey} aria-labelledby={`recycle-group-${folderKey}`}>
                     <div className="recycle-bin-modal__group-heading mb-2 flex items-center gap-2">
                       <Folder className="h-4 w-4" aria-hidden="true" />
-                      <h3 id={`recycle-group-${artistName}`} className="text-sm font-semibold">{artistName}</h3>
+                      <h3 id={`recycle-group-${folderKey}`} className="text-sm font-semibold">{group.label}</h3>
                       <Badge variant="neutral" size="xs" className="recycle-bin-modal__count">
-                        {group.length} 項
+                        {group.entries.length} 項
                       </Badge>
                     </div>
                     <div className="recycle-bin-modal__group overflow-hidden">
-                      {group.map(entry => (
+                      {group.entries.map(entry => (
                         <article key={entry.trash_id} className="recycle-bin-modal__row flex flex-wrap items-center gap-3 px-3 py-3 sm:px-4">
                           <div className="min-w-0 flex-1">
                             <p className="truncate text-sm font-semibold" title={entry.file_name}>{entry.file_name}</p>

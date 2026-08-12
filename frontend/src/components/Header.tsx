@@ -49,10 +49,10 @@ const isLibraryJobActive = (job?: LibraryJob | null) => (
 const getLibraryJobLabel = (job: LibraryJob) => {
   if (job.status === 'queued') return '排隊中';
   if (job.status === 'cancelling') return '正在停止…';
-  if (job.phase === 'discovering') return `讀取資料夾・${job.discovered.toLocaleString()}`;
-  if (job.phase === 'analyzing_colors') return `分析色彩・${job.processed.toLocaleString()} / ${job.total ?? '…'}`;
-  if (job.phase === 'organizing_cache') return `整理縮圖・${job.processed.toLocaleString()} / ${job.total ?? '…'}`;
-  return `更新資料庫・${job.processed.toLocaleString()} / ${job.total ?? '…'}`;
+  if (job.phase === 'discovering') return `讀取資料夾：${job.discovered.toLocaleString()}`;
+  if (job.phase === 'analyzing_colors') return `分析色彩：${job.processed.toLocaleString()} / ${job.total ?? '…'}`;
+  if (job.phase === 'organizing_cache') return `整理縮圖：${job.processed.toLocaleString()} / ${job.total ?? '…'}`;
+  return `更新資料庫：${job.processed.toLocaleString()} / ${job.total ?? '…'}`;
 };
 
 export const Header: React.FC<HeaderProps> = ({

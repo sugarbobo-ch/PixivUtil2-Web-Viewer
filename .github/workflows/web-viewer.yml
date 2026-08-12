@@ -1,0 +1,120 @@
+name: Web Viewer checks
+
+on:
+  push:
+    paths:
+      - "frontend/**"
+      - "backend/**"
+      - "scripts/measure-web-viewer-performance.py"
+      - "scripts/performance-fixture-server.py"
+      - "scripts/check-reduced-motion.py"
+      - "docs/refactor-todo.md"
+      - "docs/design-qa-settings-select.md"
+      - ".github/workflows/web-viewer.yml"
+  pull_request:
+    paths:
+      - "frontend/**"
+      - "backend/**"
+      - "scripts/measure-web-viewer-performance.py"
+      - "scripts/performance-fixture-server.py"
+      - "scripts/check-reduced-motion.py"
+      - "docs/refactor-todo.md"
+      - "docs/design-qa-settings-select.md"
+      - ".github/workflows/web-viewer.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  frontend:
+    name: Frontend typecheck, tests, and build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - name: Enable pnpm
+        run: corepack enable
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Typecheck
+        run: pnpm lint
+      - name: Unit tests
+        run: pnpm test
+      - name: Production build
+        run: pnpm build
+
+  backend:
+    name: Backend tests and compile checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.8.17"
+      - name: Install backend dependencies
+        run: uv sync --frozen --directory backend
+      - name: Run backend unit tests
+        working-directory: backend
+        run: uv run --project . python -m unittest discover -s tests -v
+      - name: Compile backend modules
+        run: >-
+          uv run --project backend python -m py_compile
+          backend/main.py backend/db.py backend/library_jobs.py backend/runtime_context.py
+          backend/routes/web_config.py backend/routes/library_jobs.py
+          backend/routes/directory.py backend/routes/gallery.py
+          backend/routes/pixiv_config.py
+          backend/services/media_source_service.py
+          backend/services/library_job_service.py backend/services/gallery_service.py
+          scripts/measure-web-viewer-performance.py
+          scripts/performance-fixture-server.py
+      - name: Check reduced-motion CSS contract
+        run: python scripts/check-reduced-motion.py
+
+  performance:
+    name: Performance threshold gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Start deterministic performance fixture
+        shell: bash
+        run: |
+          python scripts/performance-fixture-server.py --port 8765 > /tmp/web-viewer-performance-fixture.log 2>&1 &
+          echo $! > /tmp/web-viewer-performance-fixture.pid
+          sleep 1
+      - name: Run performance threshold gate
+        run: >-
+          python scripts/measure-web-viewer-performance.py
+          --base-url http://127.0.0.1:8765
+          --page-size 1
+          --api-samples 5
+          --thumbnail-samples 1
+          --api-p95-threshold-ms 750
+          --thumbnail-p95-threshold-ms 500
+          --library-job-threshold-ms 10000
+      - name: Stop deterministic performance fixture
+        if: always()
+        shell: bash
+        run: |
+          if [ -f /tmp/web-viewer-performance-fixture.pid ]; then
+            kill "$(cat /tmp/web-viewer-performance-fixture.pid)" || true
+          fi

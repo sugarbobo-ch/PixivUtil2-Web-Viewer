@@ -1,17 +1,30 @@
+import { SIDEBAR_DEFAULT_WIDTH } from './utils/sidebarLayout';
+
 export interface Artist {
+  folder_id?: string;
+  scope_key?: string;
+  index_scope_key?: string;
   member_id: number;
   name: string;
   artwork_count: number;
   folder_name?: string;
+  display_name?: string;
+  source_kind?: 'pixiv' | 'fanbox' | 'discord' | 'unknown';
+  identity_status?: 'inferred' | 'verified' | 'rejected' | 'unknown';
 }
 
 export interface HiddenArtist {
+  folder_id?: string;
+  scope_key?: string;
   member_id: number;
   folder_name: string;
+  name?: string;
+  display_name?: string;
   hidden_at: string;
 }
 
 export interface RecycleEntry {
+  folder_id?: string;
   trash_id: number;
   image_id: number;
   original_path: string;
@@ -44,7 +57,15 @@ export interface MonthItem {
   count: number;
 }
 
+export interface MonthIndexItem {
+  key: string;
+  label: string;
+  count: number;
+  offset?: number;
+}
+
 export interface ImageItem {
+  folder_id?: string;
   image_id: number;
   member_id: number;
   title: string;
@@ -64,6 +85,7 @@ export interface ImageItem {
 export type ViewerMode = 'fullscreen' | 'webtoon';
 export type ViewMode = 'grid' | ViewerMode;
 export type ThemeMode = 'dark' | 'light';
+export type FullscreenZoomMode = 'auto' | 'lock' | 'width' | 'height' | 'fit' | 'fill';
 export type SortMode =
   | 'newest_month'
   | 'newest_works_pages_ascending'
@@ -88,13 +110,23 @@ export interface WebConfig {
   defaultViewMode: ViewerMode;
   thumbnailSize: number;
   itemsPerPage: number;
+  sidebarWidth: number;
   autoOpenBrowser: boolean;
   groupMangaPosts: boolean;
   blurEnabled: boolean;
   demoMode: boolean;
   preloadImageCount: number;
   fullscreenToolbarSimpleMode: boolean;
+  fullscreenShowToolbar: boolean;
   fullscreenShowThumbnails: boolean;
+  fullscreenShowCheckerboard: boolean;
+  fullscreenZoomMode: FullscreenZoomMode;
+  fullscreenVideoSeekSeconds: number;
+  fullscreenVideoHoldPlaybackRate: number;
+  /** Shared video playback preference used by fullscreen and webtoon modes. */
+  videoMuted: boolean;
+  videoVolume: number;
+  videoAutoplay: boolean;
   webtoonImageScale: number;
   webtoonImageGap: number;
   webtoonShowInfo: boolean;
@@ -109,18 +141,31 @@ export interface WebConfig {
   onboardingCompleted: boolean;
 }
 
+export type WebConfigDraft = Omit<WebConfig, 'pixivConfigPath'> & {
+  pixivConfigPath: string;
+};
+
 export const DEFAULT_WEB_CONFIG: WebConfig = {
   webTheme: 'dark',
   defaultViewMode: 'fullscreen',
   thumbnailSize: 320,
   itemsPerPage: 200,
+  sidebarWidth: SIDEBAR_DEFAULT_WIDTH,
   autoOpenBrowser: true,
   groupMangaPosts: false,
   blurEnabled: false,
   demoMode: false,
   preloadImageCount: 3,
   fullscreenToolbarSimpleMode: true,
+  fullscreenShowToolbar: true,
   fullscreenShowThumbnails: true,
+  fullscreenShowCheckerboard: true,
+  fullscreenZoomMode: 'auto',
+  fullscreenVideoSeekSeconds: 5,
+  fullscreenVideoHoldPlaybackRate: 2,
+  videoMuted: false,
+  videoVolume: 1,
+  videoAutoplay: true,
   webtoonImageScale: 100,
   webtoonImageGap: 24,
   webtoonShowInfo: true,
@@ -133,6 +178,8 @@ export const DEFAULT_WEB_CONFIG: WebConfig = {
   mediaRootPath: '',
   onboardingCompleted: false,
 };
+
+export type VideoPreferencePatch = Partial<Pick<WebConfig, 'videoMuted' | 'videoVolume'>>;
 
 export type LibraryJobStatus =
   | 'queued'
@@ -166,6 +213,7 @@ export interface LibraryJob {
     scope_type: 'root' | 'artist' | 'directory';
     member_id: number | null;
     directory: string;
+    folder_id?: string;
   }>;
   priority?: number;
   automatic?: boolean;
@@ -175,6 +223,7 @@ export interface LibraryJob {
   processed: number;
   added: number;
   updated: number;
+  removed?: number;
   unchanged: number;
   conflicts: number;
   errors: number;
@@ -188,6 +237,21 @@ export interface LibraryJob {
   started_at: string | null;
   finished_at: string | null;
   updated_at: string;
+}
+
+export interface LibraryJobRequest {
+  type: LibraryJob['job_type'];
+  directory?: string;
+  directories?: string[];
+  member_id?: number;
+  member_ids?: number[];
+  scope_key?: string;
+  scope_keys?: string[];
+  folder_id?: string;
+  folder_ids?: string[];
+  all_artists?: boolean;
+  analyze_colors?: boolean;
+  priority?: number;
 }
 
 export interface ThumbnailCacheRecoveryJob {

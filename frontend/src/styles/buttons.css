@@ -278,6 +278,7 @@
 .fullscreen-viewer .ui-button,
 .gallery-grid-root .ui-button,
 .artist-sticky-nav .ui-button,
+.artist-sticky-nav__options-menu .ui-button,
 .manga-group-modal .ui-button,
 .webtoon-quick-toolbar .ui-button {
   --ui-button-surface: var(--viewer-control);

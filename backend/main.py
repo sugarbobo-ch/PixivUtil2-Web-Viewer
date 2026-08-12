@@ -5,7 +5,6 @@ import hashlib
 import hmac
 import os
 import re
-import configparser
 import secrets
 import shutil
 import tempfile
@@ -17,16 +16,25 @@ from typing import List, Dict, Any, Optional, Literal
 from fastapi import FastAPI, HTTPException, Query, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.background import BackgroundTask
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from PIL import Image
 
 import db
 import config_paths
-import source_resolver
 import library_jobs
 import path_picker
 import recycle_bin
+from runtime_context import RuntimeContext
+from services.media_source_service import MediaSourceService
+from services.library_job_service import LibraryJobService
+from services.gallery_service import GalleryService
+from services.web_config_service import WebConfigService
+from routes.library_jobs import router as library_jobs_router
+from routes.directory import router as directory_router
+from routes.gallery import router as gallery_router
+from routes.pixiv_config import router as pixiv_config_router
+from routes.web_config import router as web_config_router
 
 LIBRARY_JOB_MANAGER: Optional[library_jobs.LibraryJobManager] = None
 
@@ -36,23 +44,50 @@ async def lifespan(_app: FastAPI):
     """Own background workers for exactly one ASGI application lifespan."""
     global LIBRARY_JOB_MANAGER
     manager = library_jobs.LibraryJobManager(auto_reconcile=True)
+    web_config_service = WebConfigService(
+        config_paths.WEB_CONFIG_PATH,
+        DEFAULT_WEB_CONFIG,
+        normalize_web_config_file,
+    )
+    media_source_service = MediaSourceService()
+    library_job_service = LibraryJobService(manager)
+    gallery_service = GalleryService()
+    runtime_context = RuntimeContext.create(
+        manager,
+        web_config_service,
+        media_source_service,
+        library_job_service,
+        gallery_service,
+    )
     LIBRARY_JOB_MANAGER = manager
+    _app.state.runtime_context = runtime_context
     try:
         yield
     finally:
-        manager.close()
+        runtime_context.close()
+        if getattr(_app.state, "runtime_context", None) is runtime_context:
+            delattr(_app.state, "runtime_context")
         if LIBRARY_JOB_MANAGER is manager:
             LIBRARY_JOB_MANAGER = None
 
 
 def get_library_job_manager() -> library_jobs.LibraryJobManager:
-    manager = LIBRARY_JOB_MANAGER
+    runtime_context = getattr(app.state, "runtime_context", None)
+    manager = runtime_context.library_job_manager if runtime_context is not None else LIBRARY_JOB_MANAGER
     if manager is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Media library service is not ready.",
         )
     return manager
+
+
+def get_library_job_service() -> LibraryJobService:
+    runtime_context = getattr(app.state, "runtime_context", None)
+    service = runtime_context.library_job_service if runtime_context is not None else None
+    if service is not None:
+        return service
+    return LibraryJobService(get_library_job_manager())
 
 
 app = FastAPI(
@@ -86,21 +121,46 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.include_router(web_config_router)
+app.include_router(library_jobs_router)
+app.include_router(directory_router)
+app.include_router(gallery_router)
+app.include_router(pixiv_config_router)
 
 WORKSPACE_ROOT = config_paths.WORKSPACE_ROOT
 THUMB_CACHE_DIR = os.path.join(os.path.dirname(__file__), "cache_thumbs")
 os.makedirs(THUMB_CACHE_DIR, exist_ok=True)
-THUMB_CACHE_HEADERS = {"Cache-Control": "public, max-age=86400, immutable"}
+# The cache key is based on the source fingerprint, but the browser URL also
+# needs to be revalidated because it intentionally stays human-readable. A
+# stale immutable response would keep showing a failed thumbnail after a file
+# has been completed or repaired on disk.
+THUMB_CACHE_HEADERS = {"Cache-Control": "public, no-cache, must-revalidate"}
 MEDIA_CACHE_HEADERS = {"Cache-Control": "private, max-age=300, stale-while-revalidate=60"}
 THUMB_GENERATION_LIMIT = 2
 THUMB_GENERATION_SEMAPHORE = threading.BoundedSemaphore(THUMB_GENERATION_LIMIT)
 THUMB_GENERATION_LOCK = threading.Lock()
 THUMB_GENERATION_INFLIGHT: dict[str, threading.Event] = {}
 
-WEB_CONFIG_PATH = config_paths.WEB_CONFIG_PATH
+def get_media_source_service() -> MediaSourceService:
+    runtime_context = getattr(app.state, "runtime_context", None)
+    if runtime_context is not None and runtime_context.media_source_service is not None:
+        return runtime_context.media_source_service
+    return MediaSourceService()
 
 
-def generate_thumbnail_once(thumb_path: str, generator) -> bool:
+def is_valid_thumbnail_file(thumb_path: str) -> bool:
+    """Check that a generated WebP can be decoded before serving it."""
+    if not os.path.isfile(thumb_path):
+        return False
+    try:
+        with Image.open(thumb_path) as image:
+            image.verify()
+        return True
+    except Exception:
+        return False
+
+
+def generate_thumbnail_once(thumb_path: str, generator, validator=None) -> bool:
     """Coordinate one thumbnail key and bound CPU/disk-heavy generation.
 
     FastAPI executes this synchronous route in a worker pool.  Without a
@@ -109,7 +169,7 @@ def generate_thumbnail_once(thumb_path: str, generator) -> bool:
     from observing a partially written WebP.
     """
     with THUMB_GENERATION_LOCK:
-        if os.path.exists(thumb_path):
+        if os.path.exists(thumb_path) and (validator is None or validator(thumb_path)):
             return True
         event = THUMB_GENERATION_INFLIGHT.get(thumb_path)
         if event is None:
@@ -121,7 +181,7 @@ def generate_thumbnail_once(thumb_path: str, generator) -> bool:
 
     if not owner:
         event.wait()
-        return os.path.exists(thumb_path)
+        return os.path.exists(thumb_path) and (validator is None or validator(thumb_path))
 
     temporary_path = ""
     started = time.perf_counter()
@@ -141,7 +201,9 @@ def generate_thumbnail_once(thumb_path: str, generator) -> bool:
         if generated and os.path.exists(temporary_path):
             os.replace(temporary_path, thumb_path)
             temporary_path = ""
-        return generated and os.path.exists(thumb_path)
+        return generated and os.path.exists(thumb_path) and (
+            validator is None or validator(thumb_path)
+        )
     finally:
         if temporary_path:
             try:
@@ -155,11 +217,14 @@ def generate_thumbnail_once(thumb_path: str, generator) -> bool:
         if elapsed_ms > 250:
             print(f"thumbnail generation {elapsed_ms:.0f}ms: {os.path.basename(thumb_path)}")
 
+LEGACY_SIDEBAR_DEFAULT_WIDTHS = {300, 500, "300", "500"}
+
 DEFAULT_WEB_CONFIG = {
     "webTheme": "dark",
     "defaultViewMode": "fullscreen",
     "thumbnailSize": 320,
     "itemsPerPage": 200,
+    "sidebarWidth": 320,
     "autoOpenBrowser": True,
     "pixivConfigPath": "",
     "librarySourceMode": "unconfigured",
@@ -170,7 +235,15 @@ DEFAULT_WEB_CONFIG = {
     "demoMode": False,
     "preloadImageCount": 3,
     "fullscreenToolbarSimpleMode": True,
+    "fullscreenShowToolbar": True,
     "fullscreenShowThumbnails": True,
+    "fullscreenShowCheckerboard": True,
+    "fullscreenZoomMode": "auto",
+    "fullscreenVideoSeekSeconds": 5,
+    "fullscreenVideoHoldPlaybackRate": 2,
+    "videoMuted": True,
+    "videoVolume": 1,
+    "videoAutoplay": True,
     "webtoonImageScale": 100,
     "webtoonImageGap": 24,
     "webtoonShowInfo": True,
@@ -186,11 +259,23 @@ def normalize_web_config_file(data: Any) -> Dict[str, Any]:
     """Fill in settings introduced after older web_config.json versions."""
     current = dict(data) if isinstance(data, dict) else {}
 
+    # Older resizable-sidebar releases used 300px and 500px as their defaults.
+    # Upgrade those legacy defaults so existing installs get the compact
+    # two-chip base width while explicitly resized values remain unchanged.
+    if current.get("sidebarWidth") in LEGACY_SIDEBAR_DEFAULT_WIDTHS:
+        current["sidebarWidth"] = DEFAULT_WEB_CONFIG["sidebarWidth"]
+
     # Migrate the old mosaic name to the canonical blur name while keeping old
     # config files and API clients readable.
     if "blurEnabled" not in current and "mosaicEnabled" in current:
         current["blurEnabled"] = current["mosaicEnabled"]
     current.pop("mosaicEnabled", None)
+
+    # The old mute preference was fullscreen-only. Keep existing users' choice
+    # while moving it to the shared video preference contract.
+    if "videoMuted" not in current and "fullscreenVideoMuted" in current:
+        current["videoMuted"] = current["fullscreenVideoMuted"]
+    current.pop("fullscreenVideoMuted", None)
 
     normalized = {**DEFAULT_WEB_CONFIG, **current}
     if "onboardingCompleted" not in current:
@@ -204,6 +289,13 @@ def normalize_web_config_file(data: Any) -> Dict[str, Any]:
     normalized["defaultViewMode"] = (
         "webtoon" if normalized.get("defaultViewMode") == "webtoon" else "fullscreen"
     )
+    normalized["webTheme"] = "light" if normalized.get("webTheme") == "light" else "dark"
+    if normalized.get("fullscreenZoomMode") not in {"auto", "lock", "width", "height", "fit", "fill"}:
+        normalized["fullscreenZoomMode"] = DEFAULT_WEB_CONFIG["fullscreenZoomMode"]
+    if normalized.get("librarySourceMode") not in {"unconfigured", "pixiv", "folder"}:
+        normalized["librarySourceMode"] = DEFAULT_WEB_CONFIG["librarySourceMode"]
+    normalized["pixivConfigPath"] = str(normalized.get("pixivConfigPath") or "")
+    normalized["mediaRootPath"] = str(normalized.get("mediaRootPath") or "")
 
     # Preserve the old thumbnailWidth/thumbnailHeight settings during migration.
     if "thumbnailSize" not in current:
@@ -211,14 +303,22 @@ def normalize_web_config_file(data: Any) -> Dict[str, Any]:
             "thumbnailWidth",
             current.get("thumbnailHeight", DEFAULT_WEB_CONFIG["thumbnailSize"]),
         )
+    normalized.pop("thumbnailWidth", None)
+    normalized.pop("thumbnailHeight", None)
 
     for key in (
+        "autoOpenBrowser",
+        "groupMangaPosts",
         "blurEnabled",
         "demoMode",
         "analyzeColorsAfterLibraryUpdate",
         "manageThumbnailCache",
         "fullscreenToolbarSimpleMode",
+        "fullscreenShowToolbar",
         "fullscreenShowThumbnails",
+        "fullscreenShowCheckerboard",
+        "videoMuted",
+        "videoAutoplay",
         "onboardingCompleted",
     ):
         value = normalized.get(key)
@@ -227,6 +327,11 @@ def normalize_web_config_file(data: Any) -> Dict[str, Any]:
         else:
             normalized[key] = bool(value)
     for key, fallback, minimum, maximum in (
+        ("thumbnailSize", 320, 16, 4096),
+        ("itemsPerPage", 200, 1, 5000),
+        ("sidebarWidth", 320, 224, 560),
+        ("preloadImageCount", 3, 0, 10),
+        ("fullscreenVideoSeekSeconds", 5, 1, 60),
         ("webtoonImageScale", 100, 30, 100),
         ("webtoonImageGap", 24, 0, 300),
     ):
@@ -234,6 +339,20 @@ def normalize_web_config_file(data: Any) -> Dict[str, Any]:
             normalized[key] = max(minimum, min(maximum, int(normalized.get(key, fallback))))
         except (TypeError, ValueError):
             normalized[key] = fallback
+    try:
+        normalized["fullscreenVideoHoldPlaybackRate"] = round(
+            max(1.25, min(4, float(normalized.get("fullscreenVideoHoldPlaybackRate", 2)))),
+            2,
+        )
+    except (TypeError, ValueError):
+        normalized["fullscreenVideoHoldPlaybackRate"] = DEFAULT_WEB_CONFIG["fullscreenVideoHoldPlaybackRate"]
+    try:
+        normalized["videoVolume"] = round(
+            max(0, min(1, float(normalized.get("videoVolume", 1)))),
+            2,
+        )
+    except (TypeError, ValueError):
+        normalized["videoVolume"] = DEFAULT_WEB_CONFIG["videoVolume"]
     for key in ("webtoonShowInfo", "webtoonShowPageNumber", "webtoonShowThumbnails"):
         value = normalized.get(key)
         if isinstance(value, str):
@@ -252,31 +371,16 @@ def normalize_web_config_file(data: Any) -> Dict[str, Any]:
 
 
 def get_root_directory() -> str:
-    return config_paths.get_media_root_directory()
+    return get_media_source_service().root_directory()
 
 
 def resolve_image_path(image_id: Optional[int], save_name: Optional[str]) -> Optional[str]:
-    """Dynamically resolves local media file path without mutating SQLite DB."""
+    """Resolve a local media path through the runtime source boundary."""
     try:
-        root_dir = os.path.abspath(get_root_directory())
+        root_directory = get_root_directory()
     except config_paths.MediaSourceConfigurationError:
         return None
-
-    if save_name:
-        candidate = os.path.abspath(
-            save_name if os.path.isabs(save_name) else os.path.join(root_dir, save_name)
-        )
-        if (
-            db._is_path_within(candidate, root_dir)
-            and not db.is_internal_media_path(candidate)
-            and os.path.isfile(candidate)
-        ):
-            return candidate
-
-    # Do not fall back to a recursive source-tree search. Gallery snapshots
-    # already carry the canonical path; a missing path should be reported as
-    # missing and repaired by a scoped index job, not by an interactive request.
-    return None
+    return get_media_source_service().resolve_image_path(image_id, save_name, root_directory)
 
 
 class BatchDeleteItem(BaseModel):
@@ -299,36 +403,6 @@ class BatchDownloadRequest(BaseModel):
     items: List[BatchDownloadItem] = Field(default_factory=list)
 
 
-class RescanRequest(BaseModel):
-    directory: Optional[str] = None
-
-
-class LibraryJobRequest(BaseModel):
-    type: Literal["update-library", "analyze-missing-colors", "organize-thumbnail-cache"] = "update-library"
-    directory: Optional[str] = None
-    directories: List[str] = Field(default_factory=list)
-    member_id: Optional[int] = None
-    member_ids: List[int] = Field(default_factory=list)
-    all_artists: bool = False
-    analyze_colors: bool = True
-    priority: Optional[int] = None
-
-
-class LibrarySourceInspectRequest(BaseModel):
-    mode: Literal["pixiv", "folder"]
-    path: str
-
-
-class PixivConfigItemUpdate(BaseModel):
-    section: str
-    option: str
-    value: str
-
-
-class BulkPixivConfigUpdate(BaseModel):
-    updates: List[PixivConfigItemUpdate]
-
-
 class OpenMediaRequest(BaseModel):
     path: str
     image_id: Optional[int] = None
@@ -346,10 +420,6 @@ class SystemPickerRequest(BaseModel):
         "ffmpeg-executable",
         "fanbox-list-file",
     ]
-
-
-class ArtistVisibilityRequest(BaseModel):
-    folder_name: str = ""
 
 
 def _validate_picker_origin(request: Request) -> None:
@@ -384,545 +454,6 @@ def open_system_picker(req: SystemPickerRequest, request: Request):
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
     except path_picker.PathPickerError as error:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)) from error
-
-
-# --- Web Viewer Dedicated Config API (web_config.json) ---
-
-@app.get("/api/web-config")
-def get_web_config():
-    if not os.path.exists(WEB_CONFIG_PATH):
-        default_config = dict(DEFAULT_WEB_CONFIG)
-        with open(WEB_CONFIG_PATH, "w", encoding="utf-8") as f:
-            json.dump(default_config, f, indent=2)
-        return default_config
-    try:
-        with open(WEB_CONFIG_PATH, "r", encoding="utf-8") as f:
-            current = json.load(f)
-        normalized = normalize_web_config_file(current)
-        if normalized != current:
-            with open(WEB_CONFIG_PATH, "w", encoding="utf-8") as f:
-                json.dump(normalized, f, indent=2)
-        return normalized
-    except Exception as err:
-        raise HTTPException(status_code=500, detail=f"Failed to read web_config.json: {err}")
-
-
-@app.post("/api/web-config")
-def update_web_config(data: Dict[str, Any]):
-    try:
-        current = {}
-        if os.path.exists(WEB_CONFIG_PATH):
-            with open(WEB_CONFIG_PATH, "r", encoding="utf-8") as f:
-                current = json.load(f)
-        current = normalize_web_config_file(current)
-        incoming = dict(data)
-        if "blurEnabled" not in incoming and "mosaicEnabled" in incoming:
-            incoming["blurEnabled"] = incoming["mosaicEnabled"]
-        incoming.pop("mosaicEnabled", None)
-        if "pixivConfigPath" in data:
-            configured_path = data.get("pixivConfigPath")
-            if configured_path:
-                try:
-                    incoming["pixivConfigPath"] = path_picker.validate_selected_path(
-                        str(configured_path),
-                        "pixiv-config",
-                        "existing-file",
-                    )
-                except path_picker.PathPickerError as error:
-                    raise HTTPException(status_code=422, detail=str(error)) from error
-        if "librarySourceMode" in data and data.get("librarySourceMode") not in {
-            "unconfigured", "pixiv", "folder"
-        }:
-            raise HTTPException(status_code=422, detail="不支援的媒體來源模式。")
-        effective_source_mode = incoming.get("librarySourceMode", current.get("librarySourceMode"))
-        if "mediaRootPath" in data:
-            configured_root = data.get("mediaRootPath")
-            if effective_source_mode == "pixiv":
-                incoming["mediaRootPath"] = ""
-            elif configured_root:
-                try:
-                    incoming["mediaRootPath"] = path_picker.validate_selected_path(
-                        str(configured_root), "root-directory", "folder"
-                    )
-                except path_picker.PathPickerError as error:
-                    raise HTTPException(status_code=422, detail=str(error)) from error
-
-        current.update(incoming)
-        current = normalize_web_config_file(current)
-        if current.get("librarySourceMode") == "pixiv":
-            # Pixiv mode derives its read-only media root exclusively from
-            # config.ini. Never retain a folder-only source beside it.
-            current["mediaRootPath"] = ""
-        db.PIXIV_DB_PATH = config_paths.get_pixiv_database_path(current)
-        if "thumbnailSize" in incoming:
-            current.pop("thumbnailWidth", None)
-            current.pop("thumbnailHeight", None)
-        with open(WEB_CONFIG_PATH, "w", encoding="utf-8") as f:
-            json.dump(current, f, indent=2)
-        return {"status": "success", "webConfig": current}
-    except HTTPException:
-        raise
-    except Exception as err:
-        raise HTTPException(status_code=500, detail=f"Failed to save web_config.json: {err}")
-
-
-# --- PixivUtil2 Complete config.ini All-Section API ---
-
-@app.post("/api/library/source/inspect")
-def inspect_library_source(req: LibrarySourceInspectRequest):
-    try:
-        if req.mode == "folder":
-            root_directory = path_picker.validate_selected_path(req.path, "root-directory", "folder")
-            return {
-                "mode": "folder",
-                "rootDirectory": root_directory,
-                "databaseDetected": False,
-                "databasePath": None,
-            }
-
-        config_path = path_picker.validate_selected_path(req.path, "pixiv-config", "existing-file")
-        parser = configparser.ConfigParser(interpolation=None)
-        try:
-            parser.read(config_path, encoding="utf-8")
-        except (OSError, configparser.Error) as error:
-            raise HTTPException(status_code=422, detail=f"無法讀取 config.ini：{error}") from error
-        root_directory = parser.get("Settings", "rootDirectory", fallback="").strip()
-        if not root_directory:
-            raise HTTPException(status_code=422, detail="config.ini 缺少 Settings.rootDirectory。")
-        root_directory = os.path.abspath(os.path.expandvars(os.path.expanduser(root_directory)))
-        if not os.path.isdir(root_directory):
-            raise HTTPException(status_code=422, detail=f"config.ini 指向的圖片資料夾不存在：{root_directory}")
-        database_path = os.path.join(os.path.dirname(config_path), "db.sqlite")
-        return {
-            "mode": "pixiv",
-            "configPath": config_path,
-            "rootDirectory": root_directory,
-            "databaseDetected": os.path.isfile(database_path),
-            "databasePath": database_path,
-        }
-    except path_picker.PathPickerError as error:
-        raise HTTPException(status_code=422, detail=str(error)) from error
-
-
-@app.get("/api/pixiv-config")
-def get_pixiv_config():
-    config_path = config_paths.get_pixiv_config_path()
-    backup_path = config_paths.get_backup_path(config_path)
-    if not os.path.exists(config_path):
-        raise HTTPException(status_code=404, detail=f"找不到 PixivUtil2 設定檔：{config_path}")
-    try:
-        config = configparser.ConfigParser(interpolation=None)
-        config.read(config_path, encoding="utf-8")
-        result = {}
-        for section in config.sections():
-            result[section] = dict(config.items(section))
-        return {
-            "sections": result,
-            "hasBackup": os.path.exists(backup_path),
-            "configPath": config_path,
-            "backupPath": backup_path,
-            "defaultConfigPath": config_paths.DEFAULT_CONFIG_INI_PATH,
-            "usingDefaultPath": os.path.normcase(config_path) == os.path.normcase(config_paths.DEFAULT_CONFIG_INI_PATH),
-            "databasePath": config_paths.get_pixiv_database_path(),
-            "databaseDetected": os.path.isfile(config_paths.get_pixiv_database_path()),
-        }
-    except Exception as err:
-        raise HTTPException(status_code=500, detail=f"Failed to parse config.ini: {err}")
-
-
-@app.post("/api/pixiv-config")
-def update_pixiv_config(req: BulkPixivConfigUpdate):
-    config_path = config_paths.get_pixiv_config_path()
-    backup_path = config_paths.get_backup_path(config_path)
-    if not os.path.exists(config_path):
-        raise HTTPException(status_code=404, detail=f"找不到 PixivUtil2 設定檔：{config_path}")
-
-    # Step 1: Backup to config.ini.bak
-    try:
-        shutil.copyfile(config_path, backup_path)
-    except Exception as ex:
-        raise HTTPException(status_code=500, detail=f"Failed to create backup config.ini.bak: {ex}")
-
-    # Step 2: Update specified sections and options
-    try:
-        config = configparser.ConfigParser(interpolation=None)
-        config.read(config_path, encoding="utf-8")
-
-        for item in req.updates:
-            if not config.has_section(item.section):
-                config.add_section(item.section)
-            config.set(item.section, item.option, item.value)
-
-        with open(config_path, "w", encoding="utf-8") as f:
-            config.write(f)
-
-        return {
-            "status": "success",
-            "message": "config.ini updated safely.",
-            "hasBackup": True,
-            "configPath": config_path,
-            "backupPath": backup_path
-        }
-    except Exception as err:
-        if os.path.exists(backup_path):
-            shutil.copyfile(backup_path, config_path)
-        raise HTTPException(status_code=500, detail=f"Failed to write config.ini (restored from backup): {err}")
-
-
-@app.post("/api/settings/backup")
-def backup_settings():
-    config_path = config_paths.get_pixiv_config_path()
-    backup_path = config_paths.get_backup_path(config_path)
-    if not os.path.exists(config_path):
-        raise HTTPException(status_code=404, detail=f"找不到 PixivUtil2 設定檔：{config_path}")
-
-    try:
-        shutil.copyfile(config_path, backup_path)
-        return {
-            "status": "success",
-            "message": "PixivUtil2 設定檔已建立手動備份。",
-            "hasBackup": True,
-            "configPath": config_path,
-            "backupPath": backup_path
-        }
-    except Exception as err:
-        raise HTTPException(status_code=500, detail=f"Failed to create config backup: {err}")
-
-
-@app.post("/api/settings/restore")
-def restore_settings():
-    config_path = config_paths.get_pixiv_config_path()
-    backup_path = config_paths.get_backup_path(config_path)
-    if not os.path.exists(backup_path):
-        raise HTTPException(status_code=404, detail=f"找不到備份檔：{backup_path}")
-    try:
-        shutil.copyfile(backup_path, config_path)
-        return {
-            "status": "success",
-            "message": "config.ini successfully restored from backup.",
-            "configPath": config_path,
-            "backupPath": backup_path,
-            "hasBackup": True
-        }
-    except Exception as err:
-        raise HTTPException(status_code=500, detail=f"Failed to restore config.ini: {err}")
-
-
-@app.post("/api/rescan", status_code=status.HTTP_202_ACCEPTED)
-def rescan_directory(req: RescanRequest):
-    try:
-        target_dir = os.path.abspath(get_root_directory())
-    except config_paths.MediaSourceConfigurationError as error:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)) from error
-    if req.directory and os.path.normcase(os.path.abspath(req.directory)) != os.path.normcase(target_dir):
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="只能更新目前設定的媒體來源根目錄。",
-        )
-    if not os.path.isdir(target_dir):
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Directory does not exist: {target_dir}",
-        )
-    manager = get_library_job_manager()
-    try:
-        job = manager.start(
-            "update-library",
-            target_dir,
-            analyze_colors=True,
-            scopes=[{
-                "scope_key": db.get_root_scope_key(target_dir),
-                "scope_type": "root",
-                "member_id": None,
-                "directory": target_dir,
-            }],
-            priority=20,
-        )
-    except library_jobs.LibraryJobAlreadyRunning as error:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={"message": "A media library job is already running.", "job": error.job},
-        ) from error
-    return {"job": job}
-
-
-@app.post("/api/library/jobs", status_code=status.HTTP_202_ACCEPTED)
-def start_library_job(req: LibraryJobRequest):
-    try:
-        configured_root = os.path.abspath(get_root_directory())
-    except config_paths.MediaSourceConfigurationError as error:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)) from error
-    target_dir = configured_root
-    if req.directory and os.path.normcase(os.path.abspath(req.directory)) != os.path.normcase(configured_root):
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="只能更新目前設定的媒體來源根目錄。",
-        )
-    if req.type != "organize-thumbnail-cache" and not os.path.isdir(target_dir):
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Directory does not exist: {target_dir}",
-        )
-
-    scopes: List[Dict[str, Any]] = []
-    if req.type == "update-library":
-        requested_member_ids = list(dict.fromkeys([
-            *([req.member_id] if req.member_id is not None else []),
-            *[int(member_id) for member_id in req.member_ids],
-        ]))
-        if req.all_artists:
-            requested_member_ids.extend(
-                int(scope["member_id"])
-                for scope in db.get_index_scopes(scope_type="artist")
-                if scope.get("member_id") is not None
-            )
-            requested_member_ids = list(dict.fromkeys(requested_member_ids))
-
-        for member_id in requested_member_ids:
-            scope = db.get_artist_scope(member_id)
-            if scope is None:
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail=f"Artist scope not discovered: {member_id}",
-                )
-            scope_directory = os.path.abspath(scope["directory"])
-            if (
-                not db._is_path_within(scope_directory, configured_root)
-                or os.path.normcase(os.path.dirname(scope_directory)) != os.path.normcase(configured_root)
-            ):
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail=f"Artist scope is outside the configured media source: {member_id}",
-                )
-            scopes.append({
-                "scope_key": scope["scope_key"],
-                "scope_type": "artist",
-                "member_id": int(member_id),
-                "directory": scope_directory,
-            })
-
-        for directory in req.directories:
-            resolved_directory = os.path.abspath(directory)
-            if not db._is_path_within(resolved_directory, configured_root):
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail=f"Directory is outside the configured media source: {resolved_directory}",
-                )
-            if not os.path.isdir(resolved_directory):
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail=f"Directory does not exist: {resolved_directory}",
-                )
-            scopes.append({
-                "scope_key": db.get_index_scope_key(resolved_directory),
-                "scope_type": "directory",
-                "member_id": None,
-                "directory": resolved_directory,
-            })
-
-        if not scopes:
-            scopes = [{
-                "scope_key": db.get_root_scope_key(target_dir),
-                "scope_type": "root",
-                "member_id": None,
-                "directory": target_dir,
-            }]
-
-    priority = req.priority
-    if priority is None:
-        priority = 0 if req.member_id is not None else 20 if req.member_ids else 50
-    priority = max(0, min(100, int(priority)))
-
-    manager = get_library_job_manager()
-    try:
-        job = manager.start(
-            req.type,
-            target_dir,
-            analyze_colors=req.analyze_colors,
-            scopes=scopes or None,
-            priority=priority,
-        )
-    except library_jobs.LibraryJobAlreadyRunning as error:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={"message": "A media library job is already running.", "job": error.job},
-        )
-    except ValueError as error:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error))
-    return {"job": job}
-
-
-@app.get("/api/library/jobs/current")
-def read_current_library_job():
-    return {"job": get_library_job_manager().current()}
-
-
-@app.get("/api/library/jobs/{job_id}")
-def read_library_job(job_id: str):
-    job = get_library_job_manager().get(job_id)
-    if job is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Library job not found")
-    return {"job": job}
-
-
-@app.post("/api/library/jobs/{job_id}/cancel")
-def cancel_library_job(job_id: str):
-    job = get_library_job_manager().cancel(job_id)
-    if job is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Library job not found")
-    return {"job": job}
-
-
-@app.get("/api/library/stats")
-def read_library_stats():
-    return library_jobs.get_thumbnail_cache_stats()
-
-
-@app.get("/api/library/cache/{job_id}/entries")
-def read_library_cache_entries(
-    job_id: str,
-    offset: int = Query(0, ge=0),
-    limit: int = Query(24, ge=1, le=100),
-):
-    try:
-        return library_jobs.get_thumbnail_cache_recovery_entries(job_id, offset=offset, limit=limit)
-    except FileNotFoundError as error:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
-    except ValueError as error:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)) from error
-
-
-@app.get("/api/library/cache/{job_id}/preview/{recovery_name}")
-def read_library_cache_preview(job_id: str, recovery_name: str):
-    try:
-        preview_path = library_jobs.get_thumbnail_cache_recovery_path(job_id, recovery_name)
-    except FileNotFoundError as error:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
-    except ValueError as error:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)) from error
-    return FileResponse(
-        preview_path,
-        media_type="image/webp",
-        headers={"Cache-Control": "private, max-age=300"},
-    )
-
-
-@app.delete("/api/library/cache/{job_id}")
-def move_library_cache_to_recycle_bin(job_id: str):
-    active_job = get_library_job_manager().current()
-    if active_job and active_job.get("status") in db.LIBRARY_JOB_ACTIVE_STATUSES:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="請先等待目前的縮圖整理或還原工作完成。",
-        )
-    try:
-        result = library_jobs.move_thumbnail_cache_recovery_to_recycle_bin(job_id)
-    except FileNotFoundError as error:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
-    except ValueError as error:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)) from error
-    return {"status": "success", **result}
-
-
-@app.post("/api/library/cache/{job_id}/restore")
-def restore_library_cache(job_id: str):
-    active_job = get_library_job_manager().current()
-    if active_job and active_job.get("status") in db.LIBRARY_JOB_ACTIVE_STATUSES:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="請先等待目前的媒體資料庫工作完成。",
-        )
-    try:
-        result = library_jobs.restore_thumbnail_cache(job_id)
-    except FileNotFoundError as error:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
-    except ValueError as error:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)) from error
-    return {"status": "success", **result}
-
-
-@app.get("/api/artists")
-def read_artists():
-    return db.get_all_artists()
-
-
-@app.get("/api/hidden-artists")
-def read_hidden_artists():
-    return db.get_hidden_artists()
-
-
-@app.post("/api/artists/{artist_id}/hide")
-def hide_artist(artist_id: int, req: ArtistVisibilityRequest = ArtistVisibilityRequest()):
-    if artist_id == -1:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="未分類圖片無法隱藏")
-    folder_name = req.folder_name.strip()
-    if not folder_name:
-        folder_name = next(
-            (
-                str(artist.get("folder_name") or artist.get("name") or "")
-                for artist in db.get_all_artists()
-                if int(artist.get("member_id", 0)) == artist_id
-            ),
-            "",
-        )
-    db.hide_artist(artist_id, folder_name)
-    db.invalidate_scan_cache()
-    return {"status": "hidden", "member_id": artist_id, "folder_name": folder_name}
-
-
-@app.post("/api/artists/{artist_id}/unhide")
-def unhide_artist(artist_id: int):
-    changed = db.unhide_artist(artist_id)
-    db.invalidate_scan_cache()
-    return {"status": "visible", "member_id": artist_id, "changed": changed}
-
-
-@app.get("/api/source-link")
-def read_source_link(path: str = Query(..., min_length=1)):
-    """Resolve a verified Pixiv/FANBOX source page for one local file."""
-    return source_resolver.resolve_source_link(path)
-
-
-@app.get("/api/artist-source-link")
-def read_artist_source_link(artist_id: int = Query(...)):
-    """Resolve source pages only for the currently selected artist."""
-    return source_resolver.resolve_artist_source(artist_id)
-
-
-@app.get("/api/months")
-def read_months():
-    return db.get_all_months()
-
-
-@app.get("/api/images")
-def read_images(
-    month: Optional[str] = None,
-    artist_id: Optional[int] = None,
-    search: Optional[str] = None,
-    only_db: Optional[bool] = None,
-    sort_mode: str = "newest",
-    limit: int = 200,
-    offset: int = 0
-):
-    if only_db is None:
-        only_db = False
-
-    images, total_count, available_months = db.get_images(
-        month=month,
-        artist_id=artist_id,
-        search=search,
-        limit=limit,
-        offset=offset,
-        only_show_db_files=only_db,
-        sort_mode=sort_mode
-    )
-    return {
-        "images": images,
-        "total": total_count,
-        "limit": limit,
-        "offset": offset,
-        "months": available_months,
-    }
 
 
 @app.get("/api/file")
@@ -983,7 +514,7 @@ def generate_fallback_svg(filename: str) -> str:
     return f"""<svg xmlns="http://www.w3.org/2000/svg" width="320" height="320" viewBox="0 0 320 320">
   <rect width="320" height="320" fill="#18181b"/>
   <rect x="20" y="20" width="280" height="280" rx="16" fill="#27272a" stroke="#3f3f46" stroke-width="2"/>
-  <circle cx="160" cy="140" r="40" fill="#4f46e5" fill-opacity="0.9"/>
+  <circle cx="160" cy="140" r="40" fill="#0096fa" fill-opacity="0.9"/>
   <polygon points="152,124 176,140 152,156" fill="#ffffff"/>
   <text x="160" y="225" font-family="sans-serif" font-size="12" font-weight="600" fill="#e4e4e7" text-anchor="middle">{display_title}</text>
 </svg>"""
@@ -1071,7 +602,11 @@ def get_thumbnail(
     ext = os.path.splitext(resolved)[1].lower()
     filename = os.path.basename(resolved)
     if ext in {".jpg", ".jpeg", ".png", ".gif", ".webp"} and not db.is_usable_media_file(resolved):
-        return Response(content=generate_media_error_svg(filename), media_type="image/svg+xml")
+        return Response(
+            content=generate_media_error_svg(filename),
+            media_type="image/svg+xml",
+            headers=THUMB_CACHE_HEADERS,
+        )
 
     # Use a stable, content-aware key so generated thumbnails remain reusable
     # after a backend restart while changed source files get a fresh cache
@@ -1086,7 +621,7 @@ def get_thumbnail(
         thumb_name = f"{thumb_key}_{width}x{height}.webp"
     thumb_path = os.path.join(THUMB_CACHE_DIR, thumb_name)
 
-    if os.path.exists(thumb_path):
+    if is_valid_thumbnail_file(thumb_path):
         if source_stat is not None:
             library_jobs.record_thumbnail_cache_access(
                 thumb_name,
@@ -1101,6 +636,7 @@ def get_thumbnail(
         if generate_thumbnail_once(
             thumb_path,
             lambda temporary_path: extract_video_frame(resolved, temporary_path, width, height),
+            is_valid_thumbnail_file,
         ):
             if source_stat is not None:
                 library_jobs.record_thumbnail_cache_access(
@@ -1130,8 +666,12 @@ def get_thumbnail(
             return False
 
     try:
-        if not generate_thumbnail_once(thumb_path, generate_raster_thumbnail):
-            return FileResponse(resolved)
+        if not generate_thumbnail_once(thumb_path, generate_raster_thumbnail, is_valid_thumbnail_file):
+            return Response(
+                content=generate_media_error_svg(filename),
+                media_type="image/svg+xml",
+                headers=THUMB_CACHE_HEADERS,
+            )
         if source_stat is not None:
             library_jobs.record_thumbnail_cache_access(
                 thumb_name,
@@ -1142,7 +682,11 @@ def get_thumbnail(
             )
         return FileResponse(thumb_path, media_type="image/webp", headers=THUMB_CACHE_HEADERS)
     except Exception:
-        return FileResponse(resolved)
+        return Response(
+            content=generate_media_error_svg(filename),
+            media_type="image/svg+xml",
+            headers=THUMB_CACHE_HEADERS,
+        )
 
 
 def cleanup_temporary_file(path: str) -> None:
@@ -1308,16 +852,33 @@ def batch_trash(req: BatchDeleteRequest):
 
 
 @app.post("/api/artists/{artist_id}/trash")
-def trash_artist(artist_id: int):
+def trash_artist(artist_id: str):
     """Move all currently discoverable works for one artist to app trash."""
-    if artist_id == -1:
+    artist_key = str(artist_id).strip()
+    if artist_key == "-1":
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="未分類圖片請用批次操作")
 
-    artist_items, _total, _months = db.get_images(
-        artist_id=artist_id,
-        limit=10_000_000,
-        offset=0,
-    )
+    try:
+        artist_items, _total, _months = db.get_images(
+            artist_id=artist_key,
+            limit=10_000_000,
+            offset=0,
+        )
+    except db.AmbiguousArtistIdentifier as error:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "ambiguous_artist_id",
+                "artist_id": error.identifier,
+                "candidates": [
+                    {
+                        "folder_id": candidate.get("folder_id"),
+                        "folder_name": candidate.get("folder_name"),
+                    }
+                    for candidate in error.candidates
+                ],
+            },
+        ) from error
     selected_records = [
         (int(item["image_id"]), str(item.get("save_name") or ""))
         for item in artist_items
@@ -1325,7 +886,8 @@ def trash_artist(artist_id: int):
     ]
     requested_ids = list(dict.fromkeys(int(item["image_id"]) for item in artist_items))
     result = _move_media_records_to_app_trash(requested_ids, selected_records)
-    return {**result, "artist_id": artist_id}
+    response_artist_id: object = int(artist_key) if artist_key.lstrip("-").isdigit() else artist_key
+    return {**result, "artist_id": response_artist_id}
 
 
 def _send_trash_entries_to_system_recycle(trash_ids: List[int]) -> Dict[str, Any]:

@@ -32,6 +32,42 @@
     background: linear-gradient(to bottom, var(--viewer-stage), transparent);
   }
 
+  .fullscreen-viewer__topbar.is-toolbar-hidden {
+    position: absolute;
+    inset-block-start: 0;
+    inset-inline: 0;
+    z-index: 40;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.5rem;
+    padding: 0.75rem var(--ui-overlay-gutter);
+    background: transparent;
+    pointer-events: none;
+  }
+
+  .fullscreen-viewer__topbar.is-toolbar-hidden > .fullscreen-viewer__topbar-group,
+  .fullscreen-viewer__topbar.is-toolbar-hidden > .fullscreen-viewer__mobile-toolbar-toggle,
+  .fullscreen-viewer__topbar.is-toolbar-hidden > .fullscreen-viewer__mobile-details-toggle,
+  .fullscreen-viewer__topbar.is-toolbar-hidden > .fullscreen-viewer__topbar-actions {
+    display: none;
+  }
+
+  .fullscreen-viewer__hidden-toolbar-actions {
+    display: none;
+  }
+
+  .fullscreen-viewer__topbar.is-toolbar-hidden .fullscreen-viewer__hidden-toolbar-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    pointer-events: auto;
+  }
+
+  .fullscreen-viewer__topbar.is-toolbar-hidden > .fullscreen-viewer__close-button {
+    pointer-events: auto;
+  }
+
   .fullscreen-viewer__topbar-group {
     display: flex;
     grid-column: 1;
@@ -39,7 +75,7 @@
     max-width: 100%;
     min-width: 0;
     gap: 0.5rem;
-    overflow: hidden;
+    overflow: visible;
   }
 
   .fullscreen-viewer__topbar-actions {
@@ -169,12 +205,14 @@
   .fullscreen-viewer__close-button {
     grid-column: 3;
     justify-self: end;
-    backdrop-filter: blur(12px);
   }
 
   .fullscreen-viewer__status {
+    flex: 0 0 auto;
+    min-width: max-content;
     background: oklch(0.72 0.16 80 / 0.2);
     color: oklch(0.78 0.15 80);
+    white-space: nowrap;
   }
 
   .fullscreen-viewer__thumbnail:focus-visible,
@@ -186,7 +224,8 @@
     outline-offset: 2px;
   }
 
-  .fullscreen-viewer.is-checkerboard .fullscreen-viewer__stage {
+  .fullscreen-viewer.is-checkerboard .fullscreen-viewer__stage,
+  .fullscreen-viewer.is-checkerboard .fullscreen-viewer__video-background {
     background-color: var(--viewer-stage);
     background-image:
       linear-gradient(45deg, var(--viewer-checker) 25%, transparent 25%),
@@ -207,7 +246,6 @@
     overflow: hidden;
     background: var(--viewer-stage);
     padding-block: 0;
-    padding-inline: 1rem;
     touch-action: pan-y;
     isolation: isolate;
   }
@@ -227,20 +265,222 @@
   }
 
   .fullscreen-viewer__issue-frame {
-    width: min(90vw, 40rem);
-    height: min(70vh, 30rem);
-    max-width: 100%;
+    display: flex;
+    flex: 0 1 auto;
+    width: min(90vw, 56rem);
+    height: min(75vh, 31.5rem);
+    aspect-ratio: 16 / 9;
+    max-width: 90vw;
+    max-height: 85vh;
+    align-items: center;
+    justify-content: center;
     overflow: hidden;
     border: 1px solid var(--viewer-border);
-    border-radius: 1rem;
+    border-radius: 0;
+    background: var(--viewer-surface-muted);
+  }
+
+  .fullscreen-viewer__issue-frame .media-issue-placeholder {
+    width: 100%;
+    height: 100%;
+    min-width: 0;
+    min-height: 0;
+    overflow: visible;
+    padding: 2rem clamp(1rem, 4vw, 3rem);
+    border: none;
+    border-radius: 0;
+    background: transparent;
+  }
+
+  .fullscreen-viewer__issue-frame .media-issue-placeholder__title,
+  .fullscreen-viewer__issue-frame .media-issue-placeholder__message {
+    max-width: 100%;
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+    overflow-wrap: anywhere;
   }
 
   .fullscreen-viewer__video-frame {
     position: relative;
     display: flex;
+    width: 100%;
+    height: 100%;
     max-width: 100%;
+    max-height: 100%;
+    min-width: 0;
+    min-height: 0;
     align-items: center;
     justify-content: center;
+    overflow: hidden;
+    touch-action: manipulation;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  /* Keep the checkerboard in a sibling layer so blur only affects the video
+     pixels and never the transparency reference behind them. */
+  .fullscreen-viewer__video-background {
+    position: absolute;
+    z-index: 0;
+    inset: 0;
+    background-color: var(--viewer-stage);
+    pointer-events: none;
+  }
+
+  /* Keep the opaque backing plane on the same metadata-sized rectangle as the
+     decoded video. The surface stays outside the filter, so only the video
+     pixels are blurred while the checkerboard remains sharp around it. */
+  .fullscreen-viewer__video-surface {
+    position: relative;
+    z-index: 2;
+    flex: 0 0 auto;
+    display: block;
+    width: 100%;
+    height: 100%;
+    max-width: none;
+    max-height: none;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+    background-color: transparent;
+  }
+
+  .fullscreen-viewer__video-surface > video.fullscreen-viewer__media {
+    position: relative;
+    display: block;
+    width: 100%;
+    height: 100%;
+    max-width: none;
+    max-height: none;
+  }
+
+  /* Blur filters can expose transparent pixels around the media bounds. Give
+     the filtered video surface its own opaque backing plane so the checkerboard
+     stays outside the video instead of bleeding through its softened edges. */
+  .fullscreen-viewer.is-blur-enabled .fullscreen-viewer__video-surface {
+    background-color: var(--viewer-stage);
+  }
+
+  /* A newly selected source can expose the browser's empty native controls
+     before its first decoded frame exists. Keep that loading element out of
+     the paint tree until the media is ready, so switching videos stays clean. */
+  .fullscreen-viewer__video-surface > video.fullscreen-viewer__media:not(.is-video-ready) {
+    visibility: hidden;
+  }
+
+  .fullscreen-viewer__video-surface--outgoing {
+    position: absolute;
+    z-index: 1;
+    inset: 0;
+    margin: auto;
+    pointer-events: none;
+  }
+
+  @keyframes fullscreen-viewer-video-feedback-center-enter {
+    from {
+      opacity: 0;
+      transform: translate(-50%, -50%) scale(0.25);
+    }
+
+    58% {
+      opacity: 1;
+      transform: translate(-50%, -50%) scale(1.08);
+    }
+
+    to {
+      opacity: 1;
+      transform: translate(-50%, -50%) scale(1);
+    }
+  }
+
+  @keyframes fullscreen-viewer-video-feedback-center-exit {
+    from {
+      opacity: 1;
+      transform: translate(-50%, -50%) scale(1);
+    }
+
+    to {
+      opacity: 0;
+      transform: translate(-50%, -50%) scale(0.25);
+    }
+  }
+
+  .fullscreen-viewer__video-feedback {
+    position: absolute;
+    z-index: 4;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    border: 1px solid var(--viewer-hud-border);
+    border-radius: 999px;
+    padding: 0.5rem 0.75rem;
+    background: var(--viewer-hud-surface);
+    color: var(--viewer-hud-text);
+    font-size: var(--ui-font-caption);
+    font-weight: 700;
+    line-height: 1.2;
+    white-space: nowrap;
+    pointer-events: none;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  .fullscreen-viewer__video-feedback--center {
+    inset-block-start: 50%;
+    inset-inline-start: 50%;
+    width: 4.5rem;
+    height: 4.5rem;
+    padding: 0;
+    border-radius: 50%;
+    opacity: 1;
+    transform: translate(-50%, -50%);
+  }
+
+  .fullscreen-viewer__video-feedback--top {
+    inset-block-start: 8%;
+    inset-inline-start: 50%;
+    transform: translateX(-50%);
+  }
+
+  .fullscreen-viewer__video-feedback--center .fullscreen-viewer__video-feedback-icon {
+    color: var(--viewer-hud-text);
+  }
+
+  .fullscreen-viewer__video-feedback--play .fullscreen-viewer__video-feedback-icon svg {
+    transform: translateX(1px);
+  }
+
+  .fullscreen-viewer__video-feedback--center .lucide-play,
+  .fullscreen-viewer__video-feedback--center .lucide-pause {
+    fill: currentColor;
+  }
+
+  .fullscreen-viewer__video-feedback-icon {
+    display: inline-flex;
+    flex: 0 0 auto;
+    color: var(--viewer-primary);
+  }
+
+  .fullscreen-viewer__video-feedback-icon svg {
+    width: 1.25rem;
+    height: 1.25rem;
+  }
+
+  .fullscreen-viewer__video-feedback--center .fullscreen-viewer__video-feedback-icon svg {
+    width: 1.75rem;
+    height: 1.75rem;
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .fullscreen-viewer__video-feedback--center:not(.is-exiting) {
+      animation: fullscreen-viewer-video-feedback-center-enter 180ms cubic-bezier(0.2, 0, 0, 1) both;
+    }
+
+    .fullscreen-viewer__video-feedback--center.is-exiting {
+      animation: fullscreen-viewer-video-feedback-center-exit 120ms ease-out both;
+    }
   }
 
   .fullscreen-viewer__media {
@@ -264,15 +504,23 @@
     isolation: isolate;
   }
 
-  /* Keep a masked reader surface above the gallery's sticky/grid stacking
-     contexts, while the navigation controls and app dialogs retain their
-     own higher layers. */
+  /* When the rail is hidden or the toolbar is collapsed, let the media stack
+     consume the full remaining stage instead of retaining its compact
+     rail-aware max size. */
+  .fullscreen-viewer:not(.has-filmstrip) .fullscreen-viewer__media-stack,
+  .fullscreen-viewer.is-toolbar-hidden .fullscreen-viewer__media-stack {
+    align-self: stretch;
+    width: 100%;
+    height: 100%;
+  }
+
+  /* Keep the media layer above the gallery's sticky/grid stacking contexts,
+     while leaving the stage visible around contain-fitted media. */
   .fullscreen-viewer.is-blur-enabled .fullscreen-viewer__media-stack,
   .fullscreen-viewer.is-demo-mode .fullscreen-viewer__media-stack,
   .fullscreen-viewer.is-blur-enabled .fullscreen-viewer__video-frame,
   .fullscreen-viewer.is-demo-mode .fullscreen-viewer__video-frame {
     z-index: 1;
-    background: var(--viewer-stage);
   }
 
   .fullscreen-viewer__video-frame--demo {
@@ -289,20 +537,56 @@
     cursor: grabbing;
   }
 
-  .fullscreen-viewer__media-stack > .fullscreen-viewer__media {
-    grid-area: 1 / 1;
+  .fullscreen-viewer__media-frame {
+    position: relative;
+    display: grid;
     width: 100%;
     height: 100%;
+    max-width: 100%;
+    max-height: 100%;
     min-width: 0;
     min-height: 0;
-    max-width: none;
-    max-height: none;
+    place-items: center;
+    overflow: hidden;
+    background-color: transparent;
+    transform-origin: center;
+    transition: transform 160ms ease;
+  }
+
+  /* A clear PNG must keep exposing the checkerboard through its alpha
+     channel. Blur mode gets an opaque plane so filtering cannot reveal the
+     stage pattern across the protected preview. */
+  .fullscreen-viewer.is-blur-enabled .fullscreen-viewer__media-frame {
+    background-color: var(--viewer-stage);
+  }
+
+  .fullscreen-viewer__media-frame > img.fullscreen-viewer__media {
+    grid-area: 1 / 1;
+    width: auto;
+    height: auto;
+    min-width: 0;
+    min-height: 0;
+    max-width: 100%;
+    max-height: 100%;
     object-fit: contain;
     object-position: center;
     pointer-events: none;
     user-select: none;
-    transform-origin: center;
-    transition: transform 160ms ease;
+  }
+
+  /* A clear thumbnail can still act as a full-stage loading preview. Once
+     blur is enabled, the frame follows its intrinsic bounds so the filter
+     cannot turn the entire stage into a blurred cover. */
+  .fullscreen-viewer__media-frame.is-thumbnail-preview {
+    width: 100%;
+    height: 100%;
+  }
+
+  .fullscreen-viewer__media-frame.is-thumbnail-preview > img.fullscreen-viewer__media--thumbnail:not(.blur-media--viewer) {
+    width: 100%;
+    height: 100%;
+    max-width: none;
+    max-height: none;
   }
 
   .fullscreen-viewer__media--original {
@@ -313,23 +597,26 @@
   /* A locked zoom is a stable reading scale. Keep the original fade, but
      reveal each newly selected image at that scale without interpolating
      from the temporary pre-load scale. */
-  .fullscreen-viewer__media-stack.is-zoom-locked > .fullscreen-viewer__media {
+  .fullscreen-viewer__media-stack.is-zoom-locked > .fullscreen-viewer__media,
+  .fullscreen-viewer__media-stack.is-zoom-locked > .fullscreen-viewer__media-frame {
     transition-property: none;
   }
 
-.fullscreen-viewer__media-stack.is-zoom-locked > .fullscreen-viewer__media--original {
+.fullscreen-viewer__media-stack.is-zoom-locked > .fullscreen-viewer__media-frame > .fullscreen-viewer__media--original {
   transition: opacity 180ms ease;
 }
 
 /* During an image replacement, the media must switch at its final geometry.
    This prevents the thumbnail and original from visibly cross-fading while
    the zoom transform is being recalculated. */
-.fullscreen-viewer__media-stack.is-media-transition-suppressed > .fullscreen-viewer__media {
+.fullscreen-viewer__media-stack.is-media-transition-suppressed > .fullscreen-viewer__media,
+.fullscreen-viewer__media-stack.is-media-transition-suppressed > .fullscreen-viewer__media-frame {
   transition-property: none;
   transition-duration: 0ms;
 }
 
-.fullscreen-viewer__media-stack.is-panning > .fullscreen-viewer__media {
+.fullscreen-viewer__media-stack.is-panning > .fullscreen-viewer__media,
+.fullscreen-viewer__media-stack.is-panning > .fullscreen-viewer__media-frame {
   transition-duration: 0ms;
 }
 
@@ -435,7 +722,31 @@
   }
 
   .fullscreen-viewer__details-path {
+    min-width: 0;
+    flex: 1 1 auto;
     overflow-wrap: anywhere;
+  }
+
+  .fullscreen-viewer__details-path-row {
+    display: flex;
+    min-width: 0;
+    align-items: flex-start;
+    gap: 0.5rem;
+  }
+
+  .fullscreen-viewer__details-path-row .fullscreen-viewer__details-label {
+    flex: 0 0 auto;
+  }
+
+  .fullscreen-viewer__details-path-copy {
+    flex: 0 0 auto;
+    margin-block-start: -0.25rem;
+  }
+
+  .fullscreen-viewer__copy-feedback {
+    color: var(--viewer-accent);
+    font-size: var(--ui-font-caption);
+    font-weight: 650;
   }
 
   .fullscreen-viewer__details-warning {
@@ -509,6 +820,10 @@
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 0.5rem;
+  }
+
+  .viewer-copy-folder-action {
+    grid-column: 1 / -1;
   }
 
   .viewer-details-actions {
@@ -733,6 +1048,13 @@
     line-height: 1.25;
   }
 
+  .fullscreen-viewer__shortcut-help-intro {
+    margin: 0 0 0.5rem;
+    color: var(--viewer-hud-text-muted);
+    font-size: var(--ui-font-min);
+    line-height: 1.4;
+  }
+
   .fullscreen-viewer__shortcut-list {
     display: grid;
     margin: 0;
@@ -759,6 +1081,16 @@
 
   .fullscreen-viewer__shortcut-list dt {
     color: var(--viewer-hud-text-muted);
+  }
+
+  .fullscreen-viewer__shortcut-list-heading dt {
+    color: var(--viewer-hud-text);
+    font-weight: 700;
+  }
+
+  .fullscreen-viewer__shortcut-list-heading dd {
+    color: var(--viewer-hud-text-muted);
+    font-size: var(--ui-font-caption);
   }
 
   .fullscreen-viewer__shortcut-list dd {
@@ -889,7 +1221,11 @@
     }
 
     .fullscreen-viewer__topbar-actions.is-mobile-open .fullscreen-viewer__toolbar-group--display {
-      grid-template-columns: repeat(5, var(--ui-icon-button-size));
+      grid-template-columns: repeat(4, var(--ui-icon-button-size));
+    }
+
+    .fullscreen-viewer__topbar-actions.is-mobile-open .fullscreen-viewer__toolbar-group--visibility {
+      grid-template-columns: repeat(2, var(--ui-icon-button-size));
     }
 
     .fullscreen-viewer__topbar-actions.is-mobile-open .fullscreen-viewer__toolbar-group--content {
@@ -1037,8 +1373,14 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
+    .fullscreen-viewer__video-feedback,
+    .fullscreen-viewer__video-feedback--center {
+      animation: none;
+    }
+
     .fullscreen-viewer__stage,
-    .fullscreen-viewer__media-stack > .fullscreen-viewer__media {
+    .fullscreen-viewer__media-stack > .fullscreen-viewer__media,
+    .fullscreen-viewer__media-stack > .fullscreen-viewer__media-frame {
       transition-duration: 0.01ms;
     }
   }

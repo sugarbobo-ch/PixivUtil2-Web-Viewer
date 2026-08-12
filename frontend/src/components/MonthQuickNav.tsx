@@ -1,5 +1,6 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { getScrollTopForElement, scrollElementToContainerStart } from '../utils/galleryLayout';
+import { getMotionAwareScrollBehavior } from '../utils/motion';
 
 export interface MonthJumpItem {
   key: string;
@@ -365,8 +366,7 @@ export const MonthQuickNav: React.FC<MonthQuickNavProps> = ({ items, sectionKeys
     const itemIndex = items.findIndex(current => current.key === item.key);
     if (itemIndex >= 0) setPopupTopAtIndex(itemIndex);
 
-    const prefersReducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-    const behavior = options.behavior ?? (prefersReducedMotion ? 'auto' : 'smooth');
+    const behavior = options.behavior ?? getMotionAwareScrollBehavior();
     // Start warming the destination before the scroll begins. For a same-page
     // jump this lets thumbnail decoding overlap the smooth movement; for a
     // cross-page jump the page request can overlap it as well.

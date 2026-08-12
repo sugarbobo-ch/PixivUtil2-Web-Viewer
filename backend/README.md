@@ -2,6 +2,24 @@
 
 FastAPI backend service for PixivUtil2 Web Viewer.
 
+## Runtime and route boundaries
+
+Application-owned dependencies are created by the ASGI lifespan in
+`runtime_context.py`. The current route modules are intentionally grouped by
+domain and call services rather than constructing workers or mutating the
+source configuration themselves:
+
+- `routes/web_config.py` → `WebConfigService`
+- `routes/pixiv_config.py` → PixivUtil2 config.ini backup/update boundary
+- `routes/directory.py` → source inspection, artists, months, and source links
+- `routes/gallery.py` → gallery page queries and filter metadata
+- `routes/library_jobs.py` → `LibraryJobService` and recoverable thumbnail cache
+
+`main.py` remains the compatibility host for the media file, batch trash, and
+Windows integration routes while those domain services are migrated. The
+gallery read route now uses the explicit `GalleryService` boundary. This keeps
+the route split incremental and preserves existing test fixtures.
+
 ## Media library jobs
 
 The media library update runs in one daemon worker and persists its state in

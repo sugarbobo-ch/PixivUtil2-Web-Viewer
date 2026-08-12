@@ -1082,12 +1082,29 @@ class LibraryJobManager:
     def close(self, timeout: float = 2.0) -> None:
         """Stop the worker for tests or controlled application shutdown."""
         self._stop_event.set()
+
+        # A shutdown can race an active scan. Signal every queued/current job
+        # before joining so a cancellable directory walk releases its SQLite
+        # connection and temporary files instead of outliving the owner.
+        with self._lock:
+            active_job_ids = list(self._cancel_events)
+            for cancel_event in self._cancel_events.values():
+                cancel_event.set()
+        for job_id in active_job_ids:
+            try:
+                db.request_library_job_cancel(job_id)
+            except (OSError, sqlite3.Error):
+                # The database may already be closed during process shutdown;
+                # the in-memory cancellation event is still sufficient for
+                # the worker's next safe boundary.
+                pass
+
         self._source_watcher.close(timeout=timeout)
         self._queue.put(None)
-        if self._worker and self._worker.is_alive():
-            self._worker.join(timeout=timeout)
-        if self._monitor and self._monitor.is_alive():
-            self._monitor.join(timeout=timeout)
+        deadline = time.monotonic() + max(0.0, timeout)
+        for thread in (self._worker, self._monitor):
+            if thread and thread.is_alive():
+                thread.join(timeout=max(0.0, deadline - time.monotonic()))
 
     def _reconciliation_loop(self) -> None:
         """Shallow-probe scopes and enqueue low-priority background updates."""
@@ -1215,6 +1232,7 @@ class LibraryJobManager:
                     "indexed": 0,
                     "added": 0,
                     "updated": 0,
+                    "removed": 0,
                     "unchanged": 0,
                     "conflicts": 0,
                     "errors": 0,
@@ -1237,7 +1255,7 @@ class LibraryJobManager:
                         scope_member_id=scope.get("member_id"),
                     )
                     for field in (
-                        "scanned", "indexed", "added", "updated", "unchanged",
+                        "scanned", "indexed", "added", "updated", "removed", "unchanged",
                         "conflicts", "errors", "processed",
                     ):
                         result[field] += int(scope_result.get(field) or 0)

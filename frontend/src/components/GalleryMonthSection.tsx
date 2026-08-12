@@ -2,6 +2,7 @@ import React from 'react';
 import { Calendar, Check, Copy, Film, Square, CheckSquare } from 'lucide-react';
 import { ImageItem, WorkGroup } from '../types';
 import { getItemGroupKey } from '../utils/grouping';
+import { isVideoItem } from '../utils/media';
 import { buildThumbnailUrl } from '../utils/webConfig';
 import {
   getRowCount,
@@ -12,6 +13,7 @@ import {
   VirtualRange,
 } from '../utils/galleryLayout';
 import { ImagePriority } from '../utils/imageLoadScheduler';
+import { getImageSelectionKey, getWorkSelectionKey } from '../utils/gallerySelection';
 import { GalleryThumbnail } from './GalleryThumbnail';
 import { MediaIssuePlaceholder } from './MediaIssuePlaceholder';
 import { Badge, Button } from './ui';
@@ -106,7 +108,7 @@ export const GalleryMonthSection: React.FC<GalleryMonthSectionProps> = ({
         // Keep the card identity tied to the file, not its current position.
         // Reusing an index key after a sort can leave the previous thumbnail
         // component mounted at the same slot while its replacement is queued.
-        key: `image:${item.image_id}:${item.save_name}`,
+        key: getImageSelectionKey(item),
         item,
         globalIndex,
         ids: [item.image_id],
@@ -135,7 +137,7 @@ export const GalleryMonthSection: React.FC<GalleryMonthSectionProps> = ({
         items: value.items.map(entry => entry.item),
       };
       return {
-        key: `work:${groupId}:${coverEntry.item.save_name}`,
+        key: getWorkSelectionKey(group.key, groupId, coverEntry.item),
         item: value.cover,
         globalIndex: coverEntry.globalIndex,
         ids: Array.from(new Set(value.items.map(entry => entry.item.image_id))),
@@ -257,7 +259,7 @@ export const GalleryMonthSection: React.FC<GalleryMonthSectionProps> = ({
     // still puts the currently visible row ahead of the overscan rows.
     const loadEnabled = isClickNavigation ? isVisible || isDestination : true;
     const isSelected = card.ids.length > 0 && card.ids.every(imageId => selectedIds.has(imageId));
-    const isVideo = card.item.save_name.toLowerCase().endsWith('.mp4');
+    const isVideo = isVideoItem(card.item);
     const openCard = () => {
       if (card.workGroup && onOpenWorkGroup) onOpenWorkGroup(card.workGroup);
       else onOpenFullscreen(card.globalIndex);
@@ -298,17 +300,21 @@ export const GalleryMonthSection: React.FC<GalleryMonthSectionProps> = ({
             />
           )}
 
-          {card.workGroup && (
-            <Badge variant="hud" size="xs" className="gallery-card__group-count">
-              <Copy className="w-3.5 h-3.5" aria-hidden="true" />
-              <span>{card.workGroup.items.length}</span>
-            </Badge>
-          )}
+          {(card.workGroup || isVideo) && (
+            <div className="gallery-card__badges" aria-hidden="true">
+              {card.workGroup && (
+                <Badge variant="surface" size="sm" className="gallery-card__group-count">
+                  <Copy className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>{card.workGroup.items.length}</span>
+                </Badge>
+              )}
 
-          {isVideo && (
-            <Badge variant="hud" size="sm" iconOnly className="gallery-card__video-badge">
-              <Film className="w-3.5 h-3.5" aria-hidden="true" />
-            </Badge>
+              {isVideo && (
+                <Badge variant="surface" size="sm" iconOnly className="gallery-card__video-badge">
+                  <Film className="w-3.5 h-3.5" aria-hidden="true" />
+                </Badge>
+              )}
+            </div>
           )}
 
           {isEditMode && (

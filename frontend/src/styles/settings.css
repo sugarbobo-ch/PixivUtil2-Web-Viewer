@@ -48,7 +48,7 @@
 .settings-modal__message.is-error {
   border-color: color-mix(in srgb, var(--settings-danger) 36%, var(--settings-border));
   background: var(--settings-danger-soft);
-  color: var(--settings-danger);
+  color: var(--settings-danger-text);
 }
 
 .settings-modal__tabs {
@@ -111,7 +111,7 @@
 }
 
 .settings-modal__field-error {
-  color: var(--settings-danger);
+  color: var(--settings-danger-text);
 }
 
 .settings-modal__text-link {
@@ -404,7 +404,7 @@
 
 .settings-modal__danger-icon {
   background: color-mix(in srgb, var(--settings-danger) 12%, var(--settings-surface-soft));
-  color: var(--settings-danger);
+  color: var(--settings-danger-text);
 }
 
 .settings-modal__primary-icon {
@@ -415,7 +415,7 @@
 .settings-modal__danger-note {
   border: 1px solid color-mix(in srgb, var(--settings-danger) 28%, var(--settings-border-soft));
   background: var(--settings-danger-soft);
-  color: var(--settings-danger);
+  color: var(--settings-danger-text);
 }
 
 .settings-modal__cache-recovery-detail {
@@ -868,6 +868,18 @@
 
 .settings-modal__display-section + .settings-modal__display-section {
   padding-top: 2rem;
+}
+
+.settings-modal__video-volume {
+  --ui-slider-accent: var(--settings-accent);
+  --ui-slider-accent-hover: var(--settings-accent-hover);
+  --ui-slider-track: var(--settings-control);
+  --ui-slider-track-border: var(--settings-control-border);
+  --ui-slider-thumb-border: var(--settings-surface);
+  --ui-slider-focus: var(--brand-focus-ring);
+  --ui-slider-field-label: var(--settings-text);
+  --ui-slider-field-value: var(--settings-text-subtle);
+  --ui-slider-field-description: var(--settings-text-muted);
 }
 
 /* Config values should use the whole control column instead of their intrinsic

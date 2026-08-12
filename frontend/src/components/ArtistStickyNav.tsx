@@ -1,7 +1,15 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { ArrowUpDown, Check, ExternalLink, FilterX, List, MoreHorizontal, Pencil, RefreshCw, Settings2 } from 'lucide-react';
 import { Artist, SortMode } from '../types';
 import { fetchArtistSourceLinks } from '../utils/sourceLinks';
+import { getArtistScopeKey } from '../utils/artistIdentity';
+import {
+  readCssCustomProperties,
+  useAnchoredPopover,
+  type AnchoredPopoverElementRef,
+  type FloatingCustomProperties,
+} from '../utils/useAnchoredPopover';
 import { Button, IconButton } from './ui/Button';
 
 interface GallerySortOption {
@@ -31,6 +39,7 @@ interface ArtistStickyNavProps {
   itemsPerPageOptions?: readonly GalleryItemsPerPageOption[];
   onItemsPerPageChange?: (itemsPerPage: number) => void;
   onPageChange?: (page: number) => void;
+  boundaryRef?: AnchoredPopoverElementRef;
 }
 
 const removeMemberSuffix = (name: string, memberId: number) => {
@@ -65,82 +74,73 @@ export const ArtistStickyNav: React.FC<ArtistStickyNavProps> = ({
   itemsPerPageOptions,
   onItemsPerPageChange,
   onPageChange,
+  boundaryRef,
 }) => {
+  const artistFolderKey = artist ? getArtistScopeKey(artist) : null;
   const [artistSources, setArtistSources] = useState<Awaited<ReturnType<typeof fetchArtistSourceLinks>>>(null);
   const [isOptionsOpen, setIsOptionsOpen] = useState(false);
-  const [optionsMenuPlacement, setOptionsMenuPlacement] = useState<'down' | 'up'>('down');
-  const [optionsMenuMaxHeight, setOptionsMenuMaxHeight] = useState<number | null>(null);
+  const [optionsMenuVariables, setOptionsMenuVariables] = useState<Record<`--${string}`, string>>({});
   const optionsRef = useRef<HTMLDivElement>(null);
   const optionsTriggerRef = useRef<HTMLButtonElement>(null);
   const optionsMenuRef = useRef<HTMLDivElement>(null);
+  const { position: optionsMenuPosition, verticalPlacement: optionsMenuPlacement } = useAnchoredPopover({
+    open: isOptionsOpen,
+    anchorRef: optionsTriggerRef,
+    contentRef: optionsMenuRef,
+    boundaryRef,
+    placement: 'end',
+  });
 
   useEffect(() => {
     let cancelled = false;
     setArtistSources(null);
 
-    if (!artist || artist.member_id <= 0) return undefined;
+    if (!artist || artist.member_id <= 0 || artist.identity_status !== 'verified') return undefined;
 
-    fetchArtistSourceLinks(artist.member_id).then(sources => {
+    fetchArtistSourceLinks(artistFolderKey || artist.member_id).then(sources => {
       if (!cancelled) setArtistSources(sources);
     });
 
     return () => {
       cancelled = true;
     };
-  }, [artist?.member_id]);
+  }, [artist?.identity_status, artist?.member_id, artistFolderKey]);
 
   useEffect(() => {
     setIsOptionsOpen(false);
-  }, [artist?.member_id]);
-
-  useEffect(() => {
-    if (!isOptionsOpen) {
-      setOptionsMenuPlacement('down');
-      setOptionsMenuMaxHeight(null);
-    }
-  }, [isOptionsOpen]);
+  }, [artistFolderKey]);
 
   useLayoutEffect(() => {
-    if (!isOptionsOpen) return undefined;
+    if (!isOptionsOpen || !optionsTriggerRef.current) {
+      setOptionsMenuVariables({});
+      return;
+    }
 
-    const updateMenuPlacement = () => {
-      const trigger = optionsTriggerRef.current;
-      const menu = optionsMenuRef.current;
-      if (!trigger || !menu) return;
+    // The menu is portaled outside the gallery scope. Carry the resolved
+    // viewer button roles so its nested action items keep the same surface.
+    setOptionsMenuVariables(readCssCustomProperties(optionsTriggerRef.current, ['--ui-button-']));
+  }, [isOptionsOpen]);
 
-      const triggerRect = trigger.getBoundingClientRect();
-      const availableBelow = Math.max(1, window.innerHeight - triggerRect.bottom - 8);
-      const availableAbove = Math.max(1, triggerRect.top - 8);
-      const contentHeight = menu.scrollHeight;
-      const shouldOpenUp = contentHeight > availableBelow && availableAbove > availableBelow;
-      const availableHeight = shouldOpenUp ? availableAbove : availableBelow;
-      const nextPlacement = shouldOpenUp ? 'up' : 'down';
-
-      setOptionsMenuPlacement(current => current === nextPlacement ? current : nextPlacement);
-      setOptionsMenuMaxHeight(current => current === availableHeight ? current : availableHeight);
-    };
-
-    const frameId = window.requestAnimationFrame(updateMenuPlacement);
-    window.addEventListener('resize', updateMenuPlacement);
-    window.addEventListener('scroll', updateMenuPlacement, true);
-
-    return () => {
-      window.cancelAnimationFrame(frameId);
-      window.removeEventListener('resize', updateMenuPlacement);
-      window.removeEventListener('scroll', updateMenuPlacement, true);
-    };
-  }, [isOptionsOpen, itemsPerPage, sortMode]);
+  const closeOptionsMenu = (restoreFocus: boolean) => {
+    setIsOptionsOpen(false);
+    if (restoreFocus) {
+      window.requestAnimationFrame(() => optionsTriggerRef.current?.focus({ preventScroll: true }));
+    }
+  };
 
   useEffect(() => {
     if (!isOptionsOpen) return undefined;
 
     const handlePointerDown = (event: PointerEvent) => {
-      if (!optionsRef.current?.contains(event.target as Node)) {
-        setIsOptionsOpen(false);
-      }
+      const target = event.target as Node;
+      if (optionsRef.current?.contains(target) || optionsMenuRef.current?.contains(target)) return;
+      setIsOptionsOpen(false);
     };
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setIsOptionsOpen(false);
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeOptionsMenu(true);
+      }
     };
 
     document.addEventListener('pointerdown', handlePointerDown);
@@ -166,6 +166,15 @@ export const ArtistStickyNav: React.FC<ArtistStickyNavProps> = ({
   const hasDesktopArtistOptions = hasArtist && Boolean(onRequestUpdate || onOpenSettings || onClearArtist);
   const hasViewOptions = hasSortOptions || hasPageSizeOptions;
   const hasTailActions = Boolean(onToggleEditMode || (hasArtist && onClearArtist));
+  const optionsMenuStyle: FloatingCustomProperties = {
+    ...optionsMenuVariables,
+    position: 'fixed',
+    top: `${optionsMenuPosition?.top ?? 0}px`,
+    left: `${optionsMenuPosition?.left ?? 0}px`,
+    maxHeight: `${optionsMenuPosition?.maxHeight ?? 1}px`,
+    visibility: optionsMenuPosition ? 'visible' : 'hidden',
+    '--anchored-anchor-width': `${optionsMenuPosition?.anchorWidth ?? 0}px`,
+  };
 
   return (
     <nav className="artist-sticky-nav" aria-label="目前繪師">
@@ -233,12 +242,12 @@ export const ArtistStickyNav: React.FC<ArtistStickyNavProps> = ({
               <MoreHorizontal className="h-5 w-5" aria-hidden="true" />
               <span className="sr-only">開啟更多選項</span>
             </IconButton>
-            {isOptionsOpen && (
+            {isOptionsOpen && typeof document !== 'undefined' && createPortal(
               <div
                 id="artist-sticky-nav-options-menu"
                 ref={optionsMenuRef}
-                className={`artist-sticky-nav__options-menu${optionsMenuPlacement === 'up' ? ' is-up' : ''}`}
-                style={optionsMenuMaxHeight === null ? undefined : { maxHeight: `${optionsMenuMaxHeight}px` }}
+                className={`artist-sticky-nav__options-menu${hasDesktopArtistOptions ? ' artist-sticky-nav__options-menu--desktop' : ''}${optionsMenuPlacement === 'up' ? ' is-up' : ''}`}
+                style={optionsMenuStyle}
                 role="menu"
               >
                 {hasArtistActions && (
@@ -369,8 +378,8 @@ export const ArtistStickyNav: React.FC<ArtistStickyNavProps> = ({
                       <Button
                         type="button"
                         role="menuitem"
-                        variant="plain"
-                        size="sm"
+                        variant="ghost"
+                        size="md"
                         fullWidth
                         className="artist-sticky-nav__options-item"
                         onClick={() => {
@@ -384,7 +393,8 @@ export const ArtistStickyNav: React.FC<ArtistStickyNavProps> = ({
                     )}
                   </div>
                 )}
-              </div>
+              </div>,
+              document.body,
             )}
           </div>
         )}

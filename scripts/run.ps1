@@ -14,6 +14,8 @@ $LogRoot = Join-Path $RuntimeRoot "logs"
 $backendProcess = $null
 $frontendProcess = $null
 $viewerJob = $null
+$apiReused = $false
+$webReused = $false
 $exitCode = 0
 
 function New-ViewerProcessJob {
@@ -177,22 +179,40 @@ function Test-ProjectProcess([int]$ProcessId) {
     )
 }
 
-function Test-ViewerAlreadyRunning {
-    $apiListener = Get-NetTCPConnection -State Listen -LocalPort 8000 -ErrorAction SilentlyContinue |
-        Select-Object -First 1
-    $webListener = Get-NetTCPConnection -State Listen -LocalPort 3000 -ErrorAction SilentlyContinue |
-        Select-Object -First 1
-    if (-not $apiListener -or -not $webListener) {
+function Test-ViewerApi([int]$Port) {
+    try {
+        $response = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$Port/api/system/session" -TimeoutSec 2
+        if ($response.StatusCode -ne 200) {
+            return $false
+        }
+
+        $payload = $response.Content | ConvertFrom-Json
+        if (-not ($payload.token -is [string])) {
+            return $false
+        }
+        return $payload.token.Length -ge 16
+    }
+    catch {
         return $false
     }
-    if (-not (Test-ProjectProcess ([int]$apiListener.OwningProcess)) -or
-        -not (Test-ProjectProcess ([int]$webListener.OwningProcess))) {
+}
+
+function Test-ViewerWeb([int]$Port) {
+    $listener = Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+    if (-not $listener) {
         return $false
     }
 
+    # A Vite process launched from this checkout is still the same Viewer even
+    # when its HTTP response is temporarily unavailable during HMR startup.
+    if (Test-ProjectProcess ([int]$listener.OwningProcess)) {
+        return $true
+    }
+
     try {
-        $response = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:8000/api/system/session" -TimeoutSec 2
-        return $response.StatusCode -eq 200
+        $response = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$Port/" -TimeoutSec 2
+        return $response.StatusCode -eq 200 -and $response.Content -match "PixivUtil2 Gallery Viewer"
     }
     catch {
         return $false
@@ -212,14 +232,21 @@ try {
     Assert-Installed $NodeExe "The project-local Node.js runtime"
     Assert-Installed $BackendPython "The backend Python environment"
     Assert-Installed $ViteEntry "The frontend dependencies"
-    if (Test-ViewerAlreadyRunning) {
+    $apiReused = Test-ViewerApi 8000
+    $webReused = Test-ViewerWeb 3000
+    if ($apiReused -and $webReused) {
         Write-Host "PixivUtil2 Web Viewer is already running." -ForegroundColor Green
         Write-Host "Viewer: http://localhost:3000"
-        Write-Host "Close its existing terminal window before starting a new instance."
+        Write-Host "API:    http://127.0.0.1:8000"
+        Write-Host "The existing services were left untouched."
         exit 0
     }
-    Assert-PortAvailable 8000 "The API"
-    Assert-PortAvailable 3000 "The web UI"
+    if (-not $apiReused) {
+        Assert-PortAvailable 8000 "The API"
+    }
+    if (-not $webReused) {
+        Assert-PortAvailable 3000 "The web UI"
+    }
     $viewerJob = New-ViewerProcessJob
 
     New-Item -ItemType Directory -Force -Path $LogRoot | Out-Null
@@ -239,44 +266,58 @@ try {
         Write-Host "Starting API and web UI in this terminal..."
     }
 
-    $backendArguments = @("-m", "uvicorn", "main:app", "--host", "127.0.0.1", "--port", "8000")
-    if ($Development) {
-        $backendArguments += "--reload"
+    if (-not $apiReused) {
+        $backendArguments = @("-m", "uvicorn", "main:app", "--host", "127.0.0.1", "--port", "8000")
+        if ($Development) {
+            $backendArguments += "--reload"
+        }
+
+        $backendProcess = Start-Process -FilePath $BackendPython `
+            -ArgumentList $backendArguments `
+            -WorkingDirectory (Join-Path $ProjectRoot "backend") `
+            -WindowStyle Hidden -PassThru `
+            -RedirectStandardOutput $backendStdout -RedirectStandardError $backendStderr
+        $viewerJob.Add($backendProcess)
     }
 
-    $backendProcess = Start-Process -FilePath $BackendPython `
-        -ArgumentList $backendArguments `
-        -WorkingDirectory (Join-Path $ProjectRoot "backend") `
-        -WindowStyle Hidden -PassThru `
-        -RedirectStandardOutput $backendStdout -RedirectStandardError $backendStderr
-    $viewerJob.Add($backendProcess)
-
-    $quotedViteEntry = '"' + $ViteEntry + '"'
-    $frontendProcess = Start-Process -FilePath $NodeExe `
-        -ArgumentList @($quotedViteEntry, "--host", "127.0.0.1") `
-        -WorkingDirectory (Join-Path $ProjectRoot "frontend") `
-        -WindowStyle Hidden -PassThru `
-        -RedirectStandardOutput $frontendStdout -RedirectStandardError $frontendStderr
-    $viewerJob.Add($frontendProcess)
+    if (-not $webReused) {
+        $quotedViteEntry = '"' + $ViteEntry + '"'
+        $frontendProcess = Start-Process -FilePath $NodeExe `
+            -ArgumentList @($quotedViteEntry, "--host", "127.0.0.1") `
+            -WorkingDirectory (Join-Path $ProjectRoot "frontend") `
+            -WindowStyle Hidden -PassThru `
+            -RedirectStandardOutput $frontendStdout -RedirectStandardError $frontendStderr
+        $viewerJob.Add($frontendProcess)
+    }
 
     Start-Sleep -Seconds 2
-    if ($backendProcess.HasExited) {
+    if (-not $apiReused -and $backendProcess.HasExited) {
         throw "The backend exited during startup."
     }
-    if ($frontendProcess.HasExited) {
+    if (-not $webReused -and $frontendProcess.HasExited) {
         throw "The frontend exited during startup."
     }
 
     Write-Host "`nViewer: http://localhost:3000" -ForegroundColor Green
     Write-Host "API:    http://127.0.0.1:8000"
+    if ($apiReused) {
+        Write-Host "API:    reusing the existing Web Viewer service"
+    }
+    if ($webReused) {
+        Write-Host "Viewer: reusing the existing Web Viewer service"
+    }
     Write-Host "Logs:   $LogRoot"
     if ($Development) {
         Write-Host "Reload: frontend HMR + backend file watcher" -ForegroundColor Green
     }
-    Write-Host "`nPress Ctrl+C or close this terminal window to stop both services."
+    Write-Host "`nPress Ctrl+C or close this terminal window to stop services started by this launcher."
+    if ($apiReused -or $webReused) {
+        Write-Host "Existing services are left running."
+    }
 
     $startedAt = Get-Date
-    while (-not $backendProcess.HasExited -and -not $frontendProcess.HasExited) {
+    while (($apiReused -or -not $backendProcess.HasExited) -and
+        ($webReused -or -not $frontendProcess.HasExited)) {
         Start-Sleep -Milliseconds 500
         if ($RunForSeconds -gt 0 -and ((Get-Date) - $startedAt).TotalSeconds -ge $RunForSeconds) {
             Write-Host "`nSmoke-test duration reached; stopping both services."
@@ -284,13 +325,11 @@ try {
         }
     }
 
-    if ($RunForSeconds -gt 0 -and -not $backendProcess.HasExited -and -not $frontendProcess.HasExited) {
+    if ($RunForSeconds -gt 0) {
         $exitCode = 0
-    }
-    elseif ($backendProcess.HasExited) {
+    } elseif (-not $apiReused -and $backendProcess.HasExited) {
         throw "The backend stopped unexpectedly with exit code $($backendProcess.ExitCode)."
-    }
-    else {
+    } elseif (-not $webReused -and $frontendProcess.HasExited) {
         throw "The frontend stopped unexpectedly with exit code $($frontendProcess.ExitCode)."
     }
 }

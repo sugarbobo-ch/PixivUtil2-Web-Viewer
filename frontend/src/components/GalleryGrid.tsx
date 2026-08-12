@@ -6,9 +6,20 @@ import { CustomSelect } from './CustomSelect';
 import { MonthJumpItem, MonthJumpNavigationOptions, MonthNavigationPhase, MonthQuickNav } from './MonthQuickNav';
 import { ChevronLeft, ChevronsLeft, ChevronsRight, ArrowUpDown, Search, Filter, RotateCcw, List } from 'lucide-react';
 import { GalleryMonthSection } from './GalleryMonthSection';
-import { GalleryThumbnail } from './GalleryThumbnail';
 import { getGridRowScrollTop } from '../utils/galleryLayout';
-import { Button, IconButton, Input } from './ui';
+import { getArtistScopeKey } from '../utils/artistIdentity';
+import {
+  GallerySelectionCard,
+  getImageSelectionKey,
+  getWorkSelectionKey,
+  replaceSelectionForRange,
+} from '../utils/gallerySelection';
+import { Badge, Button, IconButton, Input } from './ui';
+
+export interface GalleryPageChangeOptions {
+  preserveScroll?: boolean;
+  selectionDirection?: -1 | 1;
+}
 
 interface GalleryGridProps {
   images: ImageItem[];
@@ -16,7 +27,8 @@ interface GalleryGridProps {
   currentPage: number;
   itemsPerPage: number;
   thumbnailSize: number;
-  onPageChange: (page: number) => void;
+  onPageChange: (page: number, options?: GalleryPageChangeOptions) => void;
+  onLoadPage?: (page: number) => Promise<unknown>;
   onItemsPerPageChange: (num: number) => void;
   sortMode: SortMode;
   onSortModeChange: (mode: SortMode) => void;
@@ -28,7 +40,7 @@ interface GalleryGridProps {
   onReplaceSelection: (imageIds: number[]) => void;
   onOpenFullscreen: (index: number) => void;
   searchQuery?: string;
-  selectedArtist?: number | null;
+  selectedArtist?: string | null;
   onClearArtist?: () => void;
   onOpenFilters?: () => void;
   isFilterSidebarOpen?: boolean;
@@ -46,6 +58,7 @@ interface GalleryGridProps {
   destinationGlobalIndex?: number | null;
   restoreGlobalIndex?: number | null;
   restoreRequestId?: number;
+  loadedPage?: number | null;
   isLoading?: boolean;
   isArtistLoading?: boolean;
   isArtistUpdating?: boolean;
@@ -60,6 +73,7 @@ interface SelectionGesture {
   startX: number;
   startY: number;
   anchorKey: string;
+  anchorIndex: number;
   select: boolean;
   active: boolean;
   moved: boolean;
@@ -70,11 +84,10 @@ interface SelectionGesture {
   lastRangeKey: string | null;
   autoScrollFrame: number | null;
   autoScrollVelocity: number;
-}
-
-interface SelectionModelCard {
-  key: string;
-  ids: number[];
+  page: number;
+  pageModels: Map<number, GallerySelectionCard[]>;
+  pageTransitionPromise: Promise<void> | null;
+  pendingPageTransitionDirection: -1 | 0 | 1;
 }
 
 const SELECTION_AUTO_SCROLL_EDGE = 72;
@@ -114,6 +127,7 @@ export const GalleryGrid: React.FC<GalleryGridProps> = ({
   itemsPerPage,
   thumbnailSize,
   onPageChange,
+  onLoadPage,
   onItemsPerPageChange,
   sortMode,
   onSortModeChange,
@@ -143,6 +157,7 @@ export const GalleryGrid: React.FC<GalleryGridProps> = ({
   destinationGlobalIndex = null,
   restoreGlobalIndex = null,
   restoreRequestId = 0,
+  loadedPage,
   isLoading = false,
   isArtistLoading = false,
   isArtistUpdating = false,
@@ -160,9 +175,18 @@ export const GalleryGrid: React.FC<GalleryGridProps> = ({
   const [filterChromeHeight, setFilterChromeHeight] = React.useState<number | null>(null);
   const [pageInput, setPageInput] = React.useState(String(currentPage));
   const [scrollTick, setScrollTick] = React.useState(0);
+  const pageOffset = Math.max(0, (currentPage - 1) * itemsPerPage);
+  const totalPages = Math.max(1, Math.ceil(totalImages / Math.max(1, itemsPerPage)));
 
-  const selectionModel = React.useMemo<SelectionModelCard[]>(() => {
-    const monthRank = new Map((monthIndexItems ?? []).map((item, index) => [item.key, index]));
+  const selectionModel = React.useMemo<GallerySelectionCard[]>(() => {
+    const monthKeys = Array.from(new Set(images.map(item => getMonthKeyForLayout(item.created_date))));
+    const ascendingMonths = sortMode === 'oldest'
+      || sortMode === 'oldest_month'
+      || sortMode === 'natural_name';
+    monthKeys.sort((left, right) => ascendingMonths
+      ? left.localeCompare(right)
+      : right.localeCompare(left));
+    const monthRank = new Map(monthKeys.map((key, index) => [key, index]));
     const sortedImages = images
       .map((item, index) => ({ item, index, monthKey: getMonthKeyForLayout(item.created_date) }))
       .sort((left, right) => {
@@ -177,23 +201,34 @@ export const GalleryGrid: React.FC<GalleryGridProps> = ({
       });
 
     if (!groupMangaPosts) {
-      return sortedImages.map(({ item, index }) => ({ key: `image:${index}`, ids: [item.image_id] }));
+      return sortedImages.map(({ item }, displayIndex) => ({
+        key: getImageSelectionKey(item),
+        ids: [item.image_id],
+        startIndex: pageOffset + displayIndex,
+        endIndex: pageOffset + displayIndex,
+      }));
     }
 
-    const grouped = new Map<string, SelectionModelCard>();
+    const grouped = new Map<string, GallerySelectionCard>();
     sortedImages
-      .forEach(({ item, index, monthKey }) => {
+      .forEach(({ item, monthKey }, displayIndex) => {
         const groupKey = getItemGroupKey(item);
         const selectionKey = `${monthKey}|${groupKey}`;
         const existing = grouped.get(selectionKey);
         if (existing) {
           if (!existing.ids.includes(item.image_id)) existing.ids.push(item.image_id);
+          existing.endIndex = pageOffset + displayIndex;
         } else {
-          grouped.set(selectionKey, { key: `work:${groupKey}:${index}`, ids: [item.image_id] });
+          grouped.set(selectionKey, {
+            key: getWorkSelectionKey(monthKey, groupKey, item),
+            ids: [item.image_id],
+            startIndex: pageOffset + displayIndex,
+            endIndex: pageOffset + displayIndex,
+          });
         }
       });
     return Array.from(grouped.values());
-  }, [groupMangaPosts, images, monthIndexItems, sortMode]);
+  }, [groupMangaPosts, images, pageOffset, sortMode]);
 
   React.useLayoutEffect(() => {
     const chrome = filterChromeRef.current;
@@ -288,29 +323,27 @@ export const GalleryGrid: React.FC<GalleryGridProps> = ({
     const gesture = selectionGestureRef.current;
     if (!gesture?.active) return;
 
-    const anchorIndex = selectionModel.findIndex(card => card.key === gesture.anchorKey);
-    const targetIndex = selectionModel.findIndex(card => card.key === cardKey);
-    if (anchorIndex < 0 || targetIndex < 0) return;
+    gesture.pageModels.set(currentPage, selectionModel);
+    const targetCard = selectionModel.find(card => card.key === cardKey);
+    if (!targetCard) return;
 
-    const rangeStart = Math.min(anchorIndex, targetIndex);
-    const rangeEnd = Math.max(anchorIndex, targetIndex);
+    const rangeStart = Math.min(gesture.anchorIndex, targetCard.startIndex);
+    const rangeEnd = Math.max(gesture.anchorIndex, targetCard.startIndex);
     const rangeKey = `${rangeStart}:${rangeEnd}`;
     if (gesture.lastRangeKey === rangeKey) return;
 
-    const rangeIds = new Set<number>();
-    selectionModel.slice(rangeStart, rangeEnd + 1).forEach(card => {
-      card.ids.forEach(imageId => rangeIds.add(imageId));
-    });
-
-    const nextSelectedIds = new Set(gesture.initiallySelectedIds);
-    rangeIds.forEach(imageId => {
-      if (gesture.select) nextSelectedIds.add(imageId);
-      else nextSelectedIds.delete(imageId);
-    });
+    const cards = Array.from(gesture.pageModels.values()).flat();
+    const nextSelectedIds = replaceSelectionForRange(
+      gesture.initiallySelectedIds,
+      cards,
+      rangeStart,
+      rangeEnd,
+      gesture.select,
+    );
 
     gesture.lastRangeKey = rangeKey;
     onReplaceSelection(Array.from(nextSelectedIds));
-  }, [onReplaceSelection, selectionModel]);
+  }, [currentPage, onReplaceSelection, selectionModel]);
 
   const selectCardAtPoint = React.useCallback((clientX: number, clientY: number) => {
     const gesture = selectionGestureRef.current;
@@ -423,6 +456,56 @@ export const GalleryGrid: React.FC<GalleryGridProps> = ({
     return 0;
   }, [getScrollContainer]);
 
+  const getPageTransitionDirection = React.useCallback((clientY: number): -1 | 0 | 1 => {
+    const container = getScrollContainer();
+    if (!container) return 0;
+
+    const gesture = selectionGestureRef.current;
+    const page = gesture?.page ?? currentPage;
+    const rect = container.getBoundingClientRect();
+    const atTop = container.scrollTop <= 1
+      && clientY <= rect.top + SELECTION_AUTO_SCROLL_EDGE
+      && page > 1;
+    if (atTop) return -1;
+
+    const atBottom = container.scrollTop + container.clientHeight >= container.scrollHeight - 1
+      && clientY >= rect.bottom - SELECTION_AUTO_SCROLL_EDGE
+      && page < totalPages;
+    return atBottom ? 1 : 0;
+  }, [currentPage, getScrollContainer, totalPages]);
+
+  const requestAdjacentPage = React.useCallback((direction: -1 | 1) => {
+    const gesture = selectionGestureRef.current;
+    if (!gesture?.active || gesture.pageTransitionPromise !== null) return;
+
+    const nextPage = gesture.page + direction;
+    if (nextPage < 1 || nextPage > totalPages) return;
+
+    const pageRequest = onLoadPage ? onLoadPage(nextPage) : Promise.resolve();
+    const transition = Promise.resolve(pageRequest)
+      .then(() => {
+        const currentGesture = selectionGestureRef.current;
+        if (!currentGesture || currentGesture !== gesture || !currentGesture.active) return;
+        if (getPageTransitionDirection(currentGesture.lastClientY) !== direction) return;
+
+        currentGesture.page = nextPage;
+        currentGesture.pendingPageTransitionDirection = direction;
+        onPageChange(nextPage, {
+          preserveScroll: true,
+          selectionDirection: direction,
+        });
+      })
+      .catch(error => {
+        console.error('Failed to load adjacent gallery page during selection:', error);
+      })
+      .finally(() => {
+        const currentGesture = selectionGestureRef.current;
+        if (currentGesture === gesture) currentGesture.pageTransitionPromise = null;
+      });
+
+    gesture.pageTransitionPromise = transition;
+  }, [getPageTransitionDirection, onLoadPage, onPageChange, totalPages]);
+
   const updateAutoScroll = React.useCallback((clientX: number, clientY: number) => {
     const gesture = selectionGestureRef.current;
     if (!gesture?.active) return;
@@ -432,6 +515,8 @@ export const GalleryGrid: React.FC<GalleryGridProps> = ({
     gesture.autoScrollVelocity = getAutoScrollVelocity(clientY);
 
     if (gesture.autoScrollVelocity === 0) {
+      const direction = getPageTransitionDirection(clientY);
+      if (direction !== 0) requestAdjacentPage(direction);
       stopAutoScroll(gesture);
       return;
     }
@@ -457,6 +542,8 @@ export const GalleryGrid: React.FC<GalleryGridProps> = ({
         Math.max(0, container.scrollTop + currentGesture.autoScrollVelocity),
       );
       if (nextScrollTop === container.scrollTop) {
+        const direction = getPageTransitionDirection(currentGesture.lastClientY);
+        if (direction !== 0) requestAdjacentPage(direction);
         stopAutoScroll(currentGesture);
         return;
       }
@@ -466,6 +553,8 @@ export const GalleryGrid: React.FC<GalleryGridProps> = ({
       currentGesture.autoScrollVelocity = getAutoScrollVelocity(currentGesture.lastClientY);
 
       if (currentGesture.autoScrollVelocity === 0) {
+        const direction = getPageTransitionDirection(currentGesture.lastClientY);
+        if (direction !== 0) requestAdjacentPage(direction);
         currentGesture.autoScrollFrame = null;
         return;
       }
@@ -474,7 +563,7 @@ export const GalleryGrid: React.FC<GalleryGridProps> = ({
     };
 
     gesture.autoScrollFrame = window.requestAnimationFrame(tick);
-  }, [getAutoScrollVelocity, getScrollContainer, selectCardAtPoint, stopAutoScroll]);
+  }, [getAutoScrollVelocity, getPageTransitionDirection, getScrollContainer, requestAdjacentPage, selectCardAtPoint, stopAutoScroll]);
 
   const handlePointerMove = React.useCallback((event: PointerEvent) => {
     const gesture = selectionGestureRef.current;
@@ -486,6 +575,12 @@ export const GalleryGrid: React.FC<GalleryGridProps> = ({
         gesture.moved = true;
         if (gesture.timer !== null) window.clearTimeout(gesture.timer);
         gesture.timer = null;
+        gesture.active = true;
+        gesture.lastClientX = event.clientX;
+        gesture.lastClientY = event.clientY;
+        event.preventDefault();
+        setIsDragSelecting(true);
+        applySelectionRangeToCard(gesture.anchorKey);
       }
       return;
     }
@@ -495,7 +590,7 @@ export const GalleryGrid: React.FC<GalleryGridProps> = ({
     gesture.lastClientY = event.clientY;
     selectCardAtPoint(event.clientX, event.clientY);
     updateAutoScroll(event.clientX, event.clientY);
-  }, [selectCardAtPoint, updateAutoScroll]);
+  }, [applySelectionRangeToCard, selectCardAtPoint, updateAutoScroll]);
 
   const finishPointerGesture = React.useCallback((event: PointerEvent, cancelled = false) => {
     const gesture = selectionGestureRef.current;
@@ -535,11 +630,47 @@ export const GalleryGrid: React.FC<GalleryGridProps> = ({
     };
   }, [finishPointerGesture, handlePointerMove, stopAutoScroll]);
 
+  React.useLayoutEffect(() => {
+    const gesture = selectionGestureRef.current;
+    const direction = gesture?.pendingPageTransitionDirection ?? 0;
+    if (
+      !gesture
+      || !gesture.active
+      || gesture.page !== currentPage
+      || direction === 0
+      || isLoading
+      || (loadedPage !== undefined && loadedPage !== currentPage)
+    ) return undefined;
+
+    gesture.pageModels.set(currentPage, selectionModel);
+    gesture.pendingPageTransitionDirection = 0;
+
+    const container = getScrollContainer();
+    if (container) {
+      container.scrollTop = direction > 0
+        ? 0
+        : Math.max(0, container.scrollHeight - container.clientHeight);
+      setScrollTick(tick => tick + 1);
+    }
+
+    const frameId = window.requestAnimationFrame(() => {
+      const currentGesture = selectionGestureRef.current;
+      if (!currentGesture?.active || currentGesture.page !== currentPage) return;
+      selectCardAtPoint(currentGesture.lastClientX, currentGesture.lastClientY);
+      updateAutoScroll(currentGesture.lastClientX, currentGesture.lastClientY);
+    });
+
+    return () => window.cancelAnimationFrame(frameId);
+  }, [currentPage, getScrollContainer, isLoading, loadedPage, selectCardAtPoint, selectionModel, updateAutoScroll]);
+
   const beginPointerGesture = React.useCallback((event: React.PointerEvent<HTMLElement>, cardKey: string, cardIds: number[]) => {
     if (!isEditMode || !event.isPrimary || (event.pointerType === 'mouse' && event.button !== 0)) return;
 
     const uniqueIds = Array.from(new Set(cardIds));
     if (uniqueIds.length === 0) return;
+
+    const anchorCard = selectionModel.find(card => card.key === cardKey);
+    if (!anchorCard) return;
 
     suppressClickRef.current = false;
     const previousGesture = selectionGestureRef.current;
@@ -553,6 +684,7 @@ export const GalleryGrid: React.FC<GalleryGridProps> = ({
       startX: event.clientX,
       startY: event.clientY,
       anchorKey: cardKey,
+      anchorIndex: anchorCard.startIndex,
       select: !uniqueIds.every(imageId => selectedIds.has(imageId)),
       active: false,
       moved: false,
@@ -563,6 +695,10 @@ export const GalleryGrid: React.FC<GalleryGridProps> = ({
       lastRangeKey: null,
       autoScrollFrame: null,
       autoScrollVelocity: 0,
+      page: currentPage,
+      pageModels: new Map([[currentPage, selectionModel]]),
+      pageTransitionPromise: null,
+      pendingPageTransitionDirection: 0,
     };
     selectionGestureRef.current = gesture;
     gesture.timer = window.setTimeout(() => {
@@ -573,7 +709,7 @@ export const GalleryGrid: React.FC<GalleryGridProps> = ({
       applySelectionRangeToCard(cardKey);
       setIsDragSelecting(true);
     }, 360);
-  }, [applySelectionRangeToCard, isEditMode, selectedIds, stopAutoScroll]);
+  }, [applySelectionRangeToCard, currentPage, isEditMode, selectedIds, selectionModel, stopAutoScroll]);
 
   const activateCard = React.useCallback((cardIds: number[], openCard: () => void) => {
     if (isEditMode) {
@@ -605,7 +741,6 @@ export const GalleryGrid: React.FC<GalleryGridProps> = ({
     activateCard(cardIds, openCard);
   }, [activateCard]);
 
-  const totalPages = Math.max(1, Math.ceil(totalImages / itemsPerPage));
   const startOffset = (currentPage - 1) * itemsPerPage;
   const endOffset = Math.min(startOffset + images.length, totalImages);
 
@@ -614,9 +749,13 @@ export const GalleryGrid: React.FC<GalleryGridProps> = ({
   }, [currentPage, totalPages]);
 
 const hasActiveFilters = searchQuery !== '' || selectedArtist !== null || selectedMonths.length > 0;
+  const activeFilterCount =
+    selectedMonths.length +
+    (selectedArtist !== null ? 1 : 0) +
+    (searchQuery !== '' ? 1 : 0);
 const selectedArtistObj = selectedArtist === null
     ? null
-    : artists.find(artist => artist.member_id === selectedArtist) || null;
+    : artists.find(artist => getArtistScopeKey(artist) === selectedArtist) || null;
   const monthNavResetKey = [
     selectedArtist ?? 'all-artists',
     searchQuery,
@@ -741,19 +880,33 @@ const selectedArtistObj = selectedArtist === null
         className={`gallery-filter-toolbar ${selectedArtistObj ? 'has-artist' : 'is-empty'} flex items-center gap-2 px-4 select-none sm:gap-3`}
       >
         {onOpenFilters && (
-          <IconButton
-            type="button"
-            onClick={onOpenFilters}
-            variant={hasActiveFilters ? 'primary' : 'secondary'}
-            size="md"
-            className="gallery-filter-toolbar__filter-trigger"
-            aria-label="開啟篩選條件"
-            aria-expanded={isFilterSidebarOpen}
-            aria-controls="gallery-filter-sidebar"
-            title="開啟篩選條件"
-          >
-            <Filter className="h-5 w-5" aria-hidden="true" />
-          </IconButton>
+          <span className="gallery-filter-toolbar__filter-trigger-wrap">
+            <IconButton
+              type="button"
+              onClick={onOpenFilters}
+              variant={hasActiveFilters ? 'primary' : 'secondary'}
+              size="md"
+              className="gallery-filter-toolbar__filter-trigger"
+              aria-label={activeFilterCount > 0
+                ? `開啟篩選條件，目前有 ${activeFilterCount} 項篩選`
+                : '開啟篩選條件'}
+              aria-expanded={isFilterSidebarOpen}
+              aria-controls="gallery-filter-sidebar"
+              title="開啟篩選條件"
+            >
+              <Filter className="h-5 w-5" aria-hidden="true" />
+            </IconButton>
+            {activeFilterCount > 0 && (
+              <Badge
+                variant="surface"
+                size="xs"
+                className="gallery-filter-toolbar__filter-badge"
+                aria-hidden="true"
+              >
+                {activeFilterCount}
+              </Badge>
+            )}
+          </span>
         )}
         <ArtistStickyNav
           artist={selectedArtistObj}
@@ -771,6 +924,7 @@ const selectedArtistObj = selectedArtist === null
           itemsPerPageOptions={itemsPerPageOptions}
           onItemsPerPageChange={onItemsPerPageChange}
           onPageChange={onPageChange}
+          boundaryRef={filterChromeRef}
         />
           <div className="gallery-filter-toolbar__actions">
             <div className="gallery-filter-toolbar__sort ml-auto flex min-h-9 shrink-0 items-center gap-2">
@@ -784,6 +938,7 @@ const selectedArtistObj = selectedArtist === null
               leadingContent={<ArrowUpDown className="gallery-filter-toolbar__sort-icon h-5 w-5" />}
               buttonClassName="gallery-filter-toolbar__sort-control"
               menuPlacement="end"
+              boundaryRef={filterChromeRef}
             />
           </div>
           <div className="gallery-filter-toolbar__page-size">
@@ -800,6 +955,7 @@ const selectedArtistObj = selectedArtist === null
               leadingContent={<List className="gallery-filter-toolbar__page-size-icon h-5 w-5" />}
               buttonClassName="gallery-filter-toolbar__page-size-control"
               menuPlacement="end"
+              boundaryRef={filterChromeRef}
             />
           </div>
         </div>

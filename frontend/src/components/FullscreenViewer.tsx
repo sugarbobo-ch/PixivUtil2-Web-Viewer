@@ -1,26 +1,38 @@
 import React, { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react';
-import { ImageItem, SourceLink, ViewerMode } from '../types';
-import { getGroupPageNumbers, getItemGroupKey } from '../utils/grouping';
+import { FullscreenZoomMode, ImageItem, SourceLink, VideoPreferencePatch, ViewerMode } from '../types';
+import { getGroupPageNumbers } from '../utils/grouping';
+import { buildMediaUrl, isVideoItem } from '../utils/media';
 import { buildThumbnailUrl } from '../utils/webConfig';
 import { fetchSourceLink } from '../utils/sourceLinks';
 import { LocalOpenTarget, openLocalMedia } from '../utils/localFileActions';
+import { copyTextToClipboard, getParentPath } from '../utils/clipboard';
 import { MediaIssuePlaceholder } from './MediaIssuePlaceholder';
 import { DemoMediaBlock } from './DemoMediaBlock';
 import { imageLoadScheduler, useImageLoadPermission } from '../utils/imageLoadScheduler';
+import { useViewerMediaAdmission } from '../hooks/useViewerMediaAdmission';
+import { prefersReducedMotion } from '../utils/motion';
 import { Button, IconButton } from './ui/Button';
+import {
+  buildFilmstripLayout,
+  findIndexAtOffset,
+  FilmstripLayout,
+} from '../utils/viewerLayout';
 import {
   ChevronLeft,
   ChevronRight,
   CircleHelp,
+  Copy,
   Download,
   Expand,
   ExternalLink,
   Eye,
   EyeOff,
+  FastForward,
   FlipHorizontal2,
   FlipVertical2,
   FolderOpen,
-  GalleryHorizontal,
+  Gauge,
+  GalleryThumbnails,
   Grid2X2,
   Image as ImageIcon,
   Info,
@@ -32,9 +44,13 @@ import {
   MoveHorizontal,
   MoveVertical,
   Pause,
+  PanelTop,
+  PanelTopDashed,
+  Play,
   Plus,
   Presentation,
   RefreshCw,
+  Rewind,
   RotateCcw,
   RotateCw,
   Scan,
@@ -44,10 +60,6 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
-
-const buildMediaUrl = (item: ImageItem): string => (
-  `/api/file?path=${encodeURIComponent(item.save_name || '')}&image_id=${item.image_id}`
-);
 
 // Keep the existing 3.5rem square filmstrip design while virtualizing the
 // horizontal track. The CSS uses the same values at the default root size.
@@ -66,6 +78,15 @@ const SWIPE_MIN_VELOCITY = 0.28;
 const SWIPE_MAX_DURATION = 750;
 const SWIPE_DIRECTION_BIAS = 1.2;
 const SWIPE_MOVE_TOLERANCE = 12;
+const WHEEL_NAVIGATION_SETTLE_MS = 100;
+const VIDEO_CONTROLS_HIT_HEIGHT = 72;
+const VIDEO_HOLD_DELAY_MS = 160;
+const VIDEO_CENTER_ZONE_START = 0.35;
+const VIDEO_CENTER_ZONE_END = 0.65;
+const VIDEO_FEEDBACK_DURATION_MS = 700;
+const VIDEO_FEEDBACK_EXIT_MS = 120;
+const VIDEO_SINGLE_CLICK_DELAY_MS = 120;
+const VIDEO_DOUBLE_CLICK_WINDOW_MS = 280;
 
 type ZoomMode = 'auto' | 'lock' | 'width' | 'height' | 'fit' | 'fill' | 'custom';
 
@@ -97,31 +118,51 @@ interface StageSwipeGesture {
   moved: boolean;
 }
 
-const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
-
-interface FilmstripLayout {
-  itemOffsets: number[];
-  boundaryOffsets: Array<number | null>;
-  totalWidth: number;
+interface VideoHoldGesture {
+  pointerId: number;
+  video: HTMLVideoElement;
+  previousPlaybackRate: number;
+  activationTimer: number | null;
+  isActive: boolean;
 }
 
-const findFilmstripIndexAtOffset = (offsets: number[], offset: number) => {
-  if (offsets.length === 0) return 0;
-  let low = 0;
-  let high = offsets.length - 1;
-  let result = 0;
+type VideoFeedbackKind = 'play' | 'pause' | 'rewind' | 'forward' | 'speed';
+type VideoFeedbackPhase = 'visible' | 'exiting';
 
-  while (low <= high) {
-    const middle = Math.floor((low + high) / 2);
-    if (offsets[middle] <= offset) {
-      result = middle;
-      low = middle + 1;
-    } else {
-      high = middle - 1;
-    }
-  }
+interface VideoFeedback {
+  kind: VideoFeedbackKind;
+  label: string;
+  id: number;
+}
 
-  return result;
+interface PreviousVideoDescriptor {
+  url: string;
+  style?: React.CSSProperties;
+  isReady: boolean;
+}
+
+const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
+
+const getVideoInteractionRatio = (
+  event: { clientX: number; clientY: number },
+  video: HTMLVideoElement,
+): number | null => {
+  const bounds = video.getBoundingClientRect();
+  if (bounds.width <= 0 || bounds.height <= 0) return null;
+  if (
+    event.clientX < bounds.left
+    || event.clientX > bounds.right
+    || event.clientY < bounds.top
+    || event.clientY > bounds.bottom
+  ) return null;
+
+  const controlsHeight = Math.min(
+    VIDEO_CONTROLS_HIT_HEIGHT,
+    Math.max(48, bounds.height * 0.14),
+  );
+  if (event.clientY >= bounds.bottom - controlsHeight) return null;
+
+  return clamp((event.clientX - bounds.left) / bounds.width, 0, 1);
 };
 
 interface FilmstripThumbnailProps {
@@ -183,8 +224,6 @@ interface FullscreenViewerProps {
   onDeleteCurrent?: (imageId: number) => void;
   onNavigateNextWork?: () => void;
   onNavigatePrevWork?: () => void;
-  workTitle?: string;
-  artistName?: string;
   preloadCount?: number;
   thumbnailSize: number;
   blurEnabled?: boolean;
@@ -195,8 +234,27 @@ interface FullscreenViewerProps {
   onToggleBlur?: () => void;
   simpleToolbar?: boolean;
   onSimpleToolbarChange?: (simpleMode: boolean) => void;
-  /** Persistent preference for the initial visibility of the horizontal rail. */
+  /** Persistent preference for the initial visibility of the fullscreen toolbar. */
+  showToolbarByDefault?: boolean;
+  /** Persist changes made to the fullscreen toolbar visibility control. */
+  onShowToolbarChange?: (showToolbar: boolean) => void;
+  /** Persistent preference for the initial visibility of the gallery panel. */
   showFilmstripByDefault?: boolean;
+  /** Persist changes made to the fullscreen gallery panel visibility control. */
+  onShowFilmstripChange?: (showFilmstrip: boolean) => void;
+  /** Persistent fullscreen defaults configured from the Web Viewer settings. */
+  fullscreenShowCheckerboard?: boolean;
+  /** Persist changes made to the fullscreen checkerboard control. */
+  onCheckerboardChange?: (enabled: boolean) => void;
+  fullscreenZoomMode?: FullscreenZoomMode;
+  /** Persist named fullscreen zoom modes selected from the toolbar. */
+  onZoomModeChange?: (mode: FullscreenZoomMode) => void;
+  videoSeekSeconds?: number;
+  videoHoldPlaybackRate?: number;
+  videoMuted?: boolean;
+  videoVolume?: number;
+  videoAutoplay?: boolean;
+  onVideoPreferenceChange?: (patch: VideoPreferencePatch) => void;
   pageOffset?: number;
   totalImages?: number;
   activeMode: ViewerMode;
@@ -211,8 +269,6 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
   onDeleteCurrent,
   onNavigateNextWork,
   onNavigatePrevWork,
-  workTitle,
-  artistName,
   preloadCount = 3,
   thumbnailSize,
   blurEnabled = false,
@@ -223,7 +279,20 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
   onToggleBlur,
   simpleToolbar = true,
   onSimpleToolbarChange,
+  showToolbarByDefault = true,
+  onShowToolbarChange,
   showFilmstripByDefault = true,
+  onShowFilmstripChange,
+  fullscreenShowCheckerboard = true,
+  fullscreenZoomMode = 'auto',
+  onCheckerboardChange,
+  onZoomModeChange,
+  videoSeekSeconds = 5,
+  videoHoldPlaybackRate = 2,
+  videoMuted = false,
+  videoVolume = 1,
+  videoAutoplay = true,
+  onVideoPreferenceChange,
   pageOffset = 0,
   totalImages = images.length,
   activeMode,
@@ -243,23 +312,33 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
   const currentPageTotal = pageNumberState.pageTotals[currentIndex] ?? pageNumberState.totalPages;
   const currentMediaUrl = currentItem ? buildMediaUrl(currentItem) : '';
   const currentThumbnailUrl = currentItem ? buildThumbnailUrl(currentItem, thumbnailSize) : '';
-  const currentItemIsVideo = currentItem?.save_name.toLowerCase().endsWith('.mp4') ?? false;
-  const thumbnailAdmitted = useImageLoadPermission({
-    url: currentThumbnailUrl,
-    priority: 0,
-    kind: 'thumbnail',
+  const currentItemIsVideo = currentItem ? isVideoItem(currentItem) : false;
+  const shouldAutoplayVideo = videoAutoplay && !prefersReducedMotion();
+  const {
+    thumbnailAdmitted,
+    markThumbnailLoaded,
+    markThumbnailError,
+  } = useViewerMediaAdmission({
+    thumbnailUrl: currentThumbnailUrl,
+    mediaUrl: currentMediaUrl,
+    thumbnailPriority: 0,
+    originalPriority: 0,
+    thumbnailEnabled: Boolean(currentItem && !demoMode && !currentItemIsVideo && !currentItem.media_status),
+    originalEnabled: false,
     owner: 'fullscreen',
-    enabled: Boolean(currentItem && !demoMode && !currentItemIsVideo && !currentItem.media_status),
   });
   const [showDetails, setShowDetails] = useState(false);
   const [sourceLink, setSourceLink] = useState<SourceLink | null>(null);
   const [isSourceLoading, setIsSourceLoading] = useState(false);
   const [openAction, setOpenAction] = useState<LocalOpenTarget | null>(null);
   const [openActionError, setOpenActionError] = useState<string | null>(null);
+  const [copyAction, setCopyAction] = useState<LocalOpenTarget | null>(null);
+  const [copyActionError, setCopyActionError] = useState<string | null>(null);
+  const [copyFeedback, setCopyFeedback] = useState<string | null>(null);
   const [displayedImageUrl, setDisplayedImageUrl] = useState<string | null>(null);
   const [thumbnailFailed, setThumbnailFailed] = useState(false);
   const [originalLoadFailed, setOriginalLoadFailed] = useState(false);
-  const [zoomMode, setZoomMode] = useState<ZoomMode>('auto');
+  const [zoomMode, setZoomMode] = useState<ZoomMode>(fullscreenZoomMode);
   const [customZoomPercent, setCustomZoomPercent] = useState(100);
   const [rotation, setRotation] = useState(0);
   const [flipHorizontal, setFlipHorizontal] = useState(false);
@@ -270,13 +349,21 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
   const [naturalSizeMediaUrl, setNaturalSizeMediaUrl] = useState<string | null>(null);
   const [isMediaTransitionSuppressed, setIsMediaTransitionSuppressed] = useState(true);
   const [stageSize, setStageSize] = useState({ width: 0, height: 0 });
-  const [showFilmstrip, setShowFilmstrip] = useState(showFilmstripByDefault);
+const [videoNaturalSize, setVideoNaturalSize] = useState({ width: 0, height: 0 });
+const [videoNaturalSizeMediaUrl, setVideoNaturalSizeMediaUrl] = useState<string | null>(null);
+const [videoReadyMediaUrl, setVideoReadyMediaUrl] = useState<string | null>(null);
+const [videoFrameSize, setVideoFrameSize] = useState({ width: 0, height: 0 });
+const [videoFeedback, setVideoFeedback] = useState<VideoFeedback | null>(null);
+const [videoFeedbackPhase, setVideoFeedbackPhase] = useState<VideoFeedbackPhase>('visible');
+  const [showToolbar, setShowToolbar] = useState(showToolbarByDefault);
+const [showFilmstrip, setShowFilmstrip] = useState(showFilmstripByDefault);
   const [showShortcutHelp, setShowShortcutHelp] = useState(false);
   const [isMobileToolbarOpen, setIsMobileToolbarOpen] = useState(false);
-  const [checkerboardEnabled, setCheckerboardEnabled] = useState(false);
+  const [checkerboardEnabled, setCheckerboardEnabled] = useState(fullscreenShowCheckerboard);
   const [isBrowserFullscreen, setIsBrowserFullscreen] = useState(false);
   const [isSlideshowPlaying, setIsSlideshowPlaying] = useState(false);
   const viewerRef = useRef<HTMLDivElement>(null);
+  const toolbarRestoreButtonRef = useRef<HTMLButtonElement>(null);
   const mobileToolbarToggleRef = useRef<HTMLButtonElement>(null);
   const mobileToolbarMenuRef = useRef<HTMLDivElement>(null);
   const mobileToolbarWasOpenRef = useRef(false);
@@ -291,8 +378,9 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
   } | null>(null);
   const stageSwipeGestureRef = useRef<StageSwipeGesture | null>(null);
   const suppressStageClickUntilRef = useRef(0);
-  const wheelGestureActive = useRef(false);
-  const wheelGestureResetTimer = useRef<number | null>(null);
+  const wheelNavigationTargetRef = useRef<number | null>(null);
+  const wheelNavigationBoundaryRef = useRef<1 | -1 | 0>(0);
+  const wheelNavigationTimerRef = useRef<number | null>(null);
   const filmstripScrollRef = useRef<HTMLDivElement>(null);
   const hasPositionedFilmstrip = useRef(false);
   const filmstripScrollFrameRef = useRef<number | null>(null);
@@ -309,10 +397,45 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
   const [filmstripScrollLeft, setFilmstripScrollLeft] = useState(0);
   const [filmstripViewportWidth, setFilmstripViewportWidth] = useState(720);
   const previouslyFocusedElement = useRef<HTMLElement | null>(null);
+  const videoFrameRef = useRef<HTMLDivElement>(null);
+  const videoHoldGestureRef = useRef<VideoHoldGesture | null>(null);
+  const videoFeedbackTimerRef = useRef<number | null>(null);
+  const copyFeedbackTimerRef = useRef<number | null>(null);
+  const videoFeedbackSequenceRef = useRef(0);
+  const videoSeekFeedbackRef = useRef<{ direction: -1 | 1; totalSeconds: number } | null>(null);
+  const videoClickTimerRef = useRef<number | null>(null);
+  const videoLastTapAtRef = useRef<number | null>(null);
+  const videoClickPlaybackStateRef = useRef<boolean | null>(null);
+  const suppressNextVideoClickRef = useRef(false);
+  const previousVideoRef = useRef<PreviousVideoDescriptor | null>(null);
+  const outgoingVideoRef = useRef<HTMLVideoElement>(null);
+
+  useEffect(() => {
+    setShowToolbar(showToolbarByDefault);
+  }, [showToolbarByDefault]);
+
+  useEffect(() => {
+    if (showToolbar) return undefined;
+
+    const focusFrame = window.requestAnimationFrame(() => {
+      toolbarRestoreButtonRef.current?.focus({ preventScroll: true });
+    });
+    return () => window.cancelAnimationFrame(focusFrame);
+  }, [showToolbar]);
 
   useEffect(() => {
     setShowFilmstrip(showFilmstripByDefault);
   }, [showFilmstripByDefault]);
+
+  useEffect(() => {
+    setCheckerboardEnabled(fullscreenShowCheckerboard);
+  }, [fullscreenShowCheckerboard]);
+
+  useEffect(() => {
+    setZoomMode(fullscreenZoomMode);
+    setCustomZoomPercent(100);
+    setPan({ x: 0, y: 0 });
+  }, [fullscreenZoomMode]);
 
   useEffect(() => {
     if (!isMobileToolbarOpen) {
@@ -355,10 +478,19 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
     && currentItem.media_status !== 'missing'
     && currentItem.media_status !== 'internal',
   );
+  const currentFilePath = currentItem?.save_name ?? '';
+  const currentFolderPath = currentFilePath ? getParentPath(currentFilePath) : '';
+  const canCopyFilePath = Boolean(currentFilePath);
+  const canCopyFolderPath = Boolean(currentFolderPath);
   const openMediaLabel = currentItemIsVideo ? '開啟影片' : '開啟圖片';
-  const visibleOriginalUrl = displayedImagePathRef.current === currentItem?.save_name
-    ? displayedImageUrl
-    : null;
+  // Keep the last decoded original visible while the next item is loading.
+  // The navigation metadata can advance immediately, but the media surface
+  // should not be cleared until the replacement is ready to paint.
+  const visibleOriginalUrl = displayedImageUrl;
+  const isDisplayedMediaCurrent = Boolean(
+    currentItem
+    && displayedImagePathRef.current === currentItem.save_name,
+  );
   const showThumbnailPreview = thumbnailAdmitted
     && !thumbnailFailed
     && !Boolean(visibleOriginalUrl);
@@ -367,7 +499,7 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
     && !demoMode
     && !currentItemIsVideo
     && !currentItem.media_status
-    && naturalSizeMediaUrl === currentMediaUrl
+    && naturalSizeMediaUrl === (displayedImageUrl || currentMediaUrl)
     && naturalSize.width > 0
     && naturalSize.height > 0
     && stageSize.width > 0
@@ -381,15 +513,21 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
   );
   const isMediaLoading = Boolean(
     hasTransformableMedia
-    && !visibleOriginalUrl
+    && !isDisplayedMediaCurrent
   );
   const suppressMediaTransitions = isMediaLoading || isMediaTransitionSuppressed;
   const normalizedRotation = ((rotation % 360) + 360) % 360;
   const isQuarterTurn = normalizedRotation === 90 || normalizedRotation === 270;
   const orientedNaturalWidth = isQuarterTurn ? naturalSize.height : naturalSize.width;
   const orientedNaturalHeight = isQuarterTurn ? naturalSize.width : naturalSize.height;
-  const baseFitZoomPercent = transformReady
-    ? Math.min(stageSize.width / naturalSize.width, stageSize.height / naturalSize.height) * 100
+  // The image element is sized to its intrinsic content and constrained by
+  // the stage. Keep the transform baseline in sync with that geometry so
+  // small images are not scaled down just because the stage is larger.
+  const baseMediaZoomPercent = transformReady
+    ? Math.min(
+      100,
+      Math.min(stageSize.width / naturalSize.width, stageSize.height / naturalSize.height) * 100,
+    )
     : 100;
   const widthZoomPercent = transformReady ? stageSize.width / orientedNaturalWidth * 100 : 100;
   const heightZoomPercent = transformReady ? stageSize.height / orientedNaturalHeight * 100 : 100;
@@ -410,8 +548,8 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
       default: return customZoomPercent;
     }
   })();
-  const renderScale = transformReady && baseFitZoomPercent > 0
-    ? effectiveZoomPercent / baseFitZoomPercent
+  const renderScale = transformReady && baseMediaZoomPercent > 0
+    ? effectiveZoomPercent / baseMediaZoomPercent
     : 1;
   const isPannable = transformReady && (
     orientedNaturalWidth * effectiveZoomPercent / 100 > stageSize.width + 1
@@ -466,14 +604,16 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
   const fitToViewer = useCallback(() => {
     setZoomMode('fit');
     setPan({ x: 0, y: 0 });
-  }, []);
+    onZoomModeChange?.('fit');
+  }, [onZoomModeChange]);
 
   const applyZoomMode = useCallback((mode: Exclude<ZoomMode, 'custom'>) => {
     if (!transformReady) return;
     if (mode === 'lock') setCustomZoomPercent(Math.round(effectiveZoomPercent));
     setZoomMode(mode);
     setPan({ x: 0, y: 0 });
-  }, [effectiveZoomPercent, transformReady]);
+    onZoomModeChange?.(mode);
+  }, [effectiveZoomPercent, onZoomModeChange, transformReady]);
 
   const rotateImage = useCallback((degrees: number) => {
     if (!transformReady) return;
@@ -481,40 +621,64 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
     setPan({ x: 0, y: 0 });
   }, [transformReady]);
 
-  const mediaTransformStyle = React.useMemo<React.CSSProperties>(() => ({
+  const mediaFrameStyle = React.useMemo<React.CSSProperties>(() => ({
+    width: transformReady ? naturalSize.width * baseMediaZoomPercent / 100 : undefined,
+    height: transformReady ? naturalSize.height * baseMediaZoomPercent / 100 : undefined,
     transform: `translate3d(${pan.x}px, ${pan.y}px, 0) rotate(${normalizedRotation}deg) scale(${renderScale * (flipHorizontal ? -1 : 1)}, ${renderScale * (flipVertical ? -1 : 1)})`,
-  }), [flipHorizontal, flipVertical, normalizedRotation, pan.x, pan.y, renderScale]);
+  }), [
+    baseMediaZoomPercent,
+    flipHorizontal,
+    flipVertical,
+    naturalSize.height,
+    naturalSize.width,
+    normalizedRotation,
+    pan.x,
+    pan.y,
+    renderScale,
+    transformReady,
+  ]);
 
-  const filmstripLayout = React.useMemo<FilmstripLayout>(() => {
-    const itemOffsets: number[] = [];
-    const boundaryOffsets: Array<number | null> = [];
-    let offset = FILMSTRIP_EDGE_PADDING;
+  const videoDisplayStyle = React.useMemo<React.CSSProperties | undefined>(() => {
+    if (
+      videoNaturalSizeMediaUrl !== currentMediaUrl
+      || videoNaturalSize.width <= 0
+      || videoNaturalSize.height <= 0
+      || videoFrameSize.width <= 0
+      || videoFrameSize.height <= 0
+    ) return undefined;
 
-    images.forEach((item, index) => {
-      if (index > 0) {
-        offset += FILMSTRIP_GAP;
-        const previousItem = images[index - 1];
-        const isWorkBoundary = getItemGroupKey(item) !== getItemGroupKey(previousItem);
-        if (isWorkBoundary) {
-          boundaryOffsets[index] = offset + FILMSTRIP_BOUNDARY_MARGIN;
-          offset += FILMSTRIP_BOUNDARY_WIDTH + FILMSTRIP_BOUNDARY_MARGIN * 2;
-        } else {
-          boundaryOffsets[index] = null;
-        }
-      } else {
-        boundaryOffsets[index] = null;
-      }
-
-      itemOffsets[index] = offset;
-      offset += FILMSTRIP_ITEM_SIZE;
-    });
+    const scale = Math.min(
+      videoFrameSize.width / videoNaturalSize.width,
+      videoFrameSize.height / videoNaturalSize.height,
+    );
+    if (!Number.isFinite(scale) || scale <= 0) return undefined;
 
     return {
-      itemOffsets,
-      boundaryOffsets,
-      totalWidth: offset + FILMSTRIP_EDGE_PADDING,
+      width: videoNaturalSize.width * scale,
+      height: videoNaturalSize.height * scale,
+      maxWidth: 'none',
+      maxHeight: 'none',
     };
-  }, [images]);
+  }, [currentMediaUrl, videoFrameSize.height, videoFrameSize.width, videoNaturalSize.height, videoNaturalSize.width, videoNaturalSizeMediaUrl]);
+  const isVideoReady = videoReadyMediaUrl === currentMediaUrl;
+  const previousVideo = previousVideoRef.current;
+  const showOutgoingVideo = Boolean(
+    currentItemIsVideo
+    && !demoMode
+    && !currentItem?.media_status
+    && !isVideoReady
+    && previousVideo
+    && previousVideo.url !== currentMediaUrl
+    && previousVideo.isReady,
+  );
+
+  const filmstripLayout = React.useMemo<FilmstripLayout>(() => buildFilmstripLayout(images, {
+    itemSize: FILMSTRIP_ITEM_SIZE,
+    gap: FILMSTRIP_GAP,
+    edgePadding: FILMSTRIP_EDGE_PADDING,
+    boundaryWidth: FILMSTRIP_BOUNDARY_WIDTH,
+    boundaryMargin: FILMSTRIP_BOUNDARY_MARGIN,
+  }), [images]);
 
   useEffect(() => {
     let cancelled = false;
@@ -546,28 +710,41 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
       mediaTransitionResetFrameRef.current = null;
     }
     setIsMediaTransitionSuppressed(true);
-    displayedImageUrlRef.current = null;
-    displayedImagePathRef.current = null;
-    setDisplayedImageUrl(null);
     setThumbnailFailed(false);
     setOriginalLoadFailed(false);
-    if (zoomModeRef.current !== 'lock') {
-      setZoomMode('auto');
-      setCustomZoomPercent(100);
+
+    // A video/demo/invalid item does not use the previous image surface. For
+    // ordinary image navigation, keep the previous decoded media and its
+    // geometry until the replacement image has been decoded below.
+    if (demoMode || currentItemIsVideo || !currentMediaUrl) {
+      displayedImageUrlRef.current = null;
+      displayedImagePathRef.current = null;
+      setDisplayedImageUrl(null);
+      setNaturalSize({ width: 0, height: 0 });
+      setNaturalSizeMediaUrl(null);
+      if (zoomModeRef.current !== 'lock') {
+        setZoomMode(fullscreenZoomMode);
+        setCustomZoomPercent(100);
+      }
+      setRotation(0);
+      setFlipHorizontal(false);
+      setFlipVertical(false);
+      setPan({ x: 0, y: 0 });
+      setIsPanning(false);
     }
-    setRotation(0);
-    setFlipHorizontal(false);
-    setFlipVertical(false);
-    setPan({ x: 0, y: 0 });
-    setIsPanning(false);
-    setNaturalSize({ width: 0, height: 0 });
-    setNaturalSizeMediaUrl(null);
+
     setShowShortcutHelp(false);
     setIsMobileToolbarOpen(false);
+    setCopyActionError(null);
+    setCopyFeedback(null);
+    if (copyFeedbackTimerRef.current !== null) {
+      window.clearTimeout(copyFeedbackTimerRef.current);
+      copyFeedbackTimerRef.current = null;
+    }
     panGestureRef.current = null;
     stageSwipeGestureRef.current = null;
     suppressStageClickUntilRef.current = 0;
-  }, [currentItem?.save_name, currentMediaUrl]);
+  }, [currentItem?.save_name, currentItemIsVideo, currentMediaUrl, demoMode, fullscreenZoomMode]);
 
   useEffect(() => {
     const syncBrowserFullscreenState = () => {
@@ -600,6 +777,78 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
       setOpenAction(null);
     }
   }, [canOpenLocalMedia, currentItem]);
+
+  const handleCopyPath = useCallback(async (target: LocalOpenTarget) => {
+    const path = target === 'file' ? currentFilePath : currentFolderPath;
+    if (!path) {
+      setCopyActionError(target === 'folder'
+        ? '目前檔案沒有可辨識的資料夾路徑。'
+        : '目前沒有可複製的檔案路徑。');
+      setCopyFeedback(null);
+      return;
+    }
+
+    setCopyAction(target);
+    setCopyActionError(null);
+    try {
+      await copyTextToClipboard(path);
+      if (copyFeedbackTimerRef.current !== null) {
+        window.clearTimeout(copyFeedbackTimerRef.current);
+      }
+      setCopyFeedback(target === 'folder' ? '已複製資料夾路徑' : '已複製檔案路徑');
+      copyFeedbackTimerRef.current = window.setTimeout(() => {
+        setCopyFeedback(null);
+        copyFeedbackTimerRef.current = null;
+      }, 1800);
+    } catch (error) {
+      setCopyActionError(error instanceof Error ? error.message : '無法複製路徑，請稍後再試。');
+    } finally {
+      setCopyAction(null);
+    }
+  }, [currentFilePath, currentFolderPath]);
+
+  const handleShowToolbarChange = useCallback((nextValue: boolean) => {
+    if (showToolbar === nextValue) return;
+    setShowToolbar(nextValue);
+    onShowToolbarChange?.(nextValue);
+  }, [onShowToolbarChange, showToolbar]);
+
+  const toggleShowToolbar = useCallback(() => {
+    handleShowToolbarChange(!showToolbar);
+  }, [handleShowToolbarChange, showToolbar]);
+
+  const handleShowFilmstripChange = useCallback((nextValue: boolean) => {
+    if (showFilmstrip === nextValue) return;
+    setShowFilmstrip(nextValue);
+    onShowFilmstripChange?.(nextValue);
+  }, [onShowFilmstripChange, showFilmstrip]);
+
+  const toggleShowFilmstrip = useCallback(() => {
+    handleShowFilmstripChange(!showFilmstrip);
+  }, [handleShowFilmstripChange, showFilmstrip]);
+
+  const handleCheckerboardChange = useCallback((nextValue: boolean) => {
+    if (checkerboardEnabled === nextValue) return;
+    setCheckerboardEnabled(nextValue);
+    onCheckerboardChange?.(nextValue);
+  }, [checkerboardEnabled, onCheckerboardChange]);
+
+  const toggleCheckerboard = useCallback(() => {
+    handleCheckerboardChange(!checkerboardEnabled);
+  }, [checkerboardEnabled, handleCheckerboardChange]);
+
+  const handleShowToolbar = useCallback(() => {
+    handleShowToolbarChange(true);
+    window.requestAnimationFrame(() => {
+      viewerRef.current?.focus({ preventScroll: true });
+    });
+  }, [handleShowToolbarChange]);
+
+  useEffect(() => () => {
+    if (copyFeedbackTimerRef.current !== null) {
+      window.clearTimeout(copyFeedbackTimerRef.current);
+    }
+  }, []);
 
   // Reserve the highest-priority original-image slot for the image currently
   // shown in the stage before directional neighbors are scheduled.
@@ -715,6 +964,83 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
     };
   }, [currentItem?.image_id, currentItem?.media_status, currentItemIsVideo]);
 
+  useLayoutEffect(() => {
+    const frame = videoFrameRef.current;
+    if (!frame || !currentItemIsVideo || demoMode) {
+      setVideoFrameSize({ width: 0, height: 0 });
+      return undefined;
+    }
+
+    const updateFrameSize = () => {
+      const nextSize = {
+        width: frame.clientWidth,
+        height: frame.clientHeight,
+      };
+      setVideoFrameSize(previous => (
+        previous.width === nextSize.width && previous.height === nextSize.height
+          ? previous
+          : nextSize
+      ));
+    };
+
+    updateFrameSize();
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(updateFrameSize);
+    observer?.observe(frame);
+    window.addEventListener('resize', updateFrameSize);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener('resize', updateFrameSize);
+    };
+  }, [currentItem?.image_id, currentItemIsVideo, demoMode, showFilmstrip, showToolbar]);
+
+  useLayoutEffect(() => {
+    if (currentItemIsVideo && !demoMode && !currentItem?.media_status && currentMediaUrl && isVideoReady) {
+      previousVideoRef.current = {
+        url: currentMediaUrl,
+        style: videoDisplayStyle,
+        isReady: isVideoReady,
+      };
+    } else if (!currentItemIsVideo || demoMode || currentItem?.media_status || !currentMediaUrl) {
+      previousVideoRef.current = null;
+    }
+  }, [currentItem?.media_status, currentItemIsVideo, currentMediaUrl, demoMode, isVideoReady, videoDisplayStyle]);
+
+  useLayoutEffect(() => {
+    if (showOutgoingVideo) {
+      outgoingVideoRef.current?.pause();
+    }
+  }, [currentMediaUrl, showOutgoingVideo]);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !currentItemIsVideo || demoMode) return;
+
+    const shouldMuteVideo = videoMuted || videoVolume <= 0;
+    if (video.muted !== shouldMuteVideo) video.muted = shouldMuteVideo;
+    if (Math.abs(video.volume - videoVolume) > 0.001) video.volume = clamp(videoVolume, 0, 1);
+  }, [currentItemIsVideo, currentMediaUrl, demoMode, isVideoReady, videoMuted, videoVolume]);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !currentItemIsVideo || demoMode || !isVideoReady) return;
+
+    if (!shouldAutoplayVideo) {
+      if (!video.paused) video.pause();
+      return;
+    }
+
+    if ((video.paused || video.ended) && video.readyState >= 2) {
+      try {
+        const playPromise = video.play();
+        if (playPromise && typeof playPromise.catch === 'function') {
+          void playPromise.catch(() => undefined);
+        }
+      } catch {
+        // Browsers may reject unmuted autoplay before user interaction.
+      }
+    }
+  }, [currentItemIsVideo, currentMediaUrl, demoMode, isVideoReady, shouldAutoplayVideo]);
+
   useEffect(() => {
     setPan(previous => {
       const next = clampPan(previous, effectiveZoomPercent, rotation);
@@ -819,7 +1145,7 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
     preloadIndexes.forEach(idx => {
       if (idx >= 0 && idx < images.length) {
         const item = images[idx];
-        if (item && !item.media_status && item.save_name && !item.save_name.toLowerCase().endsWith('.mp4')) {
+        if (item && !item.media_status && item.save_name && !isVideoItem(item)) {
           const url = buildMediaUrl(item);
           activePreloadUrls.add(url);
           if (preloadedImagesRef.current.has(url)) return;
@@ -885,13 +1211,25 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
       if (cancelled || revealFrame !== null) return;
       revealFrame = window.requestAnimationFrame(() => {
         revealFrame = null;
-        if (cancelled) return;
-        imageLoadScheduler.markLoaded(currentMediaUrl);
-        if (image.naturalWidth > 0 && image.naturalHeight > 0) {
-          setNaturalSize({
-            width: image.naturalWidth,
-            height: image.naturalHeight,
-          });
+      if (cancelled) return;
+      imageLoadScheduler.markLoaded(currentMediaUrl);
+      if (image.naturalWidth > 0 && image.naturalHeight > 0) {
+        // Apply the new item's default view only at the same moment that its
+        // decoded pixels become visible. This keeps the outgoing image stable
+        // while loading and prevents a blank/reset frame between items.
+        if (zoomModeRef.current !== 'lock') {
+          setZoomMode(fullscreenZoomMode);
+          setCustomZoomPercent(100);
+        }
+        setRotation(0);
+        setFlipHorizontal(false);
+        setFlipVertical(false);
+        setPan({ x: 0, y: 0 });
+        setIsPanning(false);
+        setNaturalSize({
+          width: image.naturalWidth,
+          height: image.naturalHeight,
+        });
           setNaturalSizeMediaUrl(currentMediaUrl);
         }
         displayedImageUrlRef.current = currentMediaUrl;
@@ -908,9 +1246,14 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
     const handleImageError = () => {
       if (cancelled) return;
       imageLoadScheduler.markFinished(currentMediaUrl, false);
-      displayedImageUrlRef.current = null;
-      displayedImagePathRef.current = null;
-      setDisplayedImageUrl(null);
+      // If a later item fails, keep the already decoded outgoing image in
+      // place instead of exposing an empty stage. Only clear the surface when
+      // the failed request belongs to the image currently being displayed.
+      if (displayedImagePathRef.current === currentItem.save_name) {
+        displayedImageUrlRef.current = null;
+        displayedImagePathRef.current = null;
+        setDisplayedImageUrl(null);
+      }
       setOriginalLoadFailed(true);
     };
 
@@ -933,7 +1276,7 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
       image.onload = null;
       image.onerror = null;
     };
-  }, [currentItem, currentItemIsVideo, currentMediaUrl, demoMode]);
+  }, [currentItem, currentItemIsVideo, currentMediaUrl, demoMode, fullscreenZoomMode]);
 
   const reloadCurrentMedia = useCallback(() => {
     if (demoMode || !currentItem || !currentMediaUrl) return;
@@ -1002,7 +1345,7 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
 
   useEffect(() => {
     if (!isSlideshowPlaying) return undefined;
-    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+    if (prefersReducedMotion()) {
       setIsSlideshowPlaying(false);
       return undefined;
     }
@@ -1015,16 +1358,269 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
     return () => window.clearInterval(timer);
   }, [currentIndex, images.length, isSlideshowPlaying, onNavigate]);
 
+  const showVideoFeedback = useCallback((
+    feedback: Omit<VideoFeedback, 'id'>,
+    options: { persist?: boolean } = {},
+  ) => {
+    if (videoFeedbackTimerRef.current !== null) {
+      window.clearTimeout(videoFeedbackTimerRef.current);
+    }
+    if (feedback.kind !== 'rewind' && feedback.kind !== 'forward') {
+      videoSeekFeedbackRef.current = null;
+    }
+    const id = videoFeedbackSequenceRef.current + 1;
+    videoFeedbackSequenceRef.current = id;
+    setVideoFeedbackPhase('visible');
+    setVideoFeedback({ ...feedback, id });
+    if (options.persist) {
+      videoFeedbackTimerRef.current = null;
+      return;
+    }
+    videoFeedbackTimerRef.current = window.setTimeout(() => {
+      setVideoFeedbackPhase('exiting');
+      videoFeedbackTimerRef.current = window.setTimeout(() => {
+        setVideoFeedback(null);
+        setVideoFeedbackPhase('visible');
+        videoSeekFeedbackRef.current = null;
+        videoFeedbackTimerRef.current = null;
+      }, VIDEO_FEEDBACK_EXIT_MS);
+    }, VIDEO_FEEDBACK_DURATION_MS - VIDEO_FEEDBACK_EXIT_MS);
+  }, []);
+
+  const clearVideoFeedback = useCallback(() => {
+    if (videoFeedbackTimerRef.current !== null) {
+      window.clearTimeout(videoFeedbackTimerRef.current);
+      videoFeedbackTimerRef.current = null;
+    }
+    setVideoFeedback(null);
+    setVideoFeedbackPhase('visible');
+    videoSeekFeedbackRef.current = null;
+  }, []);
+
+  const clearVideoClick = useCallback(() => {
+    if (videoClickTimerRef.current !== null) {
+      window.clearTimeout(videoClickTimerRef.current);
+      videoClickTimerRef.current = null;
+    }
+  }, []);
+
   const toggleVideoPlayback = useCallback(() => {
     const video = videoRef.current;
     if (!video) return;
 
     if (video.paused || video.ended) {
-      void video.play().catch(() => undefined);
+      const playPromise = video.play();
+      if (playPromise && typeof playPromise.catch === 'function') {
+        void playPromise.catch(() => undefined);
+      }
+      showVideoFeedback({ kind: 'play', label: '播放' });
     } else {
       video.pause();
+      showVideoFeedback({ kind: 'pause', label: '暫停' });
     }
-  }, []);
+  }, [showVideoFeedback]);
+
+  const releaseVideoHold = useCallback((clearFeedback = true) => {
+    const gesture = videoHoldGestureRef.current;
+    if (!gesture) return;
+
+    if (gesture.activationTimer !== null) {
+      window.clearTimeout(gesture.activationTimer);
+    }
+    if (gesture.isActive) {
+      gesture.video.playbackRate = gesture.previousPlaybackRate;
+      if (clearFeedback) clearVideoFeedback();
+    }
+    videoHoldGestureRef.current = null;
+  }, [clearVideoFeedback]);
+
+  useEffect(() => {
+    releaseVideoHold();
+    clearVideoFeedback();
+    clearVideoClick();
+    videoLastTapAtRef.current = null;
+    videoClickPlaybackStateRef.current = null;
+    suppressNextVideoClickRef.current = false;
+    setVideoNaturalSize({ width: 0, height: 0 });
+    setVideoNaturalSizeMediaUrl(null);
+    setVideoReadyMediaUrl(null);
+  }, [clearVideoClick, clearVideoFeedback, currentItem?.image_id, currentItemIsVideo, currentMediaUrl, demoMode, releaseVideoHold]);
+
+  useEffect(() => () => {
+    releaseVideoHold(false);
+  }, [releaseVideoHold]);
+
+  useEffect(() => () => {
+    if (videoFeedbackTimerRef.current !== null) {
+      window.clearTimeout(videoFeedbackTimerRef.current);
+    }
+    clearVideoClick();
+  }, [clearVideoClick]);
+
+  const handleVideoLoadedMetadata = useCallback((event: React.SyntheticEvent<HTMLVideoElement>) => {
+    const video = event.currentTarget;
+    const shouldMuteVideo = videoMuted || videoVolume <= 0;
+    if (video.muted !== shouldMuteVideo) video.muted = shouldMuteVideo;
+    if (Math.abs(video.volume - videoVolume) > 0.001) video.volume = clamp(videoVolume, 0, 1);
+    if (video.videoWidth <= 0 || video.videoHeight <= 0) return;
+    setVideoNaturalSize({
+      width: video.videoWidth,
+      height: video.videoHeight,
+    });
+    setVideoNaturalSizeMediaUrl(currentMediaUrl);
+  }, [currentMediaUrl, videoMuted, videoVolume]);
+
+  const handleVideoLoadedData = useCallback((event: React.SyntheticEvent<HTMLVideoElement>) => {
+    const video = event.currentTarget;
+    if (video.videoWidth > 0 && video.videoHeight > 0) {
+      setVideoNaturalSize({
+        width: video.videoWidth,
+        height: video.videoHeight,
+      });
+      setVideoNaturalSizeMediaUrl(currentMediaUrl);
+    }
+    setVideoReadyMediaUrl(currentMediaUrl);
+  }, [currentMediaUrl]);
+
+  const handleVideoVolumeChange = useCallback((event: React.SyntheticEvent<HTMLVideoElement>) => {
+    const volume = clamp(event.currentTarget.volume, 0, 1);
+    const isMuted = event.currentTarget.muted || volume <= 0;
+    onVideoPreferenceChange?.({
+      videoMuted: isMuted,
+      videoVolume: isMuted ? 0 : volume,
+    });
+  }, [onVideoPreferenceChange]);
+
+  const seekVideo = useCallback((seconds: number, playbackWasPaused?: boolean | null) => {
+    const video = videoRef.current;
+    if (!video || !Number.isFinite(video.duration) || video.duration <= 0) return;
+    const shouldRemainPaused = playbackWasPaused ?? (video.paused || video.ended);
+    const currentTime = Number.isFinite(video.currentTime) ? video.currentTime : 0;
+    video.currentTime = clamp(currentTime + seconds, 0, video.duration);
+    const direction: -1 | 1 = seconds < 0 ? -1 : 1;
+    const previous = videoSeekFeedbackRef.current;
+    const totalSeconds = previous?.direction === direction
+      ? previous.totalSeconds + Math.abs(seconds)
+      : Math.abs(seconds);
+    videoSeekFeedbackRef.current = { direction, totalSeconds };
+    showVideoFeedback({
+      kind: direction < 0 ? 'rewind' : 'forward',
+      label: `${direction < 0 ? '倒轉' : '快轉'} ${totalSeconds} 秒`,
+    });
+    if (shouldRemainPaused) {
+      if (!video.paused) video.pause();
+    } else if (video.paused || video.ended) {
+      const playPromise = video.play();
+      if (playPromise && typeof playPromise.catch === 'function') {
+        void playPromise.catch(() => undefined);
+      }
+    }
+  }, [showVideoFeedback]);
+
+  const handleVideoClick = useCallback((event: React.MouseEvent<HTMLVideoElement>) => {
+    event.stopPropagation();
+    if (suppressNextVideoClickRef.current) {
+      suppressNextVideoClickRef.current = false;
+      clearVideoClick();
+      videoLastTapAtRef.current = null;
+      videoClickPlaybackStateRef.current = null;
+      return;
+    }
+
+    const ratio = getVideoInteractionRatio(event, event.currentTarget);
+    if (ratio === null) {
+      clearVideoClick();
+      videoLastTapAtRef.current = null;
+      videoClickPlaybackStateRef.current = null;
+      return;
+    }
+
+    event.preventDefault();
+    const now = Date.now();
+    const previousTapAt = videoLastTapAtRef.current;
+    const hasPreviousTap = previousTapAt !== null;
+    const isWithinDoubleClickWindow = hasPreviousTap
+      && now - previousTapAt <= VIDEO_DOUBLE_CLICK_WINDOW_MS;
+    // Pair taps ourselves so the browser's cumulative event.detail (3, 4, ...)
+    // cannot turn a single click into another seek.
+    if (isWithinDoubleClickWindow) {
+      clearVideoClick();
+      const playbackWasPaused = hasPreviousTap
+        ? videoClickPlaybackStateRef.current ?? (event.currentTarget.paused || event.currentTarget.ended)
+        : (event.currentTarget.paused || event.currentTarget.ended);
+      videoLastTapAtRef.current = null;
+      videoClickPlaybackStateRef.current = null;
+      seekVideo(ratio < 0.5 ? -videoSeekSeconds : videoSeekSeconds, playbackWasPaused);
+      return;
+    }
+
+    if (previousTapAt === null || now - previousTapAt > VIDEO_DOUBLE_CLICK_WINDOW_MS) {
+      videoClickPlaybackStateRef.current = null;
+    }
+    videoLastTapAtRef.current = now;
+    videoClickPlaybackStateRef.current = event.currentTarget.paused || event.currentTarget.ended;
+    clearVideoClick();
+    videoClickTimerRef.current = window.setTimeout(() => {
+      videoClickTimerRef.current = null;
+      toggleVideoPlayback();
+    }, VIDEO_SINGLE_CLICK_DELAY_MS);
+  }, [clearVideoClick, seekVideo, toggleVideoPlayback, videoSeekSeconds]);
+
+  const handleVideoPointerDown = useCallback((event: React.PointerEvent<HTMLVideoElement>) => {
+    event.stopPropagation();
+    if (event.button !== 0) return;
+
+    clearVideoClick();
+    const ratio = getVideoInteractionRatio(event, event.currentTarget);
+    if (
+      ratio === null
+      || (ratio >= VIDEO_CENTER_ZONE_START && ratio <= VIDEO_CENTER_ZONE_END)
+    ) return;
+
+    releaseVideoHold();
+    const gesture: VideoHoldGesture = {
+      pointerId: event.pointerId,
+      video: event.currentTarget,
+      previousPlaybackRate: event.currentTarget.playbackRate,
+      activationTimer: null,
+      isActive: false,
+    };
+    videoHoldGestureRef.current = gesture;
+    if (typeof event.currentTarget.setPointerCapture === 'function') {
+      try {
+        event.currentTarget.setPointerCapture(event.pointerId);
+      } catch {
+        // Some embedded browsers expose the method but reject capture on media.
+      }
+    }
+    gesture.activationTimer = window.setTimeout(() => {
+      if (videoHoldGestureRef.current !== gesture) return;
+      gesture.isActive = true;
+      videoLastTapAtRef.current = null;
+      videoClickPlaybackStateRef.current = null;
+      gesture.video.playbackRate = videoHoldPlaybackRate;
+      showVideoFeedback(
+        { kind: 'speed', label: `${videoHoldPlaybackRate} 倍速` },
+        { persist: true },
+      );
+      if (gesture.video.paused) {
+        const playPromise = gesture.video.play();
+        if (playPromise && typeof playPromise.catch === 'function') {
+          void playPromise.catch(() => undefined);
+        }
+      }
+    }, VIDEO_HOLD_DELAY_MS);
+  }, [clearVideoClick, releaseVideoHold, showVideoFeedback, videoHoldPlaybackRate]);
+
+  const handleVideoPointerEnd = useCallback((event: React.PointerEvent<HTMLVideoElement>) => {
+    const gesture = videoHoldGestureRef.current;
+    if (!gesture || gesture.pointerId !== event.pointerId) return;
+    event.stopPropagation();
+    if (gesture.isActive) {
+      suppressNextVideoClickRef.current = true;
+    }
+    releaseVideoHold();
+  }, [releaseVideoHold]);
 
   const handlePanPointerDown = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     if (!isPannable || event.button !== 0) return;
@@ -1132,24 +1728,66 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
     }
 
     const target = event.target instanceof Element ? event.target : null;
+    if (target?.closest('video')) return;
+
     if (event.target === event.currentTarget) {
+      if (currentItemIsVideo) {
+        const bounds = event.currentTarget.getBoundingClientRect();
+        if (event.clientX < bounds.left + bounds.width / 2) handlePrev();
+        else handleNext();
+        return;
+      }
       onClose();
       return;
     }
-    if (target?.closest('button, input, select, textarea, video, [contenteditable="true"]')) return;
+    if (target?.closest('button, input, select, textarea, [contenteditable="true"]')) return;
 
-    const mediaSurface = target?.closest<HTMLElement>('.fullscreen-viewer__media-stack, .fullscreen-viewer__issue-frame');
+    const mediaSurface = target?.closest<HTMLElement>('.fullscreen-viewer__media-stack, .fullscreen-viewer__video-frame, .fullscreen-viewer__issue-frame');
     if (!mediaSurface) return;
 
     const bounds = mediaSurface.getBoundingClientRect();
     if (event.clientX < bounds.left + bounds.width / 2) handlePrev();
     else handleNext();
-  }, [handleNext, handlePrev, onClose]);
+  }, [currentItemIsVideo, handleNext, handlePrev, onClose]);
+
+  const flushWheelNavigation = useCallback(() => {
+    wheelNavigationTimerRef.current = null;
+    const targetIndex = wheelNavigationTargetRef.current;
+    const boundaryDirection = wheelNavigationBoundaryRef.current;
+    wheelNavigationTargetRef.current = null;
+    wheelNavigationBoundaryRef.current = 0;
+
+    if (targetIndex !== null && targetIndex !== currentIndex) {
+      navigationDirectionRef.current = targetIndex > currentIndex ? 1 : -1;
+      onNavigate(targetIndex);
+      return;
+    }
+
+    if (boundaryDirection > 0) handleNext();
+    else if (boundaryDirection < 0) handlePrev();
+  }, [currentIndex, handleNext, handlePrev, onNavigate]);
+
+  // If another navigation source changes the current item while a wheel burst
+  // is pending, discard the stale target instead of jumping from an old index.
+  useEffect(() => {
+    wheelNavigationTargetRef.current = null;
+    wheelNavigationBoundaryRef.current = 0;
+    if (wheelNavigationTimerRef.current !== null) {
+      window.clearTimeout(wheelNavigationTimerRef.current);
+      wheelNavigationTimerRef.current = null;
+    }
+  }, [currentIndex]);
+
+  useEffect(() => () => {
+    if (wheelNavigationTimerRef.current !== null) {
+      window.clearTimeout(wheelNavigationTimerRef.current);
+    }
+  }, []);
 
   // Wheel over the filmstrip pans its native horizontal scroller. Wheel Up /
-  // Wheel Down elsewhere uses the same navigation callbacks as the arrow keys.
-  // A short same-direction cooldown filters trackpad inertia without adding the
-  // noticeable pause caused by the previous 250ms debounce.
+  // Wheel Down elsewhere contributes exactly one image per non-zero wheel
+  // event. A short trailing settle window coalesces a rapid burst, so only
+  // the final stopped-on image is committed and loaded.
   const handleWheel = useCallback(
     (e: WheelEvent) => {
       if (!(e.target instanceof Node) || !viewerRef.current?.contains(e.target)) return;
@@ -1195,38 +1833,37 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
 
       e.preventDefault();
       e.stopPropagation();
-      // Treat one continuous wheel/trackpad stream as one navigation gesture.
-      // Trackpad inertia can alternate deltaY's sign; accepting that opposite
-      // sign immediately makes the viewer jump back and forth.
-      if (wheelGestureResetTimer.current !== null) {
-        window.clearTimeout(wheelGestureResetTimer.current);
-      }
-      wheelGestureResetTimer.current = window.setTimeout(() => {
-        wheelGestureActive.current = false;
-        wheelGestureResetTimer.current = null;
-      }, 180);
-      if (wheelGestureActive.current) return;
-      wheelGestureActive.current = true;
+      const direction: 1 | -1 = e.deltaY > 0 ? 1 : -1;
+      const currentTarget = wheelNavigationTargetRef.current ?? currentIndex;
+      const nextTarget = currentTarget + direction;
 
-      if (e.deltaY > 0) {
-        handleNext();
+      if (nextTarget < 0) {
+        wheelNavigationTargetRef.current = 0;
+        wheelNavigationBoundaryRef.current = -1;
+      } else if (nextTarget >= images.length) {
+        wheelNavigationTargetRef.current = Math.max(0, images.length - 1);
+        wheelNavigationBoundaryRef.current = 1;
       } else {
-        handlePrev();
+        wheelNavigationTargetRef.current = nextTarget;
+        wheelNavigationBoundaryRef.current = 0;
       }
+
+      if (wheelNavigationTimerRef.current !== null) {
+        window.clearTimeout(wheelNavigationTimerRef.current);
+      }
+
+      wheelNavigationTimerRef.current = window.setTimeout(
+        flushWheelNavigation,
+        WHEEL_NAVIGATION_SETTLE_MS,
+      );
     },
-    [handleNext, handlePrev, transformReady, zoomIn, zoomOut]
+    [currentIndex, flushWheelNavigation, images.length, transformReady, zoomIn, zoomOut]
   );
 
   useEffect(() => {
     document.addEventListener('wheel', handleWheel, { capture: true, passive: false });
     return () => document.removeEventListener('wheel', handleWheel, true);
   }, [handleWheel]);
-
-  useEffect(() => () => {
-    if (wheelGestureResetTimer.current !== null) {
-      window.clearTimeout(wheelGestureResetTimer.current);
-    }
-  }, []);
 
   // Keyboard shortcuts follow the ImageGlass conventions where they do not
   // conflict with the viewer's established J/K and arrow navigation.
@@ -1235,6 +1872,7 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
     if (!(e.target instanceof Node) || !viewerRef.current?.contains(e.target)) return;
 
     const target = e.target instanceof Element ? e.target : null;
+    const isVideoTarget = Boolean(target?.closest('video'));
     const isInteractiveTarget = Boolean(target?.closest('button, input, textarea, select, [contenteditable="true"]'));
 
     if (e.key === 'F1') {
@@ -1289,7 +1927,16 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
       return;
     }
 
-    if (isInteractiveTarget) return;
+    // Keep unmodified horizontal arrows native to a focused video so the
+    // browser can seek its timeline. Other viewer shortcuts must still work
+    // while the video itself owns focus (for example T, G and F).
+    const shouldPreserveVideoTimelineControl = isVideoTarget
+      && !e.ctrlKey
+      && !e.altKey
+      && !e.metaKey
+      && (e.key === 'ArrowLeft' || e.key === 'ArrowRight');
+
+    if (shouldPreserveVideoTimelineControl || isInteractiveTarget) return;
 
     const zoomModeShortcut = !e.ctrlKey && !e.altKey && !e.metaKey
       ? ZOOM_MODE_SHORTCUTS.find(item => item.key === e.key || item.code === e.code)
@@ -1353,10 +2000,15 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
       e.preventDefault();
       e.stopPropagation();
       setShowDetails(value => !value);
-    } else if ((e.key === 't' || e.key === 'T') && images.length > 1) {
+    } else if (e.key === 't' || e.key === 'T') {
       e.preventDefault();
       e.stopPropagation();
-      setShowFilmstrip(value => !value);
+      toggleShowToolbar();
+      setIsMobileToolbarOpen(false);
+    } else if ((e.key === 'g' || e.key === 'G') && images.length > 1) {
+      e.preventDefault();
+      e.stopPropagation();
+      toggleShowFilmstrip();
     } else if (e.key === 'r' || e.key === 'R') {
       e.preventDefault();
       e.stopPropagation();
@@ -1364,7 +2016,7 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
     } else if (e.key === 'b' || e.key === 'B') {
       e.preventDefault();
       e.stopPropagation();
-      setCheckerboardEnabled(value => !value);
+      toggleCheckerboard();
     } else if (e.key === 'f' || e.key === 'F') {
       e.preventDefault();
       e.stopPropagation();
@@ -1388,6 +2040,9 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
     fitToViewer,
     handleNext,
     handlePrev,
+    toggleCheckerboard,
+    toggleShowFilmstrip,
+    toggleShowToolbar,
     images.length,
     onClose,
     onDeleteCurrent,
@@ -1412,7 +2067,7 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
   const filmstripStartIndex = images.length > 0
     ? Math.max(
       0,
-      findFilmstripIndexAtOffset(
+      findIndexAtOffset(
         filmstripLayout.itemOffsets,
         Math.max(0, filmstripScrollLeft - FILMSTRIP_VIRTUAL_OVERSCAN),
       ),
@@ -1421,7 +2076,7 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
   const filmstripEndIndex = images.length > 0
     ? Math.min(
       images.length,
-      findFilmstripIndexAtOffset(
+      findIndexAtOffset(
         filmstripLayout.itemOffsets,
         filmstripScrollLeft + filmstripViewportWidth + FILMSTRIP_VIRTUAL_OVERSCAN,
       ) + 1,
@@ -1453,10 +2108,10 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
       aria-modal="true"
       aria-label={currentItem.title || 'Image preview'}
       tabIndex={-1}
-      className={`fullscreen-viewer animate-fadeIn${checkerboardEnabled ? ' is-checkerboard' : ''}${blurEnabled ? ' is-blur-enabled' : ''}${demoMode ? ' is-demo-mode' : ''}${images.length > 1 && showFilmstrip ? ' has-filmstrip' : ''}`}
+      className={`fullscreen-viewer animate-fadeIn${checkerboardEnabled ? ' is-checkerboard' : ''}${blurEnabled ? ' is-blur-enabled' : ''}${demoMode ? ' is-demo-mode' : ''}${showToolbar ? '' : ' is-toolbar-hidden'}${images.length > 1 && showFilmstrip ? ' has-filmstrip' : ''}`}
     >
       {/* Top Header Bar */}
-      <div className="fullscreen-viewer__topbar">
+      <div className={`fullscreen-viewer__topbar${showToolbar ? '' : ' is-toolbar-hidden'}`}>
         <div className="fullscreen-viewer__topbar-group">
           <span className="fullscreen-viewer__counter">
             {pageNumberState.pageNumbers[currentIndex] ?? pageOffset + currentIndex + 1} / {currentPageTotal}
@@ -1482,10 +2137,10 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
             aria-expanded={isMobileToolbarOpen}
             aria-controls="fullscreen-mobile-toolbar"
             aria-label={isMobileToolbarOpen ? '關閉工具列' : '開啟工具列'}
-            variant="plain"
+            variant={isMobileToolbarOpen ? 'primary' : 'ghost'}
             title={isMobileToolbarOpen ? '關閉工具列' : '開啟工具列'}
           >
-            <Settings2 className="w-5 h-5" aria-hidden="true" />
+            <PanelTopDashed className="w-5 h-5" aria-hidden="true" />
           </IconButton>
         </div>
 
@@ -1700,7 +2355,7 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
             {!simpleToolbar && (
             <div className="fullscreen-viewer__toolbar-group fullscreen-viewer__toolbar-group--display" role="group" aria-label="檢視功能">
               <span className="fullscreen-viewer__mobile-group-heading" aria-hidden="true">
-                <GalleryHorizontal className="h-4 w-4" />
+                <GalleryThumbnails className="h-4 w-4" />
                 <span>檢視功能</span>
               </span>
               <IconButton
@@ -1712,21 +2367,9 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
               >
                 <RefreshCw className="w-5 h-5" aria-hidden="true" />
               </IconButton>
-              {images.length > 1 && (
-                <IconButton
-                  type="button"
-                  onClick={() => setShowFilmstrip(value => !value)}
-                  aria-pressed={showFilmstrip}
-                  aria-label={showFilmstrip ? '隱藏縮圖列' : '顯示縮圖列'}
-                  variant={showFilmstrip ? 'primary' : 'ghost'}
-                  title="縮圖列 (T)"
-                >
-                  <GalleryHorizontal className="w-5 h-5" aria-hidden="true" />
-                </IconButton>
-              )}
               <IconButton
                 type="button"
-                onClick={() => setCheckerboardEnabled(value => !value)}
+                onClick={toggleCheckerboard}
                 aria-pressed={checkerboardEnabled}
                 aria-label={checkerboardEnabled ? '關閉棋盤格背景' : '開啟棋盤格背景'}
                 variant={checkerboardEnabled ? 'primary' : 'ghost'}
@@ -1762,6 +2405,40 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
               )}
             </div>
             )}
+
+            <div className="fullscreen-viewer__toolbar-group fullscreen-viewer__toolbar-group--visibility" role="group" aria-label="工具列與圖庫面板">
+              <span className="fullscreen-viewer__mobile-group-heading" aria-hidden="true">
+                <PanelTop className="h-4 w-4" />
+                <span>工具列與圖庫面板</span>
+              </span>
+              <IconButton
+                type="button"
+                onClick={() => {
+                  handleShowToolbarChange(false);
+                  setIsMobileToolbarOpen(false);
+                }}
+                aria-pressed={showToolbar}
+                aria-label="隱藏工具列"
+                data-mobile-label="工具列"
+                variant={showToolbar ? 'primary' : 'ghost'}
+                title="工具列 (T)"
+              >
+                <PanelTopDashed className="w-5 h-5" aria-hidden="true" />
+              </IconButton>
+              {images.length > 1 && (
+                <IconButton
+                  type="button"
+                  onClick={toggleShowFilmstrip}
+                  aria-pressed={showFilmstrip}
+                  aria-label={showFilmstrip ? '隱藏圖庫面板' : '顯示圖庫面板'}
+                  data-mobile-label="圖庫面板"
+                  variant={showFilmstrip ? 'primary' : 'ghost'}
+                  title="圖庫面板 (G)"
+                >
+                  <GalleryThumbnails className="w-5 h-5" aria-hidden="true" />
+                </IconButton>
+              )}
+            </div>
 
             <div className="fullscreen-viewer__toolbar-group fullscreen-viewer__toolbar-group--content" role="group" aria-label="內容顯示設定">
               <span className="fullscreen-viewer__mobile-group-heading" aria-hidden="true">
@@ -1862,11 +2539,26 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
           )}
         </div>
 
+        {!showToolbar && (
+          <div className="fullscreen-viewer__hidden-toolbar-actions" role="group" aria-label="全螢幕工具列">
+            <IconButton
+              ref={toolbarRestoreButtonRef}
+              type="button"
+              onClick={handleShowToolbar}
+              aria-label="顯示工具列"
+              variant="ghost"
+              title="顯示工具列 (T)"
+            >
+              <PanelTopDashed className="w-5 h-5" aria-hidden="true" />
+            </IconButton>
+          </div>
+        )}
+
         <IconButton
           type="button"
           onClick={onClose}
           aria-label="關閉全螢幕檢視"
-          variant={isMobileViewport ? 'plain' : 'ghost'}
+          variant="ghost"
           className="fullscreen-viewer__close-button"
           title="關閉 (Esc)"
         >
@@ -1918,19 +2610,83 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
             <MediaIssuePlaceholder message={currentItem.media_error} />
           </div>
         ) : currentItemIsVideo ? (
-          <div className={`fullscreen-viewer__video-frame${demoMode ? ' fullscreen-viewer__video-frame--demo' : ''}`}>
+          <div
+            ref={videoFrameRef}
+            className={`fullscreen-viewer__video-frame notranslate${demoMode ? ' fullscreen-viewer__video-frame--demo' : ''}`}
+            translate="no"
+          >
+            <div className="fullscreen-viewer__video-background" aria-hidden="true" />
             {demoMode ? (
               <DemoMediaBlock dominantColor={currentItem.dominant_color} />
             ) : (
-              <video
-                ref={videoRef}
-                src={mediaUrl}
-                autoPlay
-                loop
-                controls
-                className={`fullscreen-viewer__media ${blurEnabled ? 'blur-media blur-media--viewer' : ''}`}
-              />
+              <>
+                {showOutgoingVideo && previousVideo && (
+                  <div
+                    className="fullscreen-viewer__video-surface fullscreen-viewer__video-surface--outgoing"
+                    style={previousVideo.style}
+                  >
+                    <video
+                      key={previousVideo.url}
+                      ref={outgoingVideoRef}
+                      src={previousVideo.url}
+                      autoPlay={false}
+                      loop
+                      preload="auto"
+                      playsInline
+                      muted
+                      controls={false}
+                      aria-hidden="true"
+                      tabIndex={-1}
+                      className="fullscreen-viewer__media is-video-ready fullscreen-viewer__video--outgoing"
+                    />
+                  </div>
+                )}
+                <div className="fullscreen-viewer__video-surface" style={videoDisplayStyle}>
+                  <video
+                    key={currentMediaUrl}
+                    ref={videoRef}
+                    src={mediaUrl}
+                    autoPlay={shouldAutoplayVideo}
+                    loop
+                    preload="metadata"
+                    playsInline
+                    muted={videoMuted || videoVolume <= 0}
+                    controls={isVideoReady}
+                    aria-label={currentItem.title || '影片'}
+                    onLoadedMetadata={handleVideoLoadedMetadata}
+                    onLoadedData={handleVideoLoadedData}
+                    onVolumeChange={handleVideoVolumeChange}
+                    onClick={handleVideoClick}
+                    onPointerDown={handleVideoPointerDown}
+                    onPointerUp={handleVideoPointerEnd}
+                    onPointerCancel={handleVideoPointerEnd}
+                    onLostPointerCapture={handleVideoPointerEnd}
+                    className={`fullscreen-viewer__media${isVideoReady ? ' is-video-ready' : ''} ${blurEnabled ? 'blur-media blur-media--viewer' : ''}`}
+                  />
+                </div>
+              </>
             )}
+            {videoFeedback && (
+              <div
+                key={videoFeedback.id}
+                className={`fullscreen-viewer__video-feedback fullscreen-viewer__video-feedback--${videoFeedback.kind} fullscreen-viewer__video-feedback--${videoFeedback.kind === 'play' || videoFeedback.kind === 'pause' ? 'center' : 'top'}${videoFeedbackPhase === 'exiting' ? ' is-exiting' : ''}`}
+                aria-hidden="true"
+              >
+                <span className="fullscreen-viewer__video-feedback-icon">
+                  {videoFeedback.kind === 'play' && <Play className="w-7 h-7" />}
+                  {videoFeedback.kind === 'pause' && <Pause className="w-7 h-7" />}
+                  {videoFeedback.kind === 'rewind' && <Rewind className="w-7 h-7" />}
+                  {videoFeedback.kind === 'forward' && <FastForward className="w-7 h-7" />}
+                  {videoFeedback.kind === 'speed' && <Gauge className="w-7 h-7" />}
+                </span>
+                {videoFeedback.kind !== 'play' && videoFeedback.kind !== 'pause' && (
+                  <span>{videoFeedback.label}</span>
+                )}
+              </div>
+            )}
+            <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+              {videoFeedback?.label ?? ''}
+            </span>
           </div>
         ) : (
           <div
@@ -1947,7 +2703,10 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
                 className="fullscreen-viewer__media fullscreen-viewer__media--demo"
               />
             ) : (
-              <>
+              <div
+                className={`fullscreen-viewer__media-frame${showThumbnailPreview && !blurEnabled ? ' is-thumbnail-preview' : ''}`}
+                style={mediaFrameStyle}
+              >
                 {showThumbnailPreview && (
                   <img
                     src={currentThumbnailUrl}
@@ -1956,15 +2715,12 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
                     loading="eager"
                     decoding="async"
                     {...{ fetchpriority: 'high' }}
-                    onLoad={() => {
-                      imageLoadScheduler.markLoaded(currentThumbnailUrl);
-                    }}
+                    onLoad={markThumbnailLoaded}
                     onError={() => {
-                      imageLoadScheduler.markFinished(currentThumbnailUrl, false);
+                      markThumbnailError();
                       setThumbnailFailed(true);
                     }}
                     draggable={false}
-                    style={mediaTransformStyle}
                     className={`fullscreen-viewer__media fullscreen-viewer__media--thumbnail ${blurEnabled ? 'blur-media blur-media--viewer' : ''}`}
                   />
                 )}
@@ -1986,16 +2742,17 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
                     onError={event => {
                       imageLoadScheduler.markFinished(event.currentTarget.currentSrc || mediaUrl, false);
                       setOriginalLoadFailed(true);
-                      displayedImageUrlRef.current = null;
-                      displayedImagePathRef.current = null;
-                      setDisplayedImageUrl(null);
+                      if (displayedImagePathRef.current === currentItem?.save_name) {
+                        displayedImageUrlRef.current = null;
+                        displayedImagePathRef.current = null;
+                        setDisplayedImageUrl(null);
+                      }
                     }}
                     draggable={false}
-                    style={mediaTransformStyle}
                     className={`fullscreen-viewer__media fullscreen-viewer__media--original is-visible ${blurEnabled ? 'blur-media blur-media--viewer' : ''}`}
                   />
                 )}
-              </>
+              </div>
             )}
             {originalLoadFailed && !demoMode && (
               <p className="fullscreen-viewer__load-error" role="status">
@@ -2028,7 +2785,28 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
                 <p><span className="fullscreen-viewer__details-label">繪師:</span> {currentItem.artist_name || currentItem.member_id}</p>
                 <p><span className="fullscreen-viewer__details-label">繪師 ID:</span> {currentItem.member_id}</p>
                 <p><span className="fullscreen-viewer__details-label">發布時間:</span> {currentItem.created_date || '未知'}</p>
-                <p className="break-all"><span className="fullscreen-viewer__details-label">儲存路徑:</span> {currentItem.save_name}</p>
+                <p className="fullscreen-viewer__details-path-row">
+                  <span className="fullscreen-viewer__details-label">儲存路徑:</span>
+                  <span className="fullscreen-viewer__details-path" title={currentItem.save_name}>{currentItem.save_name}</span>
+                  <IconButton
+                    type="button"
+                    onClick={() => void handleCopyPath('file')}
+                    disabled={!canCopyFilePath || copyAction !== null || openAction !== null}
+                    aria-busy={copyAction === 'file'}
+                    aria-label="複製檔案路徑"
+                    className="fullscreen-viewer__details-path-copy"
+                    size="sm"
+                    variant="ghost"
+                    title="複製檔案路徑"
+                  >
+                    <Copy className="h-4 w-4" aria-hidden="true" />
+                  </IconButton>
+                </p>
+                {copyFeedback && (
+                  <p className="fullscreen-viewer__copy-feedback" role="status" aria-live="polite">
+                    {copyFeedback}
+                  </p>
+                )}
                 <p className="fullscreen-viewer__source-row" aria-live="polite">
                   <span className="fullscreen-viewer__details-label">來源作品:</span>{' '}
                   {isSourceLoading ? (
@@ -2059,7 +2837,7 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
                 onClick={() => handleOpenLocalMedia('file')}
                 variant="secondary"
                 className="viewer-secondary-action"
-                disabled={!canOpenLocalMedia || openAction !== null}
+                disabled={!canOpenLocalMedia || openAction !== null || copyAction !== null}
                 aria-busy={openAction === 'file'}
                 title={`${openMediaLabel}（使用 Windows 預設程式）`}
               >
@@ -2071,16 +2849,31 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
                 onClick={() => handleOpenLocalMedia('folder')}
                 variant="secondary"
                 className="viewer-secondary-action"
-                disabled={!canOpenLocalMedia || openAction !== null}
+                disabled={!canOpenLocalMedia || openAction !== null || copyAction !== null}
                 aria-busy={openAction === 'folder'}
                 title="開啟所在資料夾（使用檔案總管）"
               >
                 <FolderOpen className="h-4 w-4" aria-hidden="true" />
                 開啟資料夾
               </Button>
+              <Button
+                type="button"
+                onClick={() => void handleCopyPath('folder')}
+                variant="secondary"
+                className="viewer-secondary-action viewer-copy-folder-action"
+                disabled={!canCopyFolderPath || copyAction !== null || openAction !== null}
+                aria-busy={copyAction === 'folder'}
+                title="複製所在資料夾路徑"
+              >
+                <Copy className="h-4 w-4" aria-hidden="true" />
+                複製資料夾路徑
+              </Button>
               </div>
             {openActionError && (
               <p className="viewer-file-action-error" role="alert">{openActionError}</p>
+            )}
+            {copyActionError && (
+              <p className="viewer-file-action-error" role="alert">{copyActionError}</p>
             )}
             <Button
               type="button"
@@ -2112,6 +2905,9 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
               <X className="w-4 h-4" aria-hidden="true" />
             </IconButton>
           </div>
+          <p className="fullscreen-viewer__shortcut-help-intro">
+            影片內的操作會顯示短暫提示；影片外點擊仍用於切換上一部／下一部作品。
+          </p>
           <dl className="fullscreen-viewer__shortcut-list">
             <div><dt>上一張／下一張</dt><dd>← ↑ J / → ↓ K</dd></div>
             <div><dt>第一張／最後一張</dt><dd>Home / End</dd></div>
@@ -2121,16 +2917,19 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
             <div><dt>向左／向右旋轉</dt><dd>Ctrl + ← / Ctrl + →</dd></div>
             <div><dt>水平／垂直翻轉</dt><dd>Ctrl + H / Ctrl + V</dd></div>
             <div><dt>移動放大的圖片</dt><dd>按住滑鼠拖曳</dd></div>
-            <div><dt>縮圖列／詳細資訊</dt><dd>T / I</dd></div>
+            <div><dt>工具列／圖庫面板／詳細資訊</dt><dd>T / G / I</dd></div>
             <div><dt>重新載入／棋盤背景</dt><dd>R / B</dd></div>
             <div><dt>瀏覽器全螢幕／幻燈片</dt><dd>F / S</dd></div>
-            <div><dt>影片播放／暫停</dt><dd>Space</dd></div>
+            <div className="fullscreen-viewer__shortcut-list-heading"><dt>影片播放器</dt><dd>僅在影片範圍內生效</dd></div>
+            <div><dt>播放／暫停</dt><dd>Space／點擊影片本體</dd></div>
+            <div><dt>倒轉／快轉 {videoSeekSeconds} 秒</dt><dd>影片左／右半部雙擊</dd></div>
+            <div><dt>暫時 {videoHoldPlaybackRate} 倍速</dt><dd>按住影片左／右半部，放開恢復</dd></div>
             <div><dt>快捷鍵／關閉</dt><dd>F1 / Esc</dd></div>
           </dl>
         </section>
       )}
 
-      {/* Bottom Filmstrip Thumbnail Bar */}
+      {/* Bottom Gallery Panel */}
       {images.length > 1 && showFilmstrip && (
         <div className={`fullscreen-viewer__filmstrip${isFilmstripPositioned ? '' : ' is-positioning'}`}>
           <div
@@ -2199,10 +2998,11 @@ export const FullscreenViewer: React.FC<FullscreenViewerProps> = ({
         </div>
       )}
 
-      {/* Bottom Hint Footer */}
-      <div className="fullscreen-viewer__footer">
-        <span>方向鍵切換 · + / − 縮放 · 1–6／Num1–Num6 切換縮放模式 · F1 查看全部快捷鍵</span>
-      </div>
+      {images.length > 1 && showFilmstrip && (
+        <div className="fullscreen-viewer__footer">
+          <span>方向鍵切換 · + / − 縮放 · 1–6／Num1–Num6 切換縮放模式 · F1 查看全部快捷鍵</span>
+        </div>
+      )}
     </div>
   );
 };

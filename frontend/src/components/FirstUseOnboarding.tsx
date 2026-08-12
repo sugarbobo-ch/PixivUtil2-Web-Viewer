@@ -1,6 +1,8 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CheckCircle2, ChevronRight, Database, FolderOpen, LoaderCircle, ScanSearch } from 'lucide-react';
 import { LibraryJob, WebConfig } from '../types';
+import { apiClient } from '../api/client';
+import { isLibraryJobActive, useLibraryJobStore } from '../hooks/useLibraryJobStore';
 import { useModalFocusTrap } from '../utils/useModalFocusTrap';
 import { PathPickerField } from './PathPickerField';
 import { Button } from './ui';
@@ -21,18 +23,7 @@ interface FirstUseOnboardingProps {
   onComplete: (config: WebConfig) => void;
 }
 
-const isActive = (job: LibraryJob | null) => !!job && ['queued', 'running', 'cancelling'].includes(job.status);
 const isFailed = (job: LibraryJob | null) => !!job && ['cancelled', 'failed', 'interrupted'].includes(job.status);
-
-const readError = async (response: Response, fallback: string) => {
-  try {
-    const data = await response.json() as { detail?: unknown };
-    if (typeof data.detail === 'string' && data.detail) return data.detail;
-  } catch {
-    // Keep the context-specific fallback when the response is not JSON.
-  }
-  return fallback;
-};
 
 const phaseCopy = (job: LibraryJob | null) => {
   if (!job) return '準備掃描…';
@@ -54,19 +45,34 @@ export const FirstUseOnboarding: React.FC<FirstUseOnboardingProps> = ({ initialC
     : initialConfig.pixivConfigPath ?? '');
   const [inspection, setInspection] = useState<SourceInspection | null>(null);
   const [inspecting, setInspecting] = useState(false);
-  const [job, setJob] = useState<LibraryJob | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const dialogRef = useRef<HTMLDivElement>(null);
   const firstChoiceRef = useRef<HTMLButtonElement>(null);
   const stepHeadingRef = useRef<HTMLHeadingElement>(null);
 
+  const handleJobFinished = useCallback((finishedJob: LibraryJob) => {
+    if (finishedJob.status === 'completed') setStep('complete');
+    if (isFailed(finishedJob)) {
+      setError(finishedJob.error_message || '媒體資料庫工作未完成，請確認來源後重新嘗試。');
+    }
+  }, []);
+
+  const handlePollingError = useCallback((pollError: unknown) => {
+    setError(pollError instanceof Error ? pollError.message : '無法讀取媒體資料庫工作狀態。');
+  }, []);
+
+  const { job, startLibraryJob, updateLibraryJob } = useLibraryJobStore({
+    onJobFinished: handleJobFinished,
+    onPollingError: handlePollingError,
+  });
+
   useModalFocusTrap({ isOpen: true, dialogRef, initialFocusRef: firstChoiceRef });
 
-  const busy = inspecting || saving || isActive(job);
+  const busy = inspecting || saving || isLibraryJobActive(job);
   const completed = job?.status === 'completed';
   const progress = useMemo(() => {
-    if (!job || !isActive(job)) return null;
+    if (!job || !isLibraryJobActive(job)) return null;
     const total = Number(job.total);
     if (!Number.isFinite(total) || total <= 0) return null;
     return Math.min(100, Math.round((job.processed / total) * 100));
@@ -85,25 +91,6 @@ export const FirstUseOnboarding: React.FC<FirstUseOnboardingProps> = ({ initialC
     return () => window.cancelAnimationFrame(frame);
   }, [step]);
 
-  useEffect(() => {
-    if (!isActive(job)) return undefined;
-    const timer = window.setInterval(async () => {
-      try {
-        const response = await fetch(`/api/library/jobs/${job!.job_id}`, { cache: 'no-store' });
-        if (!response.ok) throw new Error(await readError(response, '無法讀取掃描進度。'));
-        const data = await response.json() as { job: LibraryJob };
-        setJob(data.job);
-        if (data.job.status === 'completed') setStep('complete');
-        if (isFailed(data.job)) {
-          setError(data.job.error_message || '掃描未完成。返回上一步後可以重新開始。');
-        }
-      } catch (pollError) {
-        setError(pollError instanceof Error ? pollError.message : '無法讀取掃描進度。');
-      }
-    }, 750);
-    return () => window.clearInterval(timer);
-  }, [job?.job_id, job?.status]);
-
   const inspectPath = async (nextPath: string, nextMode = mode) => {
     setPath(nextPath);
     setInspection(null);
@@ -111,13 +98,8 @@ export const FirstUseOnboarding: React.FC<FirstUseOnboardingProps> = ({ initialC
     if (!nextPath) return;
     setInspecting(true);
     try {
-      const response = await fetch('/api/library/source/inspect', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode: nextMode, path: nextPath }),
-      });
-      if (!response.ok) throw new Error(await readError(response, '無法讀取選取的來源。'));
-      setInspection(await response.json() as SourceInspection);
+      const sourceInspection = await apiClient.library.inspectSource(nextMode, nextPath);
+      setInspection(sourceInspection as SourceInspection);
     } catch (inspectError) {
       setError(inspectError instanceof Error ? inspectError.message : '無法讀取選取的來源。');
     } finally {
@@ -143,20 +125,15 @@ export const FirstUseOnboarding: React.FC<FirstUseOnboardingProps> = ({ initialC
       const configPatch = mode === 'pixiv'
         ? { librarySourceMode: mode, pixivConfigPath: inspection.configPath || path, mediaRootPath: '', onboardingCompleted: false }
         : { librarySourceMode: mode, mediaRootPath: inspection.rootDirectory, onboardingCompleted: false };
-      const saveResponse = await fetch('/api/web-config', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(configPatch),
+      await apiClient.webConfig.update(configPatch);
+      const data = await apiClient.libraryJobs.start({
+        type: 'update-library',
+        directory: inspection.rootDirectory,
+        analyze_colors: true,
       });
-      if (!saveResponse.ok) throw new Error(await readError(saveResponse, '無法儲存媒體來源。'));
-      const jobResponse = await fetch('/api/library/jobs', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ type: 'update-library', directory: inspection.rootDirectory, analyze_colors: true }),
-      });
-      if (!jobResponse.ok) throw new Error(await readError(jobResponse, '無法開始掃描。'));
-      const data = await jobResponse.json() as { job: LibraryJob };
-      setJob(data.job);
+      if (!data.job) throw new Error('無法開始掃描。');
+      startLibraryJob(data.job);
       setStep('scanning');
-      window.dispatchEvent(new Event('web-viewer-library-job-changed'));
     } catch (startError) {
       setError(startError instanceof Error ? startError.message : '無法開始掃描。');
     } finally {
@@ -169,11 +146,7 @@ export const FirstUseOnboarding: React.FC<FirstUseOnboardingProps> = ({ initialC
     setSaving(true);
     setError(null);
     try {
-      const response = await fetch('/api/web-config', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ onboardingCompleted: true }),
-      });
-      if (!response.ok) throw new Error(await readError(response, '無法完成首次設定。'));
-      const data = await response.json() as { webConfig: WebConfig };
+      const data = await apiClient.webConfig.update({ onboardingCompleted: true });
       window.dispatchEvent(new Event('web-viewer-library-data-changed'));
       onComplete(data.webConfig);
     } catch (finishError) {
@@ -321,7 +294,7 @@ export const FirstUseOnboarding: React.FC<FirstUseOnboardingProps> = ({ initialC
               </div>
             )}
             {completed && <Button variant="primary" onClick={() => void finish()} disabled={saving}>{saving ? '正在開啟…' : '立即開始瀏覽'}</Button>}
-            {isFailed(job) && <Button variant="secondary" onClick={() => { setJob(null); setStep('confirm'); setError(null); }}>返回掃描確認</Button>}
+            {isFailed(job) && <Button variant="secondary" onClick={() => { updateLibraryJob(null); setStep('confirm'); setError(null); }}>返回掃描確認</Button>}
           </section>
         )}
 

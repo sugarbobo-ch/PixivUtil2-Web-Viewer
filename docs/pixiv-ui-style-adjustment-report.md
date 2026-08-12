@@ -427,7 +427,7 @@ WCAG 2.x 對比計算結果：
 - Metadata、組圖數量、影片、頁碼與設定狀態都使用 `Badge`；badge 是非互動資訊，不添加 hover 動畫、位移或高彩度填色。影像上的 badge 使用 HUD token，面板內 badge 使用 surface token。
 - Grid card 預設不顯示作品名稱，只在 hover／focus 時顯示；作品名稱不應常駐在卡片下方。組圖 badge、影片 badge 與 manga page badge 維持相同幾何與語意家族。
 - 條漫模式的 floating toolbar、頁籤、縮圖導覽與 HUD 必須沿用 shared button／badge token；目前頁碼與總頁數統一為 `current / total`，收合後也要保留。條漫縮圖不可出現黑框。
-- 全螢幕的橫式縮圖導覽由 `fullscreenShowThumbnails` 控制進入時的預設顯示，toolbar 仍可暫時切換；舊 config 缺少欄位時維持預設開啟。
+- 全螢幕工具列與圖庫面板分別由 `fullscreenShowToolbar`、`fullscreenShowThumbnails` 控制進入時的預設顯示，toolbar 仍可用快捷鍵暫時切換；舊 config 缺少欄位時維持預設開啟。
 
 ### 14.3 Settings 版面與文字可讀性
 

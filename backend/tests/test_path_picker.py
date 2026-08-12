@@ -4,6 +4,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import sys
@@ -12,6 +13,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import path_picker
 import main
+from routes import library_jobs as library_job_routes
+from services.web_config_service import WebConfigService
 
 
 class PathPickerValidationTests(unittest.TestCase):
@@ -23,6 +26,12 @@ class PathPickerValidationTests(unittest.TestCase):
             with patch.object(main.library_jobs, "LibraryJobManager", return_value=fake_manager):
                 async with main.lifespan(main.app):
                     self.assertIs(main.LIBRARY_JOB_MANAGER, fake_manager)
+                    self.assertIs(main.app.state.runtime_context.library_job_manager, fake_manager)
+                    self.assertIsNotNone(main.app.state.runtime_context.library_job_service)
+                    self.assertIsNotNone(main.app.state.runtime_context.web_config_service)
+                    self.assertIsNotNone(main.app.state.runtime_context.media_source_service)
+                    self.assertIsNotNone(main.app.state.runtime_context.gallery_service)
+                    self.assertEqual(main.app.state.runtime_context.workspace_root, main.config_paths.WORKSPACE_ROOT)
                 self.assertIsNone(main.LIBRARY_JOB_MANAGER)
 
         asyncio.run(exercise_lifespan())
@@ -87,10 +96,13 @@ class PathPickerValidationTests(unittest.TestCase):
                 "onboardingCompleted": True,
             }), encoding="utf-8")
 
-            with patch.object(main, "WEB_CONFIG_PATH", str(web_config_path)), patch.object(
-                main.db, "PIXIV_DB_PATH", main.db.PIXIV_DB_PATH
-            ):
-                main.update_web_config({
+            service = WebConfigService(
+                str(web_config_path),
+                main.DEFAULT_WEB_CONFIG,
+                main.normalize_web_config_file,
+            )
+            with patch.object(main.db, "PIXIV_DB_PATH", main.db.PIXIV_DB_PATH):
+                service.update({
                     "librarySourceMode": "pixiv",
                     "mediaRootPath": "Z:/folder-that-does-not-exist",
                 })
@@ -129,8 +141,17 @@ class PathPickerValidationTests(unittest.TestCase):
                 self.assertIsNotNone(resolved_inside)
                 self.assertTrue(os.path.samefile(resolved_inside, inside))
                 self.assertIsNone(main.resolve_image_path(None, str(outside)))
-                with self.assertRaises(main.HTTPException) as raised:
-                    main.rescan_directory(main.RescanRequest(directory=str(outside.parent)))
+            context = SimpleNamespace(
+                library_job_service=Mock(),
+                media_source_service=Mock(),
+            )
+            context.media_source_service.root_directory.return_value = str(root)
+            request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(runtime_context=context)))
+            with self.assertRaises(main.HTTPException) as raised:
+                library_job_routes.rescan_directory(
+                    library_job_routes.RescanRequest(directory=str(outside.parent)),
+                    request,
+                )
 
             self.assertEqual(raised.exception.status_code, 422)
 

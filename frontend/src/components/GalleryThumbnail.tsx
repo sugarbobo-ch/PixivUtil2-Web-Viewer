@@ -21,6 +21,10 @@ export const GalleryThumbnail: React.FC<GalleryThumbnailProps> = ({
   demoMode,
   dominantColor,
 }) => {
+  const [retryToken, setRetryToken] = React.useState(0);
+  const requestSrc = retryToken > 0
+    ? `${src}${src.includes('?') ? '&' : '?'}thumbnail_retry=${retryToken}`
+    : src;
   const [loadResult, setLoadResult] = React.useState<{
     src: string;
     state: 'loading' | 'loaded' | 'error';
@@ -28,15 +32,15 @@ export const GalleryThumbnail: React.FC<GalleryThumbnailProps> = ({
   // Derive the reset during render. A passive effect can run after a cached
   // image's onLoad event and incorrectly turn a completed thumbnail back into
   // a permanent loading skeleton during rapid sorting.
-  const loadState = loadResult.src === src ? loadResult.state : 'loading';
+  const loadState = loadResult.src === requestSrc ? loadResult.state : 'loading';
   const admitted = useImageLoadPermission({
-    url: src,
+    url: requestSrc,
     priority,
     kind: 'thumbnail',
     owner: 'grid',
     enabled: loadEnabled && !demoMode,
   });
-  const showCachedImage = !demoMode && !loadEnabled && imageLoadScheduler.isLoaded(src);
+  const showCachedImage = !demoMode && !loadEnabled && imageLoadScheduler.isLoaded(requestSrc);
   const shouldRenderImage = admitted || showCachedImage;
   const validatedDominantColor = /^#[0-9A-Fa-f]{6}$/.test(dominantColor ?? '')
     ? dominantColor
@@ -44,6 +48,10 @@ export const GalleryThumbnail: React.FC<GalleryThumbnailProps> = ({
   const thumbnailStyle = validatedDominantColor
     ? { '--gallery-thumbnail-dominant': validatedDominantColor } as React.CSSProperties
     : undefined;
+
+  React.useEffect(() => {
+    setRetryToken(0);
+  }, [src]);
 
   return (
     <div className={`gallery-thumbnail${loadState === 'loaded' ? ' is-ready' : ''}`} style={thumbnailStyle}>
@@ -56,8 +64,8 @@ export const GalleryThumbnail: React.FC<GalleryThumbnailProps> = ({
           )}
           {shouldRenderImage && (
             <img
-              key={src}
-              src={src}
+              key={requestSrc}
+              src={requestSrc}
               alt={alt}
               draggable={false}
               // Rendering this element means the scheduler has already
@@ -68,12 +76,17 @@ export const GalleryThumbnail: React.FC<GalleryThumbnailProps> = ({
               decoding="async"
               {...{ fetchpriority: priority <= 1 ? 'high' : 'low' }}
               onLoad={() => {
-                imageLoadScheduler.markLoaded(src);
-                setLoadResult({ src, state: 'loaded' });
+                imageLoadScheduler.markLoaded(requestSrc);
+                setLoadResult({ src: requestSrc, state: 'loaded' });
               }}
               onError={() => {
-                imageLoadScheduler.markFinished(src, false);
-                setLoadResult({ src, state: 'error' });
+                imageLoadScheduler.markFinished(requestSrc, false);
+                if (retryToken === 0) {
+                  setRetryToken(1);
+                  setLoadResult({ src: requestSrc, state: 'loading' });
+                  return;
+                }
+                setLoadResult({ src: requestSrc, state: 'error' });
               }}
               className={`gallery-thumbnail__image w-full h-full object-cover ${loadState === 'loaded' ? 'is-loaded' : ''} ${blurEnabled ? 'blur-media blur-media--thumbnail' : 'transition-transform duration-300 group-hover:scale-105'}`}
             />

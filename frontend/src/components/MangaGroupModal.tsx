@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { SourceLink, WorkGroup } from '../types';
+import { isVideoItem } from '../utils/media';
 import { buildThumbnailUrl } from '../utils/webConfig';
 import { fetchFirstSourceLink } from '../utils/sourceLinks';
 import { MediaIssuePlaceholder } from './MediaIssuePlaceholder';
@@ -163,7 +164,7 @@ export const MangaGroupModal: React.FC<MangaGroupModalProps> = ({
         <div className="manga-group-modal__content flex-1 overflow-y-auto">
           <div className="manga-group-modal__grid grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3.5">
             {workGroup.items.map((item, idx) => {
-              const isVideo = item.save_name.toLowerCase().endsWith('.mp4');
+              const isVideo = isVideoItem(item);
               return (
                 <button
                   type="button"
@@ -188,13 +189,13 @@ export const MangaGroupModal: React.FC<MangaGroupModalProps> = ({
                   )}
 
                   {/* Page Badge */}
-                  <Badge variant="hud" size="xs" className="manga-group-card__page-badge">
+                  <Badge variant="surface" size="sm" className="manga-group-card__page-badge">
                     P{idx + 1}
                   </Badge>
 
                   {/* Video Badge */}
                   {isVideo && (
-                    <Badge variant="hud" size="sm" iconOnly className="manga-group-card__video-badge">
+                    <Badge variant="surface" size="sm" iconOnly className="manga-group-card__video-badge">
                       <Film className="w-3 h-3" aria-hidden="true" />
                     </Badge>
                   )}

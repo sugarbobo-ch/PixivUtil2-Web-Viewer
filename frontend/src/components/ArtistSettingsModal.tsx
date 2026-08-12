@@ -4,12 +4,15 @@ import { Artist } from '../types';
 import { ConfirmModal } from './ConfirmModal';
 import { Button, IconButton } from './ui/Button';
 import { useModalFocusTrap } from '../utils/useModalFocusTrap';
+import { apiClient } from '../api/client';
+import { getArtistScopeKey } from '../utils/artistIdentity';
 
 interface ArtistSettingsModalProps {
   isOpen: boolean;
   artist: Artist | null;
   onClose: () => void;
   onArtistChanged?: () => void;
+  onArtistMetadataChanged?: () => void;
 }
 
 type ArtistAction = 'hide' | 'trash';
@@ -23,9 +26,11 @@ export const ArtistSettingsModal: React.FC<ArtistSettingsModalProps> = ({
   artist,
   onClose,
   onArtistChanged,
+  onArtistMetadataChanged,
 }) => {
   const [action, setAction] = useState<ArtistAction | null>(null);
   const [loading, setLoading] = useState(false);
+  const [identityLoading, setIdentityLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const dialogRef = useRef<HTMLElement>(null);
@@ -42,6 +47,7 @@ export const ArtistSettingsModal: React.FC<ArtistSettingsModalProps> = ({
     if (!isOpen) {
       setAction(null);
       setLoading(false);
+      setIdentityLoading(false);
       setMessage(null);
       setError(null);
     }
@@ -62,27 +68,17 @@ export const ArtistSettingsModal: React.FC<ArtistSettingsModalProps> = ({
     setMessage(null);
     setError(null);
     try {
-      const endpoint = action === 'hide'
-        ? `/api/artists/${encodeURIComponent(artist.member_id)}/hide`
-        : `/api/artists/${encodeURIComponent(artist.member_id)}/trash`;
-      const response = await fetch(endpoint, {
-        method: 'POST',
-        headers: action === 'hide' ? { 'Content-Type': 'application/json' } : undefined,
-        body: action === 'hide'
-          ? JSON.stringify({ folder_name: artist.folder_name || artist.name || '' })
-          : undefined,
-      });
-      const data = await response.json().catch(() => ({})) as {
-        detail?: string;
-        moved_files?: number;
-        trashed_items?: number;
-      };
-      if (!response.ok) throw new Error(data.detail || `繪師操作失敗（${response.status}）`);
+      const artistKey = getArtistScopeKey(artist);
+      const data = action === 'hide'
+        ? await apiClient.artists.hide(artistKey, artist.folder_name || artist.name || '')
+        : await apiClient.artists.trash(artistKey);
 
       const artistName = artist.name || `繪師 ${artist.member_id}`;
       setMessage(action === 'hide'
         ? `已隱藏「${artistName}」；原始檔案沒有被移動。`
-        : `已將「${artistName}」的 ${data.moved_files ?? data.trashed_items ?? 0} 個作品移到回收區。`);
+        : `已將「${artistName}」的 ${typeof data.moved_files === 'number'
+          ? data.moved_files
+          : typeof data.trashed_items === 'number' ? data.trashed_items : 0} 個作品移到回收區。`);
       setAction(null);
       onArtistChanged?.();
       onClose();
@@ -91,6 +87,26 @@ export const ArtistSettingsModal: React.FC<ArtistSettingsModalProps> = ({
       setAction(null);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleIdentityStatus = async (status: 'verified' | 'rejected' | 'inferred') => {
+    if (!artist?.folder_id || identityLoading) return;
+    setIdentityLoading(true);
+    setMessage(null);
+    setError(null);
+    try {
+      await apiClient.artists.updateIdentity(artist.folder_id, status);
+      setMessage(status === 'verified'
+        ? `已確認此資料夾對應 member ID ${artist.member_id}。`
+        : status === 'rejected'
+          ? '已將此資料夾標記為未知創作者，不會顯示創作者來源連結。'
+          : '已撤銷確認，創作者身份需要重新確認。');
+      onArtistMetadataChanged?.();
+    } catch (identityError) {
+      setError(getErrorMessage(identityError));
+    } finally {
+      setIdentityLoading(false);
     }
   };
 
@@ -142,6 +158,52 @@ export const ArtistSettingsModal: React.FC<ArtistSettingsModalProps> = ({
               <div className="settings-modal__description rounded-lg border border-[var(--settings-border-soft)] px-3 py-2 text-xs leading-5">
                 移入回收區不會直接刪除原始檔案；下一次掃描也會略過應用程式回收區。
               </div>
+              {artist.folder_id && artist.member_id > 0 && (
+                <div className="space-y-3 border-t border-[var(--settings-border-soft)] pt-3">
+                  <div>
+                    <p className="settings-modal__label text-sm font-semibold">創作者身份</p>
+                    <p className="settings-modal__description mt-1 text-xs leading-5">
+                      {artist.identity_status === 'verified'
+                        ? `已確認為 member ID ${artist.member_id}，可以顯示 Pixiv／FANBOX 來源連結。`
+                        : artist.identity_status === 'rejected'
+                          ? '目前標記為未知創作者，不會根據資料夾名稱推定來源連結。'
+                          : `資料夾名稱包含 member ID ${artist.member_id}，但尚未確認是否為真正的創作者。`}
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {artist.identity_status !== 'verified' && (
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        disabled={identityLoading || loading}
+                        onClick={() => void handleIdentityStatus('verified')}
+                      >
+                        確認此 member ID
+                      </Button>
+                    )}
+                    {artist.identity_status !== 'rejected' && (
+                      <Button
+                        type="button"
+                        variant="plain"
+                        disabled={identityLoading || loading}
+                        onClick={() => void handleIdentityStatus('rejected')}
+                      >
+                        標記為未知
+                      </Button>
+                    )}
+                    {artist.identity_status === 'verified' && (
+                      <Button
+                        type="button"
+                        variant="plain"
+                        disabled={identityLoading || loading}
+                        onClick={() => void handleIdentityStatus('inferred')}
+                      >
+                        撤銷確認
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="grid gap-3 sm:grid-cols-2">

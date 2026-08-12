@@ -14,7 +14,7 @@
     grid-template-columns: minmax(5.75rem, 8.25rem) minmax(0, 1fr);
     align-items: start;
     min-height: 100%;
-    padding-block: 0 7rem;
+    padding-block: 0;
     padding-inline: 1rem;
     background: var(--viewer-surface);
     color: var(--viewer-text);
@@ -124,7 +124,7 @@
     position: relative;
     min-width: 0;
     width: 100%;
-    padding-block: 1rem 2rem;
+    padding-block: 1rem;
     padding-inline: 1rem;
   }
 
@@ -631,7 +631,7 @@
     .webtoon-reader:not(.has-thumbnails) {
       display: block;
       min-height: 100%;
-      padding-block: 0 6rem;
+      padding-block: 0;
       padding-inline: 0;
     }
 

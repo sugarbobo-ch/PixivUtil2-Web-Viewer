@@ -1,11 +1,19 @@
+import { createPortal } from 'react-dom';
 import { useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type FocusEvent, type KeyboardEvent, type ReactNode } from 'react';
 import { Check, ChevronDown } from 'lucide-react';
+import {
+  readCssCustomProperties,
+  useAnchoredPopover,
+  type AnchoredPopoverElementRef,
+  type FloatingCustomProperties,
+} from '../utils/useAnchoredPopover';
 import { Button } from './ui/Button';
 
 export interface CustomSelectOption<T extends string | number> {
   value: T;
   label: string;
   description?: string;
+  icon?: ReactNode;
 }
 
 interface CustomSelectProps<T extends string | number> {
@@ -21,9 +29,11 @@ interface CustomSelectProps<T extends string | number> {
   disabled?: boolean;
   placeholder?: string;
   menuPlacement?: 'start' | 'end';
+  boundaryRef?: AnchoredPopoverElementRef;
 }
 
 const getText = (value: string) => value.trim().toLocaleLowerCase();
+const customSelectMaxMenuHeight = (viewportHeight: number) => Math.min(384, viewportHeight * 0.5);
 
 export function CustomSelect<T extends string | number>({
   value,
@@ -38,6 +48,7 @@ export function CustomSelect<T extends string | number>({
   disabled = false,
   placeholder = '請選擇',
   menuPlacement = 'start',
+  boundaryRef,
 }: CustomSelectProps<T>) {
   const generatedId = useId().replace(/:/g, '');
   const controlId = id ?? `custom-select-${generatedId}`;
@@ -52,9 +63,16 @@ export function CustomSelect<T extends string | number>({
   const fallbackIndex = selectedIndex >= 0 ? selectedIndex : 0;
   const [isOpen, setIsOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(fallbackIndex);
-  const [verticalPlacement, setVerticalPlacement] = useState<'down' | 'up'>('down');
-
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const [menuVariables, setMenuVariables] = useState<Record<`--${string}`, string>>({});
+  const { position: menuPosition, verticalPlacement } = useAnchoredPopover({
+    open: isOpen,
+    anchorRef: triggerRef,
+    contentRef: listboxRef,
+    boundaryRef,
+    placement: menuPlacement,
+    maxMenuHeight: customSelectMaxMenuHeight,
+  });
 
   useEffect(() => {
     if (!isOpen) {
@@ -65,52 +83,71 @@ export function CustomSelect<T extends string | number>({
   useEffect(() => {
     if (!isOpen) return;
 
-    const frame = window.requestAnimationFrame(() => {
-      listboxRef.current?.focus();
-      optionRefs.current[activeIndex]?.scrollIntoView({ block: 'nearest' });
-    });
+    const alignMenu = () => {
+      const listbox = listboxRef.current;
+      if (!listbox) return;
 
+      listbox.focus({ preventScroll: true });
+
+      // The menu is viewport-anchored, so only adjust its own scroll position.
+      const activeOption = optionRefs.current[activeIndex];
+      if (!activeOption || listbox.clientHeight <= 0) return;
+
+      const optionTop = activeOption.offsetTop;
+      const optionBottom = optionTop + activeOption.offsetHeight;
+      const visibleTop = listbox.scrollTop;
+      const visibleBottom = visibleTop + listbox.clientHeight;
+      if (optionTop < visibleTop) {
+        listbox.scrollTop = optionTop;
+      } else if (optionBottom > visibleBottom) {
+        listbox.scrollTop = Math.max(0, optionBottom - listbox.clientHeight);
+      }
+    };
+
+    const frame = window.requestAnimationFrame(alignMenu);
     return () => window.cancelAnimationFrame(frame);
   }, [activeIndex, isOpen]);
 
   useLayoutEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen || !rootRef.current) {
+      setMenuVariables({});
+      return;
+    }
 
-    const updatePlacement = () => {
-      const trigger = triggerRef.current;
-      if (!trigger) return;
+    const updateMenuVariables = () => {
+      if (!rootRef.current) return;
 
-      const triggerRect = trigger.getBoundingClientRect();
-      const viewportHeight = window.innerHeight;
-      const menuMaxHeight = Math.min(384, viewportHeight * 0.5);
-      const estimatedMenuHeight = Math.min(
-        menuMaxHeight,
-        Math.max(44, options.length * 44 + Math.max(0, options.length - 1) * 4 + 14),
-      );
-      const spaceAbove = triggerRect.top;
-      const spaceBelow = viewportHeight - triggerRect.bottom;
-      const shouldOpenUp = spaceBelow < estimatedMenuHeight && spaceAbove > spaceBelow;
-
-      setVerticalPlacement(shouldOpenUp ? 'up' : 'down');
+      // A portaled menu no longer inherits the Settings/Gallery field scope,
+      // so carry the resolved field tokens to the floating surface explicitly.
+      const nextVariables = readCssCustomProperties(rootRef.current, ['--ui-field-']);
+      setMenuVariables(current => {
+        const currentMap = current as Record<string, string>;
+        const nextMap = nextVariables as Record<string, string>;
+        const currentKeys = Object.keys(currentMap);
+        const nextKeys = Object.keys(nextMap);
+        const unchanged = currentKeys.length === nextKeys.length
+          && nextKeys.every(key => currentMap[key] === nextMap[key]);
+        return unchanged ? current : nextVariables;
+      });
     };
 
-    updatePlacement();
-    window.addEventListener('resize', updatePlacement);
-    window.addEventListener('scroll', updatePlacement, true);
+    updateMenuVariables();
+    const themeObserver = typeof MutationObserver !== 'undefined'
+      ? new MutationObserver(updateMenuVariables)
+      : null;
+    themeObserver?.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'data-theme'] });
+    themeObserver?.observe(document.body, { attributes: true, attributeFilter: ['class', 'data-theme'] });
 
-    return () => {
-      window.removeEventListener('resize', updatePlacement);
-      window.removeEventListener('scroll', updatePlacement, true);
-    };
-  }, [isOpen, options.length]);
+    return () => themeObserver?.disconnect();
+  }, [buttonClassName, className, isOpen, style]);
 
   useEffect(() => {
     if (!isOpen) return;
 
     const handlePointerDown = (event: PointerEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) {
-        setIsOpen(false);
-      }
+      const target = event.target as Node;
+      if (rootRef.current?.contains(target) || listboxRef.current?.contains(target)) return;
+      setIsOpen(false);
     };
 
     document.addEventListener('pointerdown', handlePointerDown);
@@ -233,18 +270,35 @@ export function CustomSelect<T extends string | number>({
   };
 
   const handleRootBlur = (event: FocusEvent<HTMLDivElement>) => {
-    if (!event.relatedTarget || !rootRef.current?.contains(event.relatedTarget as Node)) {
-      setIsOpen(false);
-    }
+    const relatedTarget = event.relatedTarget as Node | null;
+    if (relatedTarget && (rootRef.current?.contains(relatedTarget) || listboxRef.current?.contains(relatedTarget))) return;
+    setIsOpen(false);
   };
 
   const selectedOption = selectedIndex >= 0 ? options[selectedIndex] : undefined;
+  const hasOptionIcons = options.some(option => Boolean(option.icon));
   const activeOptionId = options[activeIndex] ? `${listboxId}-option-${activeIndex}` : undefined;
+  const menuStyle: FloatingCustomProperties = {
+    ...menuVariables,
+    position: 'fixed',
+    top: `${menuPosition?.top ?? 0}px`,
+    left: `${menuPosition?.left ?? 0}px`,
+    maxHeight: `${menuPosition?.maxHeight ?? customSelectMaxMenuHeight(window.innerHeight)}px`,
+    visibility: menuPosition ? 'visible' : 'hidden',
+    '--anchored-anchor-width': `${menuPosition?.anchorWidth ?? 0}px`,
+  };
+  const menuClassName = [
+    'custom-select__menu',
+    hasOptionIcons ? 'has-option-icons' : '',
+    className,
+    menuPlacement === 'end' ? 'is-end' : '',
+    verticalPlacement === 'up' ? 'is-up' : '',
+  ].filter(Boolean).join(' ');
 
   return (
     <div
       ref={rootRef}
-      className={`ui-select-wrap custom-select ${menuPlacement === 'end' ? 'is-end' : ''} ${verticalPlacement === 'up' ? 'is-up' : ''} ${className ?? ''}`}
+      className={`ui-select-wrap custom-select${hasOptionIcons ? ' has-option-icons' : ''} ${menuPlacement === 'end' ? 'is-end' : ''} ${verticalPlacement === 'up' ? 'is-up' : ''} ${className ?? ''}`}
       style={style}
       data-open={isOpen ? 'true' : 'false'}
       onBlur={handleRootBlur}
@@ -268,17 +322,23 @@ export function CustomSelect<T extends string | number>({
             {leadingContent}
           </span>
         )}
+        {selectedOption?.icon && (
+          <span className="custom-select__selected-icon" aria-hidden="true">
+            {selectedOption.icon}
+          </span>
+        )}
         <span className={`custom-select__value ${selectedOption ? '' : 'is-placeholder'}`}>
           {selectedOption?.label ?? placeholder}
         </span>
         <ChevronDown className="ui-select-icon" aria-hidden="true" strokeWidth={2} />
       </Button>
 
-      {isOpen && (
+      {isOpen && typeof document !== 'undefined' && createPortal(
         <div
           ref={listboxRef}
           id={listboxId}
-          className="custom-select__menu"
+          className={menuClassName}
+          style={menuStyle}
           role="listbox"
           tabIndex={0}
           aria-label={ariaLabel}
@@ -303,6 +363,11 @@ export function CustomSelect<T extends string | number>({
                 onMouseEnter={() => setActiveIndex(index)}
                 onClick={() => selectOption(index)}
               >
+                {hasOptionIcons && (
+                  <span className="custom-select__option-icon" aria-hidden="true">
+                    {option.icon}
+                  </span>
+                )}
                 <span className="custom-select__option-copy">
                   <span className="custom-select__option-label">{option.label}</span>
                   {option.description && <span className="custom-select__option-description">{option.description}</span>}
@@ -313,7 +378,8 @@ export function CustomSelect<T extends string | number>({
               </div>
             );
           })}
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );

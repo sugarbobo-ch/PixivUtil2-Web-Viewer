@@ -1,5 +1,7 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import {
+  ArrowDownWideNarrow,
+  ArrowUpNarrowWide,
   Calendar,
   Check,
   ChevronDown,
@@ -11,24 +13,37 @@ import {
 } from 'lucide-react';
 import { Artist, MonthItem } from '../types';
 import { getTimeFilterLabel } from '../utils/timeFilterLabels';
+import { getArtistScopeKey } from '../utils/artistIdentity';
 import {
   getYearFromTimeFilter,
   hasCompleteYearSelection,
   isYearTimeFilter,
   normalizeSelectedMonths,
 } from '../utils/timeFilters';
-import { Button, IconButton, Input } from './ui';
+import { Badge, Button, IconButton, Input } from './ui';
 import { SidebarSectionHeader } from './ui/SidebarSectionHeader';
+import {
+  clampSidebarWidth,
+  SIDEBAR_DEFAULT_WIDTH,
+  SIDEBAR_KEYBOARD_LARGE_STEP,
+  SIDEBAR_KEYBOARD_STEP,
+  SIDEBAR_MIN_WIDTH,
+  snapSidebarWidth,
+} from '../utils/sidebarLayout';
 
 interface SidebarProps {
   isOpen: boolean;
+  sidebarWidth: number;
+  maxSidebarWidth: number;
+  onSidebarWidthChange: (width: number) => void;
+  onSidebarWidthCommit?: (width: number) => void;
   onClose: () => void;
   months: MonthItem[];
   artists: Artist[];
   selectedMonths: string[];
   setSelectedMonths: React.Dispatch<React.SetStateAction<string[]>>;
-  selectedArtist: number | null;
-  setSelectedArtist: (artistId: number | null) => void;
+  selectedArtist: string | null;
+  setSelectedArtist: (artistKey: string | null) => void;
   searchQuery?: string;
   setSearchQuery?: (query: string) => void;
   onResetAllFilters?: () => void;
@@ -37,6 +52,10 @@ interface SidebarProps {
 
 export const Sidebar: React.FC<SidebarProps> = ({
   isOpen,
+  sidebarWidth,
+  maxSidebarWidth,
+  onSidebarWidthChange,
+  onSidebarWidthCommit,
   onClose,
   months,
   artists,
@@ -53,12 +72,21 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [isMonthSectionOpen, setIsMonthSectionOpen] = useState(true);
   const [expandedYears, setExpandedYears] = useState<Record<string, boolean>>({});
   const [isActiveFiltersExpanded, setIsActiveFiltersExpanded] = useState(false);
+  const [isResizing, setIsResizing] = useState(false);
+  const resizeWidthRef = useRef(sidebarWidth);
+  const resizeSessionRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startWidth: number;
+    direction: 1 | -1;
+  } | null>(null);
+  resizeWidthRef.current = sidebarWidth;
 
   const filteredArtists = artists.filter(a =>
     a.name.toLowerCase().includes(artistFilter.toLowerCase())
   );
 
-  const activeArtistObj = artists.find(a => a.member_id === selectedArtist);
+  const activeArtistObj = artists.find(a => getArtistScopeKey(a) === selectedArtist);
   const isAnyFilterActive = selectedMonths.length > 0 || selectedArtist !== null || searchQuery !== '';
   const activeFilterCount =
     selectedMonths.length +
@@ -135,10 +163,106 @@ export const Sidebar: React.FC<SidebarProps> = ({
     if (onResetAllFilters) onResetAllFilters();
   };
 
+  const getResizeDirection = (element: HTMLElement): 1 | -1 => (
+    window.getComputedStyle(element).direction === 'rtl' ? -1 : 1
+  );
+
+  const setResizeState = (nextIsResizing: boolean) => {
+    setIsResizing(nextIsResizing);
+  };
+
+  const updateSidebarWidth = (value: number) => {
+    const nextWidth = snapSidebarWidth(value, maxSidebarWidth);
+    resizeWidthRef.current = nextWidth;
+    onSidebarWidthChange(nextWidth);
+  };
+
+  const commitSidebarWidth = (width = resizeWidthRef.current) => {
+    const nextWidth = clampSidebarWidth(width, maxSidebarWidth);
+    resizeWidthRef.current = nextWidth;
+    onSidebarWidthChange(nextWidth);
+    onSidebarWidthCommit?.(nextWidth);
+  };
+
+  const finishPointerResize = () => {
+    if (!resizeSessionRef.current) return;
+    resizeSessionRef.current = null;
+    setResizeState(false);
+    commitSidebarWidth();
+  };
+
+  const handleResizePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.pointerType === 'mouse' && event.button !== 0) return;
+
+    event.preventDefault();
+    resizeSessionRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startWidth: resizeWidthRef.current,
+      direction: getResizeDirection(event.currentTarget),
+    };
+    setResizeState(true);
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+
+  const handleResizePointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    const session = resizeSessionRef.current;
+    if (!session || session.pointerId !== event.pointerId) return;
+
+    updateSidebarWidth(
+      session.startWidth + ((event.clientX - session.startX) * session.direction),
+    );
+  };
+
+  const handleResizePointerUp = (event: React.PointerEvent<HTMLDivElement>) => {
+    const session = resizeSessionRef.current;
+    if (!session || session.pointerId !== event.pointerId) return;
+
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    finishPointerResize();
+  };
+
+  const handleResizeKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    const direction = getResizeDirection(event.currentTarget);
+    const currentWidth = resizeWidthRef.current;
+    let nextWidth: number | null = null;
+
+    if (event.key === 'ArrowRight') {
+      nextWidth = currentWidth + (SIDEBAR_KEYBOARD_STEP * direction);
+    } else if (event.key === 'ArrowLeft') {
+      nextWidth = currentWidth - (SIDEBAR_KEYBOARD_STEP * direction);
+    } else if (event.key === 'PageUp') {
+      nextWidth = currentWidth + (SIDEBAR_KEYBOARD_LARGE_STEP * direction);
+    } else if (event.key === 'PageDown') {
+      nextWidth = currentWidth - (SIDEBAR_KEYBOARD_LARGE_STEP * direction);
+    } else if (event.key === 'Home') {
+      nextWidth = SIDEBAR_MIN_WIDTH;
+    } else if (event.key === 'End') {
+      nextWidth = maxSidebarWidth;
+    }
+
+    if (nextWidth === null) return;
+    event.preventDefault();
+    const snappedWidth = snapSidebarWidth(nextWidth, maxSidebarWidth);
+    if (snappedWidth === currentWidth) return;
+    commitSidebarWidth(snappedWidth);
+  };
+
+  const handleResizeDoubleClick = (event: React.MouseEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    commitSidebarWidth(SIDEBAR_DEFAULT_WIDTH);
+  };
+
   if (!isOpen) return null;
 
   return (
-    <aside id="gallery-filter-sidebar" className="app-sidebar w-72 flex flex-col h-full min-h-0 overflow-hidden overscroll-contain z-20 shrink-0 select-none">
+    <aside
+      id="gallery-filter-sidebar"
+      className={`app-sidebar flex flex-col h-full min-h-0 overflow-hidden overscroll-contain z-20 shrink-0 select-none${isResizing ? ' is-resizing' : ''}`}
+      style={{ '--sidebar-width': `${sidebarWidth}px` } as React.CSSProperties}
+    >
       {/* Header Bar */}
       <div className="app-sidebar__header flex items-center justify-between">
         <div className="app-sidebar__heading flex items-center gap-2">
@@ -166,7 +290,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <SidebarSectionHeader
             className="app-sidebar__section-header--active-filters"
             title="目前篩選"
-            count={`${activeFilterCount} 項`}
+            count={(
+              <Badge
+                variant="neutral"
+                size="xs"
+                className="app-sidebar__section-header-count-badge"
+                aria-label={`目前有 ${activeFilterCount} 項篩選`}
+              >
+                {activeFilterCount}
+              </Badge>
+            )}
             actions={(
               <Button
                 type="button"
@@ -305,21 +438,24 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   {selectedArtist === null && <Check className="w-3.5 h-3.5" />}
                 </Button>
 
-                {filteredArtists.map((a) => (
+                {filteredArtists.map((a) => {
+                  const artistKey = getArtistScopeKey(a);
+                  return (
                   <Button
-                    key={a.member_id}
+                    key={artistKey}
                     type="button"
-                    onClick={() => setSelectedArtist(a.member_id === selectedArtist ? null : a.member_id)}
-                    variant={selectedArtist === a.member_id ? 'primary' : 'ghost'}
+                    onClick={() => setSelectedArtist(artistKey === selectedArtist ? null : artistKey)}
+                    variant={selectedArtist === artistKey ? 'primary' : 'ghost'}
                     fullWidth
                     className={`app-sidebar__artist-option w-full flex items-center justify-between px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                      selectedArtist === a.member_id ? 'is-selected' : ''
+                      selectedArtist === artistKey ? 'is-selected' : ''
                     }`}
                   >
                     <span className="truncate max-w-[140px] text-left">{a.name || `ID: ${a.member_id}`}</span>
                     <span className="text-[11px] opacity-70">({a.artwork_count})</span>
                   </Button>
-                ))}
+                  );
+                })}
               </>
             )}
           </div>
@@ -333,7 +469,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
             }`}
             icon={<Calendar className="app-sidebar__section-icon w-4 h-4" />}
             title="時間複選"
-            count={`（${selectedMonths.length > 0 ? `已選 ${selectedMonths.length} 項` : '全部'}）`}
+            count={selectedMonths.length > 0 ? (
+              <Badge
+                variant="neutral"
+                size="xs"
+                className="app-sidebar__section-header-count-badge"
+                aria-label={`已選 ${selectedMonths.length} 項時間`}
+              >
+                {selectedMonths.length}
+              </Badge>
+            ) : undefined}
             titleButtonProps={{
               type: "button",
               onClick: () => setIsMonthSectionOpen(previous => !previous),
@@ -344,16 +489,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
             }}
             actions={(
               <>
-                <Button
+                <IconButton
                   type="button"
                   onClick={() => setMonthSortAsc(!monthSortAsc)}
-                  variant="plain"
+                  variant="ghost"
                   size="sm"
-                  className="app-sidebar__auxiliary-action"
-                  title={monthSortAsc ? "目前為舊到新 (點擊切換為新到舊)" : "目前為新到舊 (點擊切換為舊到新)"}
+                  className="app-sidebar__sort-toggle"
+                  aria-label={monthSortAsc ? '目前排序：由舊到新，切換為由新到舊' : '目前排序：由新到舊，切換為由舊到新'}
+                  title={monthSortAsc ? '目前排序：由舊到新，點擊切換為由新到舊' : '目前排序：由新到舊，點擊切換為由舊到新'}
+                  aria-pressed={monthSortAsc}
                 >
-                  {monthSortAsc ? '舊到新 ↑' : '新到舊 ↓'}
-                </Button>
+                  {monthSortAsc
+                    ? <ArrowUpNarrowWide aria-hidden="true" />
+                    : <ArrowDownWideNarrow aria-hidden="true" />}
+                </IconButton>
                 <IconButton
                   type="button"
                   onClick={() => setIsMonthSectionOpen(previous => !previous)}
@@ -460,6 +609,26 @@ export const Sidebar: React.FC<SidebarProps> = ({
           )}
         </div>
       </div>
+
+      <div
+        className="app-sidebar__resize-handle"
+        role="separator"
+        tabIndex={0}
+        aria-orientation="vertical"
+        aria-label="調整側邊欄寬度"
+        aria-valuemin={SIDEBAR_MIN_WIDTH}
+        aria-valuemax={maxSidebarWidth}
+        aria-valuenow={sidebarWidth}
+        aria-valuetext={sidebarWidth === SIDEBAR_DEFAULT_WIDTH ? '目前寬度，預設值' : '目前寬度'}
+        title="拖曳調整側邊欄寬度；雙擊可回復預設"
+        onPointerDown={handleResizePointerDown}
+        onPointerMove={handleResizePointerMove}
+        onPointerUp={handleResizePointerUp}
+        onPointerCancel={finishPointerResize}
+        onLostPointerCapture={finishPointerResize}
+        onKeyDown={handleResizeKeyDown}
+        onDoubleClick={handleResizeDoubleClick}
+      />
     </aside>
   );
 };

@@ -1,6 +1,7 @@
 import os
 import gc
 import sqlite3
+import shutil
 import sys
 import tempfile
 import threading
@@ -42,7 +43,7 @@ class MediaLibraryTests(unittest.TestCase):
 
     def tearDown(self):
         if self.manager is not None:
-            self.manager.close()
+            self.manager.close(timeout=10.0)
         db.invalidate_scan_cache()
         db.DB_PATH = self.original_db_path
         db.PIXIV_DB_PATH = self.original_pixiv_db_path
@@ -51,7 +52,31 @@ class MediaLibraryTests(unittest.TestCase):
         library_jobs.THUMB_CACHE_RECOVERY_DIR = self.original_thumb_recovery_dir
         library_jobs._CACHE_ACCESS_LAST_TOUCH.clear()
         gc.collect()
-        self.temp_dir.cleanup()
+        temp_path = Path(self.temp_dir.name)
+        cleanup_error = None
+        try:
+            self.temp_dir.cleanup()
+        except OSError as error:
+            cleanup_error = error
+
+        # SQLite WAL files can be released a few milliseconds after the last
+        # connection closes on Windows. Retry only this test-owned temp path;
+        # a persistent failure still fails teardown instead of being hidden.
+        for _attempt in range(20):
+            if not temp_path.exists():
+                break
+            try:
+                shutil.rmtree(temp_path)
+            except OSError as error:
+                cleanup_error = error
+                gc.collect()
+                time.sleep(0.05)
+            else:
+                cleanup_error = None
+                break
+
+        if cleanup_error is not None and temp_path.exists():
+            raise cleanup_error
 
     def _write_media(self, name: str, content: bytes = b"media") -> Path:
         path = self.root / name
@@ -327,6 +352,46 @@ class MediaLibraryTests(unittest.TestCase):
         self.assertEqual(total, 1)
         self.assertEqual(images[0]["save_name"], str(imported_path))
 
+    def test_same_member_id_folders_have_independent_artist_scopes(self):
+        discord_folder = self._write_media(
+            "Discord FANBOX comodox (4252792)/discord.jpg",
+            b"discord",
+        )
+        fanbox_folder = self._write_media(
+            "FANBOX comodox (4252792)/fanbox.jpg",
+            b"fanbox",
+        )
+
+        db.scan_and_index_directory(str(self.root))
+
+        artists = [artist for artist in db.get_all_artists() if artist["member_id"] == 4252792]
+        self.assertEqual(len(artists), 2)
+        self.assertEqual(len({artist["folder_id"] for artist in artists}), 2)
+        self.assertTrue(all(artist["folder_id"].startswith("folder:") for artist in artists))
+        self.assertEqual({artist["artwork_count"] for artist in artists}, {1})
+
+        with self.assertRaises(db.AmbiguousArtistIdentifier):
+            db.get_images(artist_id=4252792)
+
+        images_by_scope = {
+            artist["folder_name"]: db.get_images(artist_id=artist["scope_key"])[0]
+            for artist in artists
+        }
+        self.assertEqual(images_by_scope["Discord FANBOX comodox (4252792)"][0]["save_name"], str(discord_folder))
+        self.assertEqual(images_by_scope["FANBOX comodox (4252792)"][0]["save_name"], str(fanbox_folder))
+
+        discord_scope_key = next(
+            artist["scope_key"]
+            for artist in artists
+            if artist["folder_name"] == "Discord FANBOX comodox (4252792)"
+        )
+        db.hide_artist(discord_scope_key, "Discord FANBOX comodox (4252792)")
+        self.assertEqual(
+            [artist["folder_name"] for artist in db.get_all_artists() if artist["member_id"] == 4252792],
+            ["FANBOX comodox (4252792)"],
+        )
+        self.assertTrue(db.unhide_artist(discord_scope_key))
+
     def test_root_discovery_deactivates_removed_first_level_scope(self):
         artist_directory = self.root / "Temporary Artist"
         artist_directory.mkdir()
@@ -348,6 +413,28 @@ class MediaLibraryTests(unittest.TestCase):
                 config_paths.get_pixiv_config_path = original_config_path_reader
         finally:
             moved_directory.rename(artist_directory)
+
+    def test_managed_folder_identity_survives_same_volume_rename(self):
+        original_directory = self.root / "FANBOX Example (4252792)"
+        original_directory.mkdir()
+        db.discover_root_scopes(str(self.root))
+        original = next(
+            artist for artist in db.get_all_artists()
+            if artist["folder_name"] == original_directory.name
+        )
+        db.set_managed_folder_identity(original["folder_id"], "verified")
+        db.hide_artist(original["folder_id"])
+
+        renamed_directory = self.root / "Renamed archive (4252792)"
+        original_directory.rename(renamed_directory)
+        db.discover_root_scopes(str(self.root))
+
+        renamed = db.get_managed_folder(original["folder_id"])
+        self.assertIsNotNone(renamed)
+        self.assertEqual(renamed["folder_id"], original["folder_id"])
+        self.assertEqual(renamed["current_path"], str(renamed_directory))
+        self.assertEqual(renamed["identity_status"], "verified")
+        self.assertEqual(renamed["is_hidden"], 1)
 
     def test_root_discovery_deactivates_scopes_from_another_root(self):
         old_root = Path(self.temp_dir.name) / "old-media"
@@ -505,6 +592,51 @@ class MediaLibraryTests(unittest.TestCase):
             {str(first), str(second)},
         )
 
+    def test_manager_close_cancels_active_scan_before_joining_worker(self):
+        started = threading.Event()
+        cancelled = threading.Event()
+        original_scan = db.scan_and_index_directory
+
+        def blocking_scan(*_args, cancel_event=None, **_kwargs):
+            started.set()
+            if cancel_event is not None:
+                cancel_event.wait(timeout=5)
+                cancelled.set()
+            return {
+                "scanned": 0,
+                "indexed": 0,
+                "added": 0,
+                "updated": 0,
+                "unchanged": 0,
+                "conflicts": 0,
+                "errors": 0,
+                "error_details": [],
+                "cancelled": True,
+                "processed": 0,
+                "total": 0,
+            }
+
+        db.scan_and_index_directory = blocking_scan
+        try:
+            self.manager = LibraryJobManager()
+            self.manager.start(
+                "update-library",
+                str(self.root),
+                scopes=[{
+                    "scope_key": db.get_index_scope_key(str(self.root)),
+                    "scope_type": "directory",
+                    "member_id": None,
+                    "directory": str(self.root),
+                }],
+                analyze_colors=False,
+                priority=20,
+            )
+            self.assertTrue(started.wait(timeout=5))
+            self.manager.close(timeout=5.0)
+            self.assertTrue(cancelled.is_set())
+        finally:
+            db.scan_and_index_directory = original_scan
+
     def test_hidden_artist_and_recycle_metadata_are_reversible(self):
         artist_id = 4252792
         db.hide_artist(artist_id, "Example Artist")
@@ -607,6 +739,54 @@ class MediaLibraryTests(unittest.TestCase):
         self.assertEqual(final["status"], "completed")
         self.assertEqual(final["added"], 60)
         self.assertEqual(final["errors"], 0)
+
+    def test_parallel_viewer_writes_use_wal_and_busy_timeout(self):
+        connection = db.get_db_connection()
+        try:
+            connection.execute(
+                "CREATE TABLE lock_probe (worker TEXT NOT NULL, sequence INTEGER NOT NULL)"
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+        barrier = threading.Barrier(2)
+        errors = []
+
+        def write_rows(worker: str) -> None:
+            connection = db.get_db_connection()
+            try:
+                barrier.wait(timeout=5)
+                for sequence in range(12):
+                    connection.execute(
+                        "INSERT INTO lock_probe(worker, sequence) VALUES (?, ?)",
+                        (worker, sequence),
+                    )
+                    connection.commit()
+                    time.sleep(0.005)
+            except Exception as error:  # pragma: no cover - assertion reports the real error
+                errors.append(error)
+            finally:
+                connection.close()
+
+        threads = [
+            threading.Thread(target=write_rows, args=("first",)),
+            threading.Thread(target=write_rows, args=("second",)),
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=10)
+
+        self.assertFalse(errors, errors)
+        connection = db.get_db_connection()
+        try:
+            row_count = connection.execute("SELECT COUNT(*) FROM lock_probe").fetchone()[0]
+            journal_mode = connection.execute("PRAGMA journal_mode").fetchone()[0]
+        finally:
+            connection.close()
+        self.assertEqual(row_count, 24)
+        self.assertEqual(str(journal_mode).lower(), "wal")
 
     def test_startup_marks_active_job_interrupted(self):
         job_id = "interrupted-test-job"
@@ -748,6 +928,61 @@ class MediaLibraryTests(unittest.TestCase):
         self.assertFalse(recovery_path.exists())
         self.assertEqual(library_jobs.get_thumbnail_cache_stats()["recoverable_files"], 0)
         self.assertEqual(db.get_thumbnail_cache_entries([cache_name]), [])
+
+    def test_ghost_file_purge_on_rescan(self):
+        first = self._write_media("ghost_test_1.jpg", b"image-content-1")
+        result1 = db.scan_and_index_directory(str(self.root))
+        self.assertEqual(result1["added"], 1)
+
+        conn = db.get_db_connection()
+        rows = conn.execute("SELECT image_id FROM pixiv_master_image").fetchall()
+        self.assertEqual(len(rows), 1)
+
+        first.unlink()
+        result2 = db.scan_and_index_directory(str(self.root))
+        self.assertEqual(result2["removed"], 1)
+
+        rows_after = conn.execute("SELECT image_id FROM pixiv_master_image").fetchall()
+        self.assertEqual(len(rows_after), 0)
+
+    def test_rename_file_fingerprint_matching(self):
+        content = b"unique-image-content-for-fingerprint-test"
+        old_file = self._write_media("old_name.jpg", content)
+        result1 = db.scan_and_index_directory(str(self.root))
+        self.assertEqual(result1["added"], 1)
+
+        conn = db.get_db_connection()
+        initial_row = conn.execute("SELECT image_id, save_name FROM pixiv_master_image").fetchone()
+        orig_id = initial_row["image_id"]
+
+        new_file = self.root / "new_name.jpg"
+        old_file.rename(new_file)
+
+        result2 = db.scan_and_index_directory(str(self.root))
+        self.assertEqual(result2["updated"], 1)
+        self.assertEqual(result2["added"], 0)
+        self.assertEqual(result2["removed"], 0)
+
+        updated_row = conn.execute("SELECT image_id, save_name FROM pixiv_master_image").fetchone()
+        self.assertEqual(updated_row["image_id"], orig_id)
+        self.assertTrue(updated_row["save_name"].endswith("new_name.jpg"))
+
+    def test_ghost_file_thumbnail_cleanup(self):
+        source = self._write_media("thumb_ghost.jpg", b"thumb-source-bytes")
+        result1 = db.scan_and_index_directory(str(self.root))
+        self.assertEqual(result1["added"], 1)
+
+        source_stat = source.stat()
+        cache_name = library_jobs.thumbnail_cache_name(str(source), 320, 320, source_stat)
+        cache_path = Path(library_jobs.THUMB_CACHE_DIR) / cache_name
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_path.write_bytes(b"webp-thumbnail-data")
+        self.assertTrue(cache_path.exists())
+
+        source.unlink()
+        result2 = db.scan_and_index_directory(str(self.root))
+        self.assertEqual(result2["removed"], 1)
+        self.assertFalse(cache_path.exists())
 
     def _wait_for_terminal(self, job_id: str):
         deadline = time.time() + 5

@@ -305,7 +305,7 @@
   align-items: center;
   color: var(--neutral-text-2);
 }
-.onboarding__error { color: var(--status-danger); }
+.onboarding__error { color: var(--status-danger-text); }
 .onboarding__live-status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); }
 
 .onboarding__spinner {

@@ -1,11 +1,7 @@
-import { DEFAULT_WEB_CONFIG, ImageItem, WebConfig } from '../types';
+import { DEFAULT_WEB_CONFIG, FullscreenZoomMode, ImageItem, WebConfig } from '../types';
+import { SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH } from './sidebarLayout';
 
-type WebConfigInput = Partial<WebConfig> & {
-  // Legacy keys are accepted so existing web_config.json files migrate safely.
-  thumbnailWidth?: unknown;
-  thumbnailHeight?: unknown;
-  mosaicEnabled?: unknown;
-};
+type WebConfigInput = Record<string, unknown>;
 
 const clampInteger = (value: unknown, fallback: number, min: number, max: number): number => {
   const numericValue = typeof value === 'number' ? value : Number(value);
@@ -13,9 +9,17 @@ const clampInteger = (value: unknown, fallback: number, min: number, max: number
   return Math.min(max, Math.max(min, Math.round(numericValue)));
 };
 
+const clampNumber = (value: unknown, fallback: number, min: number, max: number): number => {
+  const numericValue = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(numericValue)) return fallback;
+  return Math.min(max, Math.max(min, Math.round(numericValue * 100) / 100));
+};
+
 const toBoolean = (value: unknown, fallback: boolean): boolean => {
   if (value === undefined || value === null) return fallback;
-  if (typeof value === 'string') return value.toLowerCase() !== 'false';
+  if (typeof value === 'string') {
+    return !['', '0', 'false', 'no', 'off'].includes(value.trim().toLowerCase());
+  }
   return Boolean(value);
 };
 
@@ -25,15 +29,43 @@ export const normalizeDominantColor = (value: unknown): string | undefined => {
   return /^#[0-9A-Fa-f]{6}$/.test(color) ? color : undefined;
 };
 
-export const normalizeWebConfig = (value: WebConfigInput | null | undefined): WebConfig => {
-  const source = value ?? {};
+export const normalizeWebConfig = (value: unknown): WebConfig => {
+  const source: WebConfigInput = (
+    typeof value === 'object' && value !== null && !Array.isArray(value)
+      ? { ...(value as WebConfigInput) }
+      : {}
+  );
+  if (source.videoMuted === undefined && source.fullscreenVideoMuted !== undefined) {
+    source.videoMuted = source.fullscreenVideoMuted;
+  }
   const legacyThumbnailSize = source.thumbnailWidth ?? source.thumbnailHeight;
+  const fullscreenZoomModes: FullscreenZoomMode[] = ['auto', 'lock', 'width', 'height', 'fit', 'fill'];
+  const fullscreenZoomMode = typeof source.fullscreenZoomMode === 'string'
+    && fullscreenZoomModes.includes(source.fullscreenZoomMode as FullscreenZoomMode)
+    ? source.fullscreenZoomMode as FullscreenZoomMode
+    : DEFAULT_WEB_CONFIG.fullscreenZoomMode;
+
+  const normalizedVideoVolume = clampNumber(
+    source.videoVolume,
+    DEFAULT_WEB_CONFIG.videoVolume,
+    0,
+    1,
+  );
+  const normalizedVideoMuted = source.videoMuted === undefined
+    ? normalizedVideoVolume <= 0
+    : toBoolean(source.videoMuted, DEFAULT_WEB_CONFIG.videoMuted);
 
   const normalizedConfig: WebConfig = {
     webTheme: source.webTheme === 'light' ? 'light' : DEFAULT_WEB_CONFIG.webTheme,
     defaultViewMode: source.defaultViewMode === 'webtoon' ? 'webtoon' : 'fullscreen',
     thumbnailSize: clampInteger(source.thumbnailSize ?? legacyThumbnailSize, DEFAULT_WEB_CONFIG.thumbnailSize, 16, 4096),
     itemsPerPage: clampInteger(source.itemsPerPage, DEFAULT_WEB_CONFIG.itemsPerPage, 1, 5000),
+    sidebarWidth: clampInteger(
+      source.sidebarWidth,
+      DEFAULT_WEB_CONFIG.sidebarWidth,
+      SIDEBAR_MIN_WIDTH,
+      SIDEBAR_MAX_WIDTH,
+    ),
     autoOpenBrowser: toBoolean(source.autoOpenBrowser, DEFAULT_WEB_CONFIG.autoOpenBrowser),
     groupMangaPosts: toBoolean(source.groupMangaPosts, DEFAULT_WEB_CONFIG.groupMangaPosts),
     blurEnabled: toBoolean(
@@ -46,9 +78,36 @@ export const normalizeWebConfig = (value: WebConfigInput | null | undefined): We
       source.fullscreenToolbarSimpleMode,
       DEFAULT_WEB_CONFIG.fullscreenToolbarSimpleMode,
     ),
+    fullscreenShowToolbar: toBoolean(
+      source.fullscreenShowToolbar,
+      DEFAULT_WEB_CONFIG.fullscreenShowToolbar,
+    ),
     fullscreenShowThumbnails: toBoolean(
       source.fullscreenShowThumbnails,
       DEFAULT_WEB_CONFIG.fullscreenShowThumbnails,
+    ),
+    fullscreenShowCheckerboard: toBoolean(
+      source.fullscreenShowCheckerboard,
+      DEFAULT_WEB_CONFIG.fullscreenShowCheckerboard,
+    ),
+    fullscreenZoomMode,
+    fullscreenVideoSeekSeconds: clampInteger(
+      source.fullscreenVideoSeekSeconds,
+      DEFAULT_WEB_CONFIG.fullscreenVideoSeekSeconds,
+      1,
+      60,
+    ),
+    fullscreenVideoHoldPlaybackRate: clampNumber(
+      source.fullscreenVideoHoldPlaybackRate,
+      DEFAULT_WEB_CONFIG.fullscreenVideoHoldPlaybackRate,
+      1.25,
+      4,
+    ),
+    videoMuted: normalizedVideoMuted,
+    videoVolume: normalizedVideoVolume,
+    videoAutoplay: toBoolean(
+      source.videoAutoplay,
+      DEFAULT_WEB_CONFIG.videoAutoplay,
     ),
     webtoonImageScale: clampInteger(
       source.webtoonImageScale,
@@ -105,6 +164,8 @@ export const buildThumbnailUrl = (
     image_id: String(item.image_id),
     size: String(clampInteger(thumbnailSize, DEFAULT_WEB_CONFIG.thumbnailSize, 16, 4096)),
   });
+  const sourceRevision = item.last_update_date || item.created_date;
+  if (sourceRevision) params.set('revision', sourceRevision);
 
   return `/api/thumbnail?${params.toString()}`;
 };

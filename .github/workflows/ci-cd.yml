@@ -20,7 +20,7 @@ concurrency:
 
 jobs:
   backend:
-    name: Backend tests
+    name: Windows integration characterization
     runs-on: windows-latest
     defaults:
       run:
@@ -42,11 +42,17 @@ jobs:
       - name: Sync backend dependencies
         run: uv sync --locked --python 3.12
 
-      - name: Run backend tests
-        run: uv run python -m unittest discover -s tests -v
+      - name: Run Windows picker, media, and recycle-bin coverage
+        run: >-
+          uv run python -m unittest
+          tests.test_path_picker
+          tests.test_main_http_routes
+          tests.test_media_library.MediaLibraryTests.test_hidden_artist_and_recycle_metadata_are_reversible
+          tests.test_media_library.MediaLibraryTests.test_thumbnail_cache_recovery_details_and_recycle_bin_move
 
   frontend:
-    name: Frontend build
+    if: startsWith(github.ref, 'refs/tags/v')
+    name: Windows release frontend build
     runs-on: windows-latest
     defaults:
       run:

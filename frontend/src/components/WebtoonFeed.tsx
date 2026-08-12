@@ -13,17 +13,27 @@ import {
   Plus,
   Settings2,
 } from 'lucide-react';
-import { ImageItem, WebConfig } from '../types';
+import { ImageItem, VideoPreferencePatch, WebConfig } from '../types';
 import { MediaIssuePlaceholder } from './MediaIssuePlaceholder';
 import { DemoMediaBlock } from './DemoMediaBlock';
+import { buildMediaUrl, isVideoItem } from '../utils/media';
 import { buildThumbnailUrl } from '../utils/webConfig';
-import { getGroupPageNumbers, getItemGroupKey } from '../utils/grouping';
+import { getGroupPageNumbers } from '../utils/grouping';
 import {
-  ImagePriority,
+  buildWebtoonMetrics,
+  buildWebtoonThumbnailLayout,
+  findIndexAtOffset,
+  getThumbnailHeight,
+  WebtoonMetrics,
+  WebtoonThumbnailLayout,
+} from '../utils/viewerLayout';
+import {
   imageLoadScheduler,
   useImageLoadPermission,
 } from '../utils/imageLoadScheduler';
+import { useViewerMediaAdmission } from '../hooks/useViewerMediaAdmission';
 import { getScrollTopForElement } from '../utils/galleryLayout';
+import { prefersReducedMotion } from '../utils/motion';
 import { Badge, IconButton, Input } from './ui';
 
 type WebtoonSettingsPatch = Partial<Pick<
@@ -50,22 +60,12 @@ interface WebtoonFeedProps {
   totalPages?: number;
   mobileToolbarOpen?: boolean;
   isMobileViewport?: boolean;
+  videoMuted?: boolean;
+  videoVolume?: number;
+  videoAutoplay?: boolean;
   onPageChange?: (page: number, anchorIndex?: number) => void;
   onSettingsChange?: (patch: WebtoonSettingsPatch) => void;
-}
-
-interface WebtoonMetrics {
-  offsets: number[];
-  heights: number[];
-  totalHeight: number;
-  estimatedHeight: number;
-}
-
-interface WebtoonThumbnailLayout {
-  offsets: number[];
-  heights: number[];
-  boundaryOffsets: Array<number | null>;
-  totalHeight: number;
+  onVideoPreferenceChange?: (patch: VideoPreferencePatch) => void;
 }
 
 const DEFAULT_ASPECT_RATIO = 4 / 5;
@@ -82,20 +82,32 @@ const THUMBNAIL_OVERSCAN = 4;
 const QUICK_SCALE_STEP = 10;
 const QUICK_GAP_STEP = 8;
 const QUICK_TOOLBAR_COLLAPSE_DELAY = 500;
+const WEBTOON_VIDEO_PLAY_THRESHOLD = 0.6;
+const WEBTOON_VIDEO_PAUSE_THRESHOLD = 0.25;
 
-const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
+const activeWebtoonAutoplayVideos = new Set<HTMLVideoElement>();
 
-const getThumbnailHeight = (railWidth: number, aspectRatio: number) => {
-  const safeAspectRatio = clamp(aspectRatio, 0.2, 5);
-  const itemWidth = Math.max(1, railWidth - THUMBNAIL_WIDTH_INSET);
-  return Math.max(THUMBNAIL_MIN_HEIGHT, Math.round(itemWidth / safeAspectRatio));
+const playWebtoonVideoExclusively = (video: HTMLVideoElement) => {
+  for (const activeVideo of activeWebtoonAutoplayVideos) {
+    if (activeVideo !== video) activeVideo.pause();
+  }
+  activeWebtoonAutoplayVideos.add(video);
+  try {
+    const playPromise = video.play();
+    if (playPromise && typeof playPromise.catch === 'function') {
+      void playPromise.catch(() => undefined);
+    }
+  } catch {
+    // Autoplay can still be rejected when the saved preference is unmuted.
+  }
 };
 
-const isVideoItem = (item: ImageItem) => item.save_name.toLowerCase().endsWith('.mp4');
+const pauseWebtoonVideo = (video: HTMLVideoElement) => {
+  activeWebtoonAutoplayVideos.delete(video);
+  if (!video.paused) video.pause();
+};
 
-const buildMediaUrl = (item: ImageItem) => (
-  `/api/file?path=${encodeURIComponent(item.save_name || '')}&image_id=${item.image_id}`
-);
+const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 
 const getMainForFeed = (feed: HTMLElement | null): HTMLElement | null => (
   feed?.closest('main') as HTMLElement | null
@@ -107,73 +119,105 @@ const getFeedDocumentTop = (main: HTMLElement, feed: HTMLElement) => {
   return main.scrollTop + feedRect.top - mainRect.top;
 };
 
-const findIndexAtOffset = (offsets: number[], offset: number) => {
-  if (offsets.length === 0) return 0;
-  let low = 0;
-  let high = offsets.length - 1;
-  let result = 0;
-  while (low <= high) {
-    const middle = Math.floor((low + high) / 2);
-    if (offsets[middle] <= offset) {
-      result = middle;
-      low = middle + 1;
-    } else {
-      high = middle - 1;
-    }
-  }
-  return result;
-};
-
 interface WebtoonMediaProps {
   item: ImageItem;
-  index: number;
   pageNumber: number;
   thumbnailSize: number;
   blurEnabled: boolean;
   demoMode: boolean;
   isNearCurrent: boolean;
+  videoMuted: boolean;
+  videoVolume: number;
+  videoAutoplay: boolean;
+  onVideoPreferenceChange?: (patch: VideoPreferencePatch) => void;
 }
 
 const WebtoonMedia = React.memo<WebtoonMediaProps>(({
   item,
-  index,
   pageNumber,
   thumbnailSize,
   blurEnabled,
   demoMode,
   isNearCurrent,
+  videoMuted,
+  videoVolume,
+  videoAutoplay,
+  onVideoPreferenceChange,
 }) => {
   const isVideo = isVideoItem(item);
   const mediaUrl = buildMediaUrl(item);
   const thumbnailUrl = buildThumbnailUrl(item, thumbnailSize);
-  const [thumbnailReady, setThumbnailReady] = React.useState(false);
-  const [thumbnailFailed, setThumbnailFailed] = React.useState(false);
-  const [originalReady, setOriginalReady] = React.useState(false);
-  const [originalFailed, setOriginalFailed] = React.useState(false);
   const [aspectRatio, setAspectRatio] = React.useState(DEFAULT_ASPECT_RATIO);
+  const videoRef = React.useRef<HTMLVideoElement | null>(null);
 
-  const thumbnailAdmitted = useImageLoadPermission({
-    url: thumbnailUrl,
-    priority: isNearCurrent ? 1 : 2,
-    kind: 'thumbnail',
+  const {
+    thumbnailAdmitted,
+    originalAdmitted,
+    thumbnailReady,
+    thumbnailFailed,
+    originalReady,
+    originalFailed,
+    markThumbnailLoaded,
+    markThumbnailError,
+    markOriginalLoaded,
+    markOriginalError,
+  } = useViewerMediaAdmission({
+    thumbnailUrl,
+    mediaUrl,
+    thumbnailPriority: isNearCurrent ? 1 : 2,
+    originalPriority: isNearCurrent ? 0 : 1,
+    thumbnailEnabled: !demoMode && !isVideo && !item.media_status,
+    originalEnabled: !demoMode && !isVideo && !item.media_status && isNearCurrent,
     owner: 'webtoon',
-    enabled: !demoMode && !isVideo && !item.media_status,
-  });
-  const originalAdmitted = useImageLoadPermission({
-    url: mediaUrl,
-    priority: isNearCurrent ? 0 : 1,
-    kind: 'original',
-    owner: 'webtoon',
-    enabled: !demoMode && !isVideo && !item.media_status && isNearCurrent,
   });
 
   React.useEffect(() => {
-    setThumbnailReady(false);
-    setThumbnailFailed(false);
-    setOriginalReady(false);
-    setOriginalFailed(false);
     setAspectRatio(DEFAULT_ASPECT_RATIO);
   }, [item.image_id, item.save_name, thumbnailUrl]);
+
+  React.useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !isVideo || demoMode) return;
+
+    const shouldMuteVideo = videoMuted || videoVolume <= 0;
+    if (video.muted !== shouldMuteVideo) video.muted = shouldMuteVideo;
+    if (Math.abs(video.volume - videoVolume) > 0.001) video.volume = clamp(videoVolume, 0, 1);
+  }, [demoMode, isVideo, item.image_id, mediaUrl, videoMuted, videoVolume]);
+
+  React.useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !isVideo || demoMode) return;
+
+    if (typeof IntersectionObserver === 'undefined') {
+      pauseWebtoonVideo(video);
+      return;
+    }
+
+    const root = video.closest('main');
+    const observer = new IntersectionObserver(([entry]) => {
+      if (entry.isIntersecting && entry.intersectionRatio >= WEBTOON_VIDEO_PLAY_THRESHOLD) {
+        if (videoAutoplay && !prefersReducedMotion()) playWebtoonVideoExclusively(video);
+      } else if (!entry.isIntersecting || entry.intersectionRatio < WEBTOON_VIDEO_PAUSE_THRESHOLD) {
+        pauseWebtoonVideo(video);
+      }
+    }, {
+      root,
+      threshold: [0, WEBTOON_VIDEO_PAUSE_THRESHOLD, WEBTOON_VIDEO_PLAY_THRESHOLD],
+    });
+
+    observer.observe(video);
+    return () => {
+      observer.disconnect();
+      pauseWebtoonVideo(video);
+    };
+  }, [demoMode, isVideo, item.image_id, mediaUrl, videoAutoplay]);
+
+  const handleVideoVolumeChange = React.useCallback((event: React.SyntheticEvent<HTMLVideoElement>) => {
+    onVideoPreferenceChange?.({
+      videoMuted: event.currentTarget.muted,
+      videoVolume: clamp(event.currentTarget.volume, 0, 1),
+    });
+  }, [onVideoPreferenceChange]);
 
   const updateAspectRatio = (width: number, height: number) => {
     if (width > 0 && height > 0) setAspectRatio(width / height);
@@ -202,9 +246,15 @@ const WebtoonMedia = React.memo<WebtoonMediaProps>(({
     return (
       <div className="webtoon-feed__media-frame webtoon-feed__media-frame--video">
         <video
+          ref={videoRef}
           src={mediaUrl}
+          autoPlay={false}
           controls
           loop
+          preload="metadata"
+          playsInline
+          muted={videoMuted || videoVolume <= 0}
+          onVolumeChange={handleVideoVolumeChange}
           className={`webtoon-feed__video ${blurEnabled ? 'blur-media blur-media--feed' : ''}`}
         />
       </div>
@@ -230,14 +280,10 @@ const WebtoonMedia = React.memo<WebtoonMediaProps>(({
           {...{ fetchpriority: isNearCurrent ? 'high' : 'low' }}
           onLoad={event => {
             const image = event.currentTarget;
-            imageLoadScheduler.markLoaded(thumbnailUrl);
+            markThumbnailLoaded();
             updateAspectRatio(image.naturalWidth, image.naturalHeight);
-            setThumbnailReady(true);
           }}
-          onError={() => {
-            imageLoadScheduler.markFinished(thumbnailUrl, false);
-            setThumbnailFailed(true);
-          }}
+          onError={markThumbnailError}
           className={`webtoon-feed__media-layer webtoon-feed__media-layer--thumbnail ${blurEnabled ? 'blur-media blur-media--feed' : ''}`}
         />
       )}
@@ -251,14 +297,10 @@ const WebtoonMedia = React.memo<WebtoonMediaProps>(({
           {...{ fetchpriority: isNearCurrent ? 'high' : 'low' }}
           onLoad={event => {
             const image = event.currentTarget;
-            imageLoadScheduler.markLoaded(mediaUrl);
+            markOriginalLoaded();
             updateAspectRatio(image.naturalWidth, image.naturalHeight);
-            setOriginalReady(true);
           }}
-          onError={() => {
-            imageLoadScheduler.markFinished(mediaUrl, false);
-            setOriginalFailed(true);
-          }}
+          onError={markOriginalError}
           className={`webtoon-feed__media-layer webtoon-feed__media-layer--original ${originalReady ? 'is-visible' : ''} ${blurEnabled ? 'blur-media blur-media--feed' : ''}`}
         />
       )}
@@ -456,43 +498,20 @@ const WebtoonThumbnailRail: React.FC<WebtoonThumbnailRailProps> = ({
     };
   }, [images.length]);
 
-  const thumbnailLayout = React.useMemo<WebtoonThumbnailLayout>(() => {
-    const offsets: number[] = [];
-    const heights: number[] = [];
-    const boundaryOffsets: Array<number | null> = [];
-    let offset = THUMBNAIL_EDGE_PADDING;
-
-    for (let index = 0; index < images.length; index += 1) {
-      if (index > 0) {
-        offset += THUMBNAIL_GAP;
-        const previousItem = images[index - 1];
-        const isWorkBoundary = getItemGroupKey(images[index]) !== getItemGroupKey(previousItem);
-        if (isWorkBoundary) {
-          boundaryOffsets[index] = offset + THUMBNAIL_BOUNDARY_MARGIN;
-          offset += THUMBNAIL_BOUNDARY_WIDTH + THUMBNAIL_BOUNDARY_MARGIN * 2;
-        } else {
-          boundaryOffsets[index] = null;
-        }
-      } else {
-        boundaryOffsets[index] = null;
-      }
-
-      const aspectRatio = aspectRatiosRef.current.get(index) ?? DEFAULT_THUMBNAIL_ASPECT_RATIO;
-      const height = getThumbnailHeight(railWidth, aspectRatio);
-      offsets.push(offset);
-      heights.push(height);
-      offset += height;
-    }
-
-    return {
-      offsets,
-      heights,
-      boundaryOffsets,
-      totalHeight: images.length > 0
-        ? offset + THUMBNAIL_EDGE_PADDING
-        : THUMBNAIL_EDGE_PADDING * 2,
-    };
-  }, [images, layoutVersion, railWidth]);
+  const thumbnailLayout = React.useMemo<WebtoonThumbnailLayout>(() => (
+    buildWebtoonThumbnailLayout({
+      images,
+      railWidth,
+      aspectRatios: aspectRatiosRef.current,
+      defaultAspectRatio: DEFAULT_THUMBNAIL_ASPECT_RATIO,
+      edgePadding: THUMBNAIL_EDGE_PADDING,
+      gap: THUMBNAIL_GAP,
+      boundaryWidth: THUMBNAIL_BOUNDARY_WIDTH,
+      boundaryMargin: THUMBNAIL_BOUNDARY_MARGIN,
+      widthInset: THUMBNAIL_WIDTH_INSET,
+      minHeight: THUMBNAIL_MIN_HEIGHT,
+    })
+  ), [images, layoutVersion, railWidth]);
 
   thumbnailLayoutRef.current = thumbnailLayout;
 
@@ -505,8 +524,14 @@ const WebtoonThumbnailRail: React.FC<WebtoonThumbnailRailProps> = ({
     const anchorIndex = rail
       ? findIndexAtOffset(thumbnailLayout.offsets, rail.scrollTop + 1)
       : 0;
-    const previousHeight = getThumbnailHeight(railWidth, previousAspectRatio);
-    const nextHeight = getThumbnailHeight(railWidth, safeAspectRatio);
+    const previousHeight = getThumbnailHeight(railWidth, previousAspectRatio, {
+      widthInset: THUMBNAIL_WIDTH_INSET,
+      minHeight: THUMBNAIL_MIN_HEIGHT,
+    });
+    const nextHeight = getThumbnailHeight(railWidth, safeAspectRatio, {
+      widthInset: THUMBNAIL_WIDTH_INSET,
+      minHeight: THUMBNAIL_MIN_HEIGHT,
+    });
     aspectRatiosRef.current.set(index, safeAspectRatio);
 
     // Keep the first visible thumbnail anchored while an image above it
@@ -879,8 +904,12 @@ export const WebtoonFeed: React.FC<WebtoonFeedProps> = ({
   totalPages = 1,
   mobileToolbarOpen = false,
   isMobileViewport = false,
+  videoMuted = false,
+  videoVolume = 1,
+  videoAutoplay = true,
   onPageChange,
   onSettingsChange,
+  onVideoPreferenceChange,
 }) => {
   const feedRef = React.useRef<HTMLElement | null>(null);
   const heightsRef = React.useRef(new Map<number, number>());
@@ -905,7 +934,6 @@ export const WebtoonFeed: React.FC<WebtoonFeedProps> = ({
       },
     [groupMangaPosts, images, pageOffset, totalImages],
   );
-
   const cancelToolbarCollapse = React.useCallback(() => {
     if (toolbarCollapseTimerRef.current !== null) {
       window.clearTimeout(toolbarCollapseTimerRef.current);
@@ -966,23 +994,13 @@ export const WebtoonFeed: React.FC<WebtoonFeedProps> = ({
     setHeightVersion(version => version + 1);
   }, [images, imageScale, showInfo]);
 
-  const metrics = React.useMemo<WebtoonMetrics>(() => {
-    const offsets: number[] = [];
-    const heights: number[] = [];
-    let offset = 0;
-    for (let index = 0; index < images.length; index += 1) {
-      const height = Math.max(MIN_ITEM_HEIGHT, heightsRef.current.get(index) ?? estimatedHeight);
-      offsets.push(offset);
-      heights.push(height);
-      offset += height + imageGap;
-    }
-    return {
-      offsets,
-      heights,
-      totalHeight: Math.max(0, offset - (images.length > 0 ? imageGap : 0)),
-      estimatedHeight,
-    };
-  }, [estimatedHeight, heightVersion, imageGap, images.length]);
+  const metrics = React.useMemo<WebtoonMetrics>(() => buildWebtoonMetrics({
+    imageCount: images.length,
+    estimatedHeight,
+    imageGap,
+    measuredHeights: heightsRef.current,
+    minItemHeight: MIN_ITEM_HEIGHT,
+  }), [estimatedHeight, heightVersion, imageGap, images.length]);
 
   const relativeScrollTop = Math.max(0, scrollTop - feedTop);
   const activeIndex = images.length > 0
@@ -1260,12 +1278,15 @@ export const WebtoonFeed: React.FC<WebtoonFeedProps> = ({
                 <div className="webtoon-feed__media-wrap">
                   <WebtoonMedia
                     item={item}
-                    index={index}
                     pageNumber={pageNumber}
                     thumbnailSize={thumbnailSize}
                     blurEnabled={blurEnabled}
                     demoMode={demoMode}
                     isNearCurrent={Math.abs(index - activeIndex) <= 3}
+                    videoMuted={videoMuted}
+                    videoVolume={videoVolume}
+                    videoAutoplay={videoAutoplay}
+                    onVideoPreferenceChange={onVideoPreferenceChange}
                   />
                 </div>
               </article>

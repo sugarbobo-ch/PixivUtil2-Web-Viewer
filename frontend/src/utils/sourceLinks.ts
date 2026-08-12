@@ -46,12 +46,15 @@ export const fetchFirstSourceLink = async (paths: readonly string[]): Promise<So
   return null;
 };
 
-export const fetchArtistSourceLinks = (artistId: number): Promise<ArtistSourceLinks | null> => {
-  const key = String(artistId);
+export const fetchArtistSourceLinks = (folderOrArtistId: string | number): Promise<ArtistSourceLinks | null> => {
+  const key = String(folderOrArtistId);
   const cached = artistSourceRequests.get(key);
   if (cached) return cached;
 
-  const request = requestJson(`/api/artist-source-link?artist_id=${encodeURIComponent(key)}`).then(value => {
+  const query = key.startsWith('folder:')
+    ? `folder_id=${encodeURIComponent(key)}`
+    : `artist_id=${encodeURIComponent(key)}`;
+  const request = requestJson(`/api/artist-source-link?${query}`).then(value => {
     if (!value || typeof value !== 'object') return null;
     const candidate = value as Partial<ArtistSourceLinks>;
     const verifiedMemberId = candidate.verified_member_id;

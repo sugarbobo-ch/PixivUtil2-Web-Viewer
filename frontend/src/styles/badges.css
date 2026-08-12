@@ -69,7 +69,7 @@
 .ui-badge[data-variant='danger'] {
   --ui-badge-background: var(--status-danger-soft);
   --ui-badge-border: color-mix(in oklch, var(--status-danger) 36%, var(--neutral-border));
-  --ui-badge-text: var(--status-danger);
+  --ui-badge-text: var(--status-danger-text);
 }
 
 /* Keep legacy positioning classes from changing the shared geometry. */
@@ -84,6 +84,13 @@
   min-height: 1.75rem;
   padding: 0;
   border-radius: 50%;
+}
+
+.ui-badge.ui-badge--icon[data-size='sm'] {
+  width: 1.5rem;
+  min-width: 1.5rem;
+  height: 1.5rem;
+  min-height: 1.5rem;
 }
 
 .ui-badge > svg {
@@ -118,6 +125,19 @@
   --ui-badge-background: var(--settings-success-soft);
   --ui-badge-border: color-mix(in oklch, var(--settings-success) 36%, var(--settings-border-soft));
   --ui-badge-text: var(--settings-success);
+}
+
+/* Group and media metadata float over artwork as a quiet, borderless HUD. */
+.ui-badge.gallery-card__group-count,
+.ui-badge.gallery-card__video-badge,
+.ui-badge.manga-group-modal__count,
+.ui-badge.manga-group-card__page-badge,
+.ui-badge.manga-group-card__video-badge {
+  --ui-badge-background: color-mix(in oklch, var(--viewer-hud-surface) 42%, transparent);
+  --ui-badge-border: transparent;
+  --ui-badge-text: var(--viewer-hud-text);
+  border: 0;
+  backdrop-filter: blur(6px);
 }
 
 @media (max-width: 48rem) {

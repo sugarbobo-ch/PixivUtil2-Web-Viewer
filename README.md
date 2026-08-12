@@ -13,6 +13,7 @@ A Windows-first local web viewer for a PixivUtil2 library or a compatible local 
 - Refine the current view with artist and date filters, search, sorting, and pagination controls.
 - Switch between the grid, a focused fullscreen viewer, and continuous vertical webtoon reading without losing your place.
 - Group related pages into manga packs, preview every page, then play the pack in fullscreen or webtoon mode.
+- Use YouTube-like fullscreen video gestures: Space or a click on the video body to play/pause, double-click either half to seek the configured number of seconds (5 by default), and hold a side for temporary 2× playback (configurable).
 - Keep sensitive media covered with the blur toggle while retaining page counts, grouping, and navigation.
 - Refresh the viewer index and optional dominant-color metadata in the background without writing to the PixivUtil2 source database.
 - Organize thumbnail caches through a recoverable workflow instead of permanently deleting generated files.
@@ -91,6 +92,18 @@ No administrator privileges are required. An internet connection is required for
 3. Open **Settings → Media database** and select **Update image database**. The background job refreshes the viewer snapshot and can analyze image colors.
 4. Browse with artist and month filters, then open a manga pack in fullscreen or webtoon mode. Enable **Blur** before sharing your screen or taking screenshots.
 5. When the thumbnail cache grows, use **Settings → Media database → Organize thumbnails**. Organized files move to a recoverable location and can be restored.
+
+## Fullscreen video player controls
+
+When viewing a video in fullscreen:
+
+- Press `Space` or click the video body (outside the native controls) to play or pause.
+- Double-click the left half to rewind or the right half to fast-forward by the configured seek interval (5 seconds by default).
+- Hold either side of the video for temporary accelerated playback (2× by default); release to restore the previous speed.
+- Click the stage outside the video on the left or right to move to the previous or next work. Clicking inside the video does not close fullscreen.
+- Use the native video control bar and progress track to seek; the controls stay aligned with the video rectangle.
+- Press `F1` to open the fullscreen shortcut help, which also lists the video gestures.
+- Configure the seek interval and hold speed under **Settings → Display & browsing → Fullscreen mode**. Shared video playback settings let you enable autoplay for fullscreen and webtoon modes; the first playback is muted, and the mute/volume state from the native controls is saved for both modes. In webtoon mode, videos play when they enter the primary visible area and pause after leaving it.
 
 ## Run and stop
 
