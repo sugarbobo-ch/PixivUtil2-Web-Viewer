@@ -5,51 +5,35 @@ import React, {
   useRef,
   useState,
 } from 'react';
+import '../styles/settings.css';
 import {
   AlertCircle,
   BookOpen,
   CheckCircle2,
-  ChevronDown,
   ChevronLeft,
   ChevronRight,
-  ChevronUp,
+  Columns2,
   Database,
-  Eye,
   Expand,
-  GalleryThumbnails,
   Gauge,
-  Grid2X2,
+  Image as ImageIcon,
   Lock,
   Maximize2,
   Minimize2,
   Moon,
   MoveHorizontal,
   MoveVertical,
-  PanelTop,
-  PanelTopOpen,
-  Play,
   Rewind,
-  RefreshCw,
   Save,
   ScanSearch,
-  Search,
   Settings,
   Shield,
   Sliders,
   Sun,
   Trash2,
-  Volume2,
   X,
 } from 'lucide-react';
-import { CustomSelect } from './CustomSelect';
-import { DemoMediaBlock } from './DemoMediaBlock';
-import { PathPickerField } from './PathPickerField';
-import { Badge, Button, IconButton, Input, SliderField, Textarea } from './ui';
-import {
-  getFieldMetadata,
-  getSectionMetadata,
-  PixivConfigFieldMetadata,
-} from '../pixivConfigMetadata';
+import { Button, IconButton } from './ui';
 import {
   LibraryJob,
   ThumbnailCacheRecoveryDetails,
@@ -61,24 +45,25 @@ import {
 } from '../types';
 import { useModalFocusTrap } from '../utils/useModalFocusTrap';
 import { getArtistScopeKey } from '../utils/artistIdentity';
-import { getMotionAwareScrollBehavior } from '../utils/motion';
-import {
-  getCompletedLibraryUpdateDescription,
-  getLibraryJobStatusDescription,
-  getLibraryJobStatusTitle,
-} from '../utils/libraryJobPresentation';
+import { getCompletedLibraryUpdateDescription } from '../utils/libraryJobPresentation';
+import { getOperationErrorMessage } from '../utils/operationError';
 import {
   isLibraryJobActive,
   useLibraryJobStore,
 } from '../hooks/useLibraryJobStore';
 import { useWebConfigController } from '../hooks/useWebConfigController';
 import { ApiError, apiClient, isAbortError } from '../api/client';
+import { UI_LANGUAGE_OPTIONS, useI18n } from '../i18n';
 import {
   SettingsBackupTab,
   SettingsLibraryTab,
   SettingsPixivTab,
   SettingsWebTab,
 } from './settings/SettingsTabPanels';
+import { SettingsFullscreenPanel } from './settings/SettingsFullscreenPanel';
+import { SettingsWebPreferencesPanel } from './settings/SettingsWebPreferencesPanel';
+import { SettingsLibraryContent } from './settings/SettingsLibraryContent';
+import { SettingsPixivContent } from './settings/SettingsPixivContent';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -101,6 +86,8 @@ interface ConfigPathInfo {
 interface FeedbackMessage {
   type: 'success' | 'error';
   text: string;
+  translationKey?: string;
+  translationValues?: Record<string, number | string>;
 }
 
 type SourceClosePrompt = 'unsaved' | 'update' | null;
@@ -119,14 +106,10 @@ const RECOVERY_PAGE_SIZE = 24;
 const themeOptions = [
   {
     value: 'dark',
-    label: '深色',
-    description: '深色背景，適合夜間瀏覽',
     icon: <Moon className="h-4 w-4" aria-hidden="true" />,
   },
   {
     value: 'light',
-    label: '淺色',
-    description: '明亮背景，適合日間瀏覽',
     icon: <Sun className="h-4 w-4" aria-hidden="true" />,
   },
 ] as const;
@@ -134,14 +117,10 @@ const themeOptions = [
 const preferredBrowsingModeOptions = [
   {
     value: 'fullscreen',
-    label: '全螢幕',
-    description: '以單張閱讀器開啟作品。',
     icon: <Maximize2 className="h-4 w-4" aria-hidden="true" />,
   },
   {
     value: 'webtoon',
-    label: '條漫（Webtoon）',
-    description: '以連續直向閱讀器開啟作品。',
     icon: <BookOpen className="h-4 w-4" aria-hidden="true" />,
   },
 ] as const;
@@ -149,81 +128,42 @@ const preferredBrowsingModeOptions = [
 const fullscreenZoomModeOptions = [
   {
     value: 'auto',
-    label: '自動縮放（不放大）',
-    description: '以圖片原始比例顯示，不會放大小圖。',
     icon: <ScanSearch className="h-4 w-4" aria-hidden="true" />,
   },
   {
     value: 'lock',
-    label: '鎖定目前縮放',
-    description: '切換圖片時保留目前縮放比例。',
     icon: <Lock className="h-4 w-4" aria-hidden="true" />,
   },
   {
     value: 'width',
-    label: '符合視窗寬度',
-    description: '讓圖片寬度貼合閱讀區。',
     icon: <MoveHorizontal className="h-4 w-4" aria-hidden="true" />,
   },
   {
     value: 'height',
-    label: '符合視窗高度',
-    description: '讓圖片高度貼合閱讀區。',
     icon: <MoveVertical className="h-4 w-4" aria-hidden="true" />,
   },
   {
     value: 'fit',
-    label: '適合視窗（可放大）',
-    description: '完整顯示圖片並允許放大。',
     icon: <Minimize2 className="h-4 w-4" aria-hidden="true" />,
   },
   {
     value: 'fill',
-    label: '填滿視窗',
-    description: '優先填滿閱讀區，可能裁切邊緣。',
     icon: <Expand className="h-4 w-4" aria-hidden="true" />,
   },
 ] as const;
 
 const videoSeekOptions = [3, 5, 10, 15, 30].map((seconds) => ({
   value: seconds,
-  label: `${seconds} 秒`,
-  description: `影片左右半部雙擊時倒轉或快轉 ${seconds} 秒。`,
   icon: <Rewind className="h-4 w-4" aria-hidden="true" />,
 }));
 
 const videoHoldSpeedOptions = [1.25, 1.5, 2, 2.5, 3].map((rate) => ({
   value: rate,
-  label: `${rate} 倍速`,
-  description: `按住影片左右半部時暫時播放 ${rate} 倍速。`,
   icon: <Gauge className="h-4 w-4" aria-hidden="true" />,
 }));
 
 const tabClass = (selected: boolean) =>
   `settings-modal__tab flex items-center gap-2 font-semibold ${selected ? 'is-selected' : ''}`;
-
-const SettingsSwitch: React.FC<
-  Omit<React.InputHTMLAttributes<HTMLInputElement>, 'type'>
-> = (props) => (
-  <input
-    {...props}
-    type="checkbox"
-    role="switch"
-    aria-checked={props.checked}
-    className="settings-modal__switch"
-  />
-);
-
-const getErrorMessage = (error: unknown) => {
-  if (
-    error instanceof Error &&
-    error.message.toLocaleLowerCase().includes('failed to fetch')
-  ) {
-    return '無法連線到 Web Viewer 後端，請確認 API 服務正在執行。';
-  }
-
-  return error instanceof Error ? error.message : '發生未知錯誤，請稍後再試。';
-};
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
   isOpen,
@@ -233,6 +173,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onOpenRecycleBin,
   artists = [],
 }) => {
+  const { t, formatNumber } = useI18n();
+  const getErrorMessage = (error: unknown) => getOperationErrorMessage(error, t);
   const [mainTab, setMainTab] = useState<MainTab>('web');
   const {
     webConfig,
@@ -282,7 +224,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const thumbnailCacheStatsAbortRef = useRef<AbortController | null>(null);
   const recoveryDetailsRequestIdRef = useRef(0);
   const recoveryDetailsAbortRef = useRef<AbortController | null>(null);
-  const sectionTabsRef = useRef<HTMLDivElement | null>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const saveConfirmDialogRef = useRef<HTMLDivElement>(null);
@@ -291,10 +232,92 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const recycleCacheCancelRef = useRef<HTMLButtonElement>(null);
   const sourceCloseDialogRef = useRef<HTMLDivElement>(null);
   const sourceCloseCancelRef = useRef<HTMLButtonElement>(null);
-  const [canScrollSectionTabsLeft, setCanScrollSectionTabsLeft] =
-    useState(false);
-  const [canScrollSectionTabsRight, setCanScrollSectionTabsRight] =
-    useState(false);
+  const uiLanguageOptions = useMemo(
+    () => UI_LANGUAGE_OPTIONS.map(option => ({
+      value: option.value,
+      label: option.nativeLabel,
+      description: option.label,
+    })),
+    [],
+  );
+  const fullscreenPageLayoutOptions = useMemo(() => [
+    {
+      value: 'single' as const,
+      label: t('viewer.singlePage'),
+      description: t('settings.pageLayoutDescription'),
+      icon: <ImageIcon className="h-4 w-4" aria-hidden="true" />,
+    },
+    {
+      value: 'spread' as const,
+      label: t('viewer.spreadPage'),
+      description: t('settings.pageLayoutDescription'),
+      icon: <BookOpen className="h-4 w-4" aria-hidden="true" />,
+    },
+  ], [t]);
+  const fullscreenReadingDirectionOptions = useMemo(() => [
+    {
+      value: 'ltr' as const,
+      label: t('viewer.ltr'),
+      description: t('settings.readingDirectionDescription'),
+      icon: <ChevronRight className="h-4 w-4" aria-hidden="true" />,
+    },
+    {
+      value: 'rtl' as const,
+      label: t('viewer.rtl'),
+      description: t('settings.readingDirectionDescription'),
+      icon: <ChevronLeft className="h-4 w-4" aria-hidden="true" />,
+    },
+  ], [t]);
+  const fullscreenSpreadPairingOptions = useMemo(() => [
+    {
+      value: 'cover-single' as const,
+      label: t('viewer.coverSinglePairing'),
+      description: t('settings.coverSinglePairingDescription'),
+      icon: <ImageIcon className="h-4 w-4" aria-hidden="true" />,
+    },
+    {
+      value: 'first-page' as const,
+      label: t('viewer.firstPagePairing'),
+      description: t('settings.firstPagePairingDescription'),
+      icon: <Columns2 className="h-4 w-4" aria-hidden="true" />,
+    },
+  ], [t]);
+  const localizedThemeOptions = useMemo(() => themeOptions.map(option => ({
+    ...option,
+    label: t(option.value === 'dark' ? 'settings.dark' : 'settings.light'),
+    description: t(option.value === 'dark' ? 'settings.darkDescription' : 'settings.lightDescription'),
+  })), [t]);
+  const localizedPreferredBrowsingModeOptions = useMemo(() => preferredBrowsingModeOptions.map(option => ({
+    ...option,
+    label: t(option.value === 'fullscreen' ? 'settings.fullscreen' : 'settings.webtoon'),
+    description: t(option.value === 'fullscreen' ? 'settings.fullscreenModeDescription' : 'settings.webtoonDescription'),
+  })), [t]);
+  const localizedFullscreenZoomModeOptions = useMemo(() => fullscreenZoomModeOptions.map(option => {
+    const key = {
+      auto: 'settings.zoomAuto',
+      lock: 'settings.zoomLock',
+      width: 'settings.zoomWidth',
+      height: 'settings.zoomHeight',
+      fit: 'settings.zoomFit',
+      fill: 'settings.zoomFill',
+    }[option.value];
+    const descriptionKey = `${key}Description` as const;
+    return {
+      ...option,
+      label: t(key),
+      description: t(descriptionKey),
+    };
+  }), [t]);
+  const localizedVideoSeekOptions = useMemo(() => videoSeekOptions.map(option => ({
+    ...option,
+    label: t('settings.seekSeconds', { seconds: option.value }),
+    description: t('settings.seekDescription', { seconds: option.value }),
+  })), [t]);
+  const localizedVideoHoldSpeedOptions = useMemo(() => videoHoldSpeedOptions.map(option => ({
+    ...option,
+    label: t('settings.holdSpeed', { rate: option.value }),
+    description: t('settings.holdSpeedDescription', { rate: option.value }),
+  })), [t]);
 
   const cancelThumbnailCacheStatsRequest = useCallback(() => {
     thumbnailCacheStatsRequestIdRef.current += 1;
@@ -338,7 +361,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         return;
       setMessage({
         type: 'error',
-        text: `無法讀取縮圖容量：${getErrorMessage(error)}`,
+        text: t('settings.errorThumbnailStats', { error: getErrorMessage(error) }),
       });
     } finally {
       if (thumbnailCacheStatsRequestIdRef.current === requestId) {
@@ -356,13 +379,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         if (job.job_type === 'organize-thumbnail-cache') {
           setMessage({
             type: 'success',
-            text: `縮圖整理完成：移出 ${job.cache_moved} 個縮圖；檔案仍保留在可復原位置。`,
+            text: t('settings.thumbnailOrganized', { count: job.cache_moved }),
           });
           return;
         }
         setMessage({
           type: 'success',
-          text: `圖片資料庫更新完成：${getCompletedLibraryUpdateDescription(job)}`,
+          text: t('settings.libraryUpdated', { details: getCompletedLibraryUpdateDescription(job, t, formatNumber) }),
         });
         onSettingsSaved();
         return;
@@ -372,8 +395,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           type: 'success',
           text:
             job.job_type === 'organize-thumbnail-cache'
-              ? `縮圖整理已取消；已移出的 ${job.cache_moved} 個縮圖仍可還原。`
-              : '圖片資料庫更新已取消；已完成的更新已保留。',
+              ? t('settings.thumbnailCancelled', { count: job.cache_moved })
+              : t('settings.libraryCancelled'),
         });
         onSettingsSaved();
         return;
@@ -383,7 +406,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           type: 'error',
           text:
             job.error_message ||
-            '圖片資料庫更新未完成，請確認來源目錄後重新執行。',
+            t('settings.libraryIncomplete'),
         });
       }
     },
@@ -395,7 +418,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       if (!isOpen) return;
       setMessage({
         type: 'error',
-        text: `無法讀取圖片資料庫工作：${getErrorMessage(error)}`,
+        text: t('settings.errorLibraryJob', { error: getErrorMessage(error) }),
       });
     },
     [isOpen],
@@ -438,59 +461,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     initialFocusRef: sourceCloseCancelRef,
   });
 
-  const sectionKeys = Object.keys(pixivSections);
-  const sectionTabKey = sectionKeys.join('\u0000');
-  const isSearching = sectionFilter.trim().length > 0;
   const rootDirectory =
     webConfig.librarySourceMode === 'folder'
       ? webConfig.mediaRootPath || '.'
       : pixivSections.Settings?.rootdirectory ||
         pixivSections.Settings?.rootDirectory ||
         '.';
-  useEffect(() => {
-    const tabsContainer = sectionTabsRef.current;
-    if (!tabsContainer) {
-      setCanScrollSectionTabsLeft(false);
-      setCanScrollSectionTabsRight(false);
-      return undefined;
-    }
-
-    const updateSectionTabScrollState = () => {
-      const containerRect = tabsContainer.getBoundingClientRect();
-      const tabs = Array.from(
-        tabsContainer.querySelectorAll<HTMLButtonElement>('[role="tab"]'),
-      );
-      setCanScrollSectionTabsLeft(
-        tabs.some(
-          (tab) => tab.getBoundingClientRect().left < containerRect.left - 1,
-        ),
-      );
-      setCanScrollSectionTabsRight(
-        tabs.some(
-          (tab) => tab.getBoundingClientRect().right > containerRect.right + 1,
-        ),
-      );
-    };
-
-    updateSectionTabScrollState();
-    tabsContainer.addEventListener('scroll', updateSectionTabScrollState, {
-      passive: true,
-    });
-    window.addEventListener('resize', updateSectionTabScrollState);
-
-    const resizeObserver =
-      typeof ResizeObserver === 'undefined'
-        ? null
-        : new ResizeObserver(updateSectionTabScrollState);
-    resizeObserver?.observe(tabsContainer);
-
-    return () => {
-      tabsContainer.removeEventListener('scroll', updateSectionTabScrollState);
-      window.removeEventListener('resize', updateSectionTabScrollState);
-      resizeObserver?.disconnect();
-    };
-  }, [mainTab, sectionTabKey]);
-
   useEffect(() => {
     const availableIds = new Set(artists.map((artist) => getArtistScopeKey(artist)));
     setSelectedArtistIds((current) =>
@@ -530,7 +506,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         setRecoveryDetails(null);
         setMessage({
           type: 'error',
-          text: `無法讀取縮圖內容：${getErrorMessage(error)}`,
+          text: t('settings.errorThumbnailEntries', { error: getErrorMessage(error) }),
         });
       } finally {
         if (recoveryDetailsRequestIdRef.current === requestId) {
@@ -561,33 +537,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   const formatBytes = (bytes: number) => {
     if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
-    if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+    if (bytes < 1024 * 1024) return `${formatNumber(Math.round(bytes / 1024))} KB`;
     if (bytes < 1024 * 1024 * 1024)
-      return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-    return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
-  };
-
-  const formatDateTime = (value: string | null) => {
-    if (!value) return '未知時間';
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) return value;
-    return new Intl.DateTimeFormat('zh-TW', {
-      dateStyle: 'medium',
-      timeStyle: 'short',
-    }).format(date);
-  };
-
-  const getRecoveryReasonLabel = (reason: string) =>
-    ({
-      'missing-source': '來源圖片已不存在',
-      'stale-source': '來源圖片已變更',
-      'old-size': '縮圖尺寸已變更',
-      lru: '長時間未使用',
-    })[reason] || '快取整理';
-
-  const getPathFileName = (path: string | null) => {
-    if (!path) return '未找到來源資料';
-    return path.split(/[\\/]/).pop() || path;
+      return `${formatNumber(bytes / (1024 * 1024), { minimumFractionDigits: 1, maximumFractionDigits: 1 })} MB`;
+    return `${formatNumber(bytes / (1024 * 1024 * 1024), { minimumFractionDigits: 2, maximumFractionDigits: 2 })} GB`;
   };
 
   const loadHiddenArtists = () => {
@@ -610,7 +563,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
           setMessage({
             type: 'error',
-            text: `無法讀取已隱藏繪師：${getErrorMessage(lastError)}`,
+            text: t('settings.errorHiddenArtists', { error: getErrorMessage(lastError) }),
           });
           return;
         }
@@ -618,7 +571,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
       setMessage({
         type: 'error',
-        text: `無法讀取已隱藏繪師：${getErrorMessage(lastError)}`,
+        text: t('settings.errorHiddenArtists', { error: getErrorMessage(lastError) }),
       });
     })();
 
@@ -639,12 +592,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       onArtistVisibilityChanged?.();
       setMessage({
         type: 'success',
-        text: `已恢復顯示「${artist.display_name || artist.name || artist.folder_name || artist.member_id}」。`,
+        text: t('settings.artistUnhidden', { name: artist.display_name || artist.name || artist.folder_name || artist.member_id }),
       });
     } catch (error) {
       setMessage({
         type: 'error',
-        text: `無法恢復繪師：${getErrorMessage(error)}`,
+        text: t('settings.errorUnhideArtist', { error: getErrorMessage(error) }),
       });
     }
   };
@@ -749,13 +702,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setMessage(null);
     try {
       const savedConfig = await saveWebConfigDraft();
-      setMessage({ type: 'success', text: 'Web Viewer 設定已儲存。' });
+      setMessage({
+        type: 'success',
+        text: '',
+        translationKey: 'settings.webConfigSaved',
+      });
       onSettingsSaved(savedConfig);
       return true;
     } catch (error) {
       setMessage({
         type: 'error',
-        text: `無法儲存 Web Viewer 設定：${getErrorMessage(error)}`,
+        text: t('settings.errorWebConfigSave', { error: getErrorMessage(error) }),
       });
       return false;
     } finally {
@@ -778,13 +735,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       setMainTab('pixiv');
       setMessage({
         type: 'success',
-        text: 'PixivUtil2 設定檔路徑已儲存，內容已重新載入。',
+        text: t('settings.pixivPathSaved'),
       });
       onSettingsSaved();
     } catch (error) {
       setMessage({
         type: 'error',
-        text: `無法儲存設定檔路徑：${getErrorMessage(error)}`,
+        text: t('settings.errorPixivPathSave', { error: getErrorMessage(error) }),
       });
       setLoading(false);
     }
@@ -814,13 +771,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       setShowSaveConfirm(false);
       setMessage({
         type: 'success',
-        text: 'PixivUtil2 config.ini 已儲存，並已自動建立 .bak 備份。',
+        text: t('settings.pixivConfigSaved'),
       });
       onSettingsSaved();
     } catch (error) {
       setMessage({
         type: 'error',
-        text: `無法儲存 PixivUtil2 設定：${getErrorMessage(error)}`,
+        text: t('settings.errorPixivConfigSave', { error: getErrorMessage(error) }),
       });
     } finally {
       setLoading(false);
@@ -838,11 +795,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         configPath: data.configPath || current.configPath,
         backupPath: data.backupPath || current.backupPath,
       }));
-      setMessage({ type: 'success', text: data.message || '已建立手動備份。' });
+      setMessage({ type: 'success', text: data.message || t('settings.backupCreated') });
     } catch (error) {
       setMessage({
         type: 'error',
-        text: `無法建立手動備份：${getErrorMessage(error)}`,
+        text: t('settings.errorBackupCreate', { error: getErrorMessage(error) }),
       });
     } finally {
       setLoading(false);
@@ -857,13 +814,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       await loadConfigs();
       setMessage({
         type: 'success',
-        text: '已從 .bak 備份還原 PixivUtil2 設定。',
+        text: t('settings.backupRestored'),
       });
       onSettingsSaved();
     } catch (error) {
       setMessage({
         type: 'error',
-        text: `無法還原備份：${getErrorMessage(error)}`,
+        text: t('settings.errorBackupRestore', { error: getErrorMessage(error) }),
       });
     } finally {
       setLoading(false);
@@ -879,15 +836,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         type: 'update-library',
         analyze_colors: webConfig.analyzeColorsAfterLibraryUpdate,
       });
-      if (!data.job) throw new Error('工作未成功建立。');
+      if (!data.job) throw new Error(t('settings.jobNotCreated'));
       startLibraryJob(data.job);
-      setMessage({ type: 'success', text: '圖片資料庫更新已開始。' });
+      setMessage({ type: 'success', text: t('settings.libraryUpdateStarted') });
       clearLibrarySourceNeedsUpdate();
       return true;
     } catch (error) {
       setMessage({
         type: 'error',
-        text: `更新圖片資料庫失敗：${getErrorMessage(error)}`,
+        text: t('settings.errorLibraryUpdate', { error: getErrorMessage(error) }),
       });
       setJobBusy(false);
       return false;
@@ -898,7 +855,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     if (librarySourceHasUnsavedChanges) {
       setMessage({
         type: 'error',
-        text: '媒體來源尚未儲存。請先儲存設定，再更新圖片資料庫。',
+        text: t('settings.unsavedSource'),
       });
       return;
     }
@@ -927,16 +884,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         analyze_colors: webConfig.analyzeColorsAfterLibraryUpdate,
         priority: 20,
       });
-      if (!data.job) throw new Error('無法建立繪師更新工作。');
+      if (!data.job) throw new Error(t('settings.artistJobNotCreated'));
       startLibraryJob(data.job);
       setMessage({
         type: 'success',
-        text: `已排程 ${selectedArtistIds.length} 位繪師的背景更新。`,
+        text: t('settings.artistsUpdateScheduled', { count: selectedArtistIds.length }),
       });
     } catch (error) {
       setMessage({
         type: 'error',
-        text: `無法排程繪師更新：${getErrorMessage(error)}`,
+        text: t('settings.errorArtistsUpdate', { error: getErrorMessage(error) }),
       });
     } finally {
       setJobBusy(false);
@@ -952,13 +909,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         type: 'analyze-missing-colors',
         directory: rootDirectory,
       });
-      if (!data.job) throw new Error('工作未成功建立。');
+      if (!data.job) throw new Error(t('settings.jobNotCreated'));
       startLibraryJob(data.job);
-      setMessage({ type: 'success', text: '圖片色彩分析已開始。' });
+      setMessage({ type: 'success', text: t('settings.colorsAnalysisStarted') });
     } catch (error) {
       setMessage({
         type: 'error',
-        text: `開始圖片色彩分析失敗：${getErrorMessage(error)}`,
+        text: t('settings.errorColorsAnalysis', { error: getErrorMessage(error) }),
       });
       setJobBusy(false);
     }
@@ -973,13 +930,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         type: 'organize-thumbnail-cache',
         directory: rootDirectory,
       });
-      if (!data.job) throw new Error('工作未成功建立。');
+      if (!data.job) throw new Error(t('settings.jobNotCreated'));
       startLibraryJob(data.job);
-      setMessage({ type: 'success', text: '縮圖整理已開始。' });
+      setMessage({ type: 'success', text: t('settings.thumbnailOrganizationStarted') });
     } catch (error) {
       setMessage({
         type: 'error',
-        text: `開始縮圖整理失敗：${getErrorMessage(error)}`,
+        text: t('settings.errorThumbnailOrganization', { error: getErrorMessage(error) }),
       });
       setJobBusy(false);
     }
@@ -993,17 +950,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       const data = await apiClient.library.thumbnailCache.restore(jobId);
       const conflictText =
         data.conflicts > 0
-          ? `，${data.conflicts} 個檔案因同名新快取而略過`
+          ? t('settings.thumbnailConflictSuffix', { count: data.conflicts })
           : '';
       setMessage({
         type: 'success',
-        text: `已還原 ${data.restored} 個縮圖${conflictText}。`,
+        text: t('settings.thumbnailRestored', { count: data.restored, conflicts: conflictText }),
       });
       await loadThumbnailCacheStats();
     } catch (error) {
       setMessage({
         type: 'error',
-        text: `無法還原縮圖：${getErrorMessage(error)}`,
+        text: t('settings.errorThumbnailRestore', { error: getErrorMessage(error) }),
       });
     } finally {
       setThumbnailCacheLoading(false);
@@ -1026,18 +983,25 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       if (data.errors.length > 0) {
         setMessage({
           type: 'error',
-          text: `已將 ${data.moved} 個縮圖送到資源回收筒、釋放 ${formatBytes(data.bytes_freed)}；仍有 ${data.remaining} 個檔案未完成。`,
+          text: t('settings.thumbnailRecycledPartial', {
+            moved: data.moved,
+            bytes: formatBytes(data.bytes_freed),
+            remaining: data.remaining,
+          }),
         });
       } else {
         setMessage({
           type: 'success',
-          text: `已將 ${data.moved} 個縮圖送到資源回收筒，釋放 ${formatBytes(data.bytes_freed)}。原始圖片不受影響。`,
+          text: t('settings.thumbnailRecycled', {
+            moved: data.moved,
+            bytes: formatBytes(data.bytes_freed),
+          }),
         });
       }
     } catch (error) {
       setMessage({
         type: 'error',
-        text: `無法將縮圖送到資源回收筒：${getErrorMessage(error)}`,
+        text: t('settings.errorThumbnailRecycle', { error: getErrorMessage(error) }),
       });
     } finally {
       setRecycleCacheLoading(false);
@@ -1048,11 +1012,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     if (!libraryJob || !isLibraryJobActive(libraryJob)) return;
     try {
       await cancelLibraryJob(libraryJob.job_id);
-      setMessage({ type: 'success', text: '已要求停止圖片資料庫更新。' });
+      setMessage({ type: 'success', text: t('settings.libraryStopRequested') });
     } catch (error) {
       setMessage({
         type: 'error',
-        text: `無法停止圖片資料庫更新：${getErrorMessage(error)}`,
+        text: t('settings.errorLibraryStop', { error: getErrorMessage(error) }),
       });
     }
   };
@@ -1067,48 +1031,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }));
   };
 
-  const filteredSectionGroups = useMemo(() => {
-    if (!isSearching) {
-      if (!activeSection || !pixivSections[activeSection]) return [];
-      return [
-        {
-          section: activeSection,
-          entries: Object.entries(pixivSections[activeSection]),
-        },
-      ];
-    }
-
-    const query = sectionFilter.trim().toLocaleLowerCase();
-    return Object.entries(pixivSections)
-      .map(([sectionName, options]) => {
-        const sectionMetadata = getSectionMetadata(sectionName);
-        const sectionMatches = [
-          sectionName,
-          sectionMetadata?.eng_category,
-          sectionMetadata?.zh_category,
-          sectionMetadata?.description,
-        ].some((value) => value?.toLocaleLowerCase().includes(query));
-
-        const entries = Object.entries(options).filter(([option, value]) => {
-          if (sectionMatches) return true;
-          const fieldMetadata = getFieldMetadata(sectionName, option);
-          return [
-            option,
-            value,
-            fieldMetadata.label,
-            fieldMetadata.description,
-          ].some((candidate) => candidate.toLocaleLowerCase().includes(query));
-        });
-
-        return { section: sectionName, entries };
-      })
-      .filter((group) => group.entries.length > 0);
-  }, [activeSection, isSearching, pixivSections, sectionFilter]);
-
-  const matchedFieldCount = filteredSectionGroups.reduce(
-    (total, group) => total + group.entries.length,
-    0,
-  );
   const libraryJobIsActive = isLibraryJobActive(libraryJob);
   const libraryJobIsBusy = scanning || libraryJobIsActive;
   const libraryProgress =
@@ -1118,295 +1040,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           Math.round((libraryJob.processed / libraryJob.total) * 100),
         )
       : null;
-
-  const renderFieldControl = (
-    sectionName: string,
-    optionName: string,
-    value: string,
-    metadata: PixivConfigFieldMetadata,
-    fieldId: string,
-  ) => {
-    const descriptionId = `${fieldId}-description`;
-    const update = (nextValue: string) =>
-      updatePixivValue(sectionName, optionName, nextValue);
-
-    if (metadata.path) {
-      return (
-        <div className="space-y-1.5">
-          <PathPickerField
-            id={fieldId}
-            label={metadata.label}
-            value={value}
-            metadata={metadata.path}
-            descriptionId={descriptionId}
-            onChange={update}
-          />
-          {metadata.path.purpose === 'root-directory' && (
-            <Button
-              type="button"
-              onClick={() => setMainTab('library')}
-              variant="plain"
-              size="sm"
-              className="settings-modal__text-link text-xs font-semibold focus-visible:outline-2 focus-visible:outline-offset-2"
-            >
-              前往媒體資料庫
-            </Button>
-          )}
-        </div>
-      );
-    }
-
-    if (metadata.kind === 'boolean') {
-      return (
-        <label
-          htmlFor={fieldId}
-          className="settings-modal__check-row flex min-h-11 cursor-pointer items-center gap-3 rounded-lg px-3 py-2 text-sm"
-        >
-          <SettingsSwitch
-            id={fieldId}
-            checked={value.toLowerCase() === 'true'}
-            onChange={(event) =>
-              update(event.target.checked ? 'True' : 'False')
-            }
-            aria-labelledby={`${fieldId}-label`}
-            aria-describedby={descriptionId}
-          />
-          <span>
-            {value.toLowerCase() === 'true'
-              ? '已啟用（True）'
-              : '未啟用（False）'}
-          </span>
-        </label>
-      );
-    }
-
-    if (metadata.kind === 'textarea') {
-      return (
-        <Textarea
-          controlSize="md"
-          id={fieldId}
-          value={value}
-          onChange={(event) => update(event.target.value)}
-          rows={2}
-          aria-describedby={descriptionId}
-          spellCheck={false}
-          className="min-h-20 font-mono leading-5"
-        />
-      );
-    }
-
-    return (
-      <Input
-        controlSize="md"
-        id={fieldId}
-        type={
-          metadata.kind === 'number'
-            ? 'number'
-            : metadata.secret
-              ? 'password'
-              : 'text'
-        }
-        value={value}
-        onChange={(event) => update(event.target.value)}
-        aria-describedby={descriptionId}
-        autoComplete="off"
-        spellCheck={false}
-        className={
-          metadata.kind === 'number' || metadata.secret
-            ? 'font-mono'
-            : undefined
-        }
-      />
-    );
-  };
-
-  const renderSectionGroup = (
-    sectionName: string,
-    entries: [string, string][],
-  ) => {
-    const sectionMetadata = getSectionMetadata(sectionName);
-    const headingId = `pixiv-section-${sectionName.replace(/[^a-zA-Z0-9_-]/g, '-')}`;
-
-    return (
-      <section
-        key={sectionName}
-        aria-labelledby={headingId}
-        className="settings-modal__config-section space-y-3"
-      >
-        <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-          <h4
-            id={headingId}
-            className="settings-modal__heading text-sm font-bold"
-          >
-            <span className="settings-modal__section-label">
-              <span className="settings-modal__section-label-en">
-                [{sectionMetadata?.eng_category || sectionName}]
-              </span>
-              <span className="settings-modal__section-label-zh">
-                {sectionMetadata?.zh_category || '自訂分類'}
-              </span>
-            </span>
-          </h4>
-          <span className="settings-modal__text-subtle font-mono text-[11px]">
-            {entries.length} 個欄位
-          </span>
-        </div>
-        <p className="settings-modal__description text-xs leading-5">
-          {sectionMetadata?.description || '這是 PixivUtil2 的自訂設定分類。'}
-        </p>
-        <div className="space-y-2">
-          {entries.map(([optionName, value]) => {
-            const metadata = getFieldMetadata(sectionName, optionName);
-            const fieldId = `pixiv-field-${sectionName}-${optionName}`.replace(
-              /[^a-zA-Z0-9_-]/g,
-              '-',
-            );
-            const descriptionId = `${fieldId}-description`;
-
-            return (
-              <div
-                key={`${sectionName}-${optionName}`}
-                className="settings-modal__field-card p-3"
-              >
-                <div className="grid gap-3 md:grid-cols-[minmax(180px,0.9fr)_minmax(0,1.5fr)] md:items-start">
-                  <div className="min-w-0">
-                    {metadata.kind === 'boolean' ? (
-                      <div
-                        id={`${fieldId}-label`}
-                        className="settings-modal__label block text-sm font-semibold"
-                      >
-                        {metadata.label}
-                      </div>
-                    ) : (
-                      <label
-                        htmlFor={fieldId}
-                        className="settings-modal__label block text-sm font-semibold"
-                      >
-                        {metadata.label}
-                      </label>
-                    )}
-                    <code className="settings-modal__code mt-1 block break-all text-[11px]">
-                      {optionName}
-                    </code>
-                    <p
-                      id={descriptionId}
-                      className="settings-modal__description mt-2 text-xs leading-5"
-                    >
-                      {metadata.description}
-                    </p>
-                  </div>
-                  <div className="min-w-0">
-                    {renderFieldControl(
-                      sectionName,
-                      optionName,
-                      value,
-                      metadata,
-                      fieldId,
-                    )}
-                  </div>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </section>
-    );
-  };
-
-  const handleSectionKeyDown = (
-    event: React.KeyboardEvent<HTMLButtonElement>,
-    index: number,
-  ) => {
-    if (
-      event.key !== 'ArrowLeft' &&
-      event.key !== 'ArrowRight' &&
-      event.key !== 'Home' &&
-      event.key !== 'End'
-    ) {
-      return;
-    }
-
-    event.preventDefault();
-    if (sectionKeys.length === 0) return;
-
-    const nextIndex =
-      event.key === 'Home'
-        ? 0
-        : event.key === 'End'
-          ? sectionKeys.length - 1
-          : (index +
-              (event.key === 'ArrowRight' ? 1 : -1) +
-              sectionKeys.length) %
-            sectionKeys.length;
-    const nextSection = sectionKeys[nextIndex];
-    setSectionFilter('');
-    setActiveSection(nextSection);
-    window.setTimeout(() => {
-      document
-        .querySelector<HTMLButtonElement>(
-          `[data-pixiv-section-tab="${CSS.escape(nextSection)}"]`,
-        )
-        ?.focus();
-    }, 0);
-  };
-
-  const scrollSectionTabs = (direction: 'left' | 'right') => {
-    const tabsContainer = sectionTabsRef.current;
-    if (!tabsContainer) return;
-
-    const containerRect = tabsContainer.getBoundingClientRect();
-    const tabs = Array.from(
-      tabsContainer.querySelectorAll<HTMLButtonElement>('[role="tab"]'),
-    );
-    const clippedTabs =
-      direction === 'left'
-        ? tabs.filter(
-            (tab) => tab.getBoundingClientRect().left < containerRect.left - 1,
-          )
-        : tabs.filter(
-            (tab) =>
-              tab.getBoundingClientRect().right > containerRect.right + 1,
-          );
-    const targetTab =
-      direction === 'left'
-        ? clippedTabs[clippedTabs.length - 1]
-        : clippedTabs[0];
-
-    targetTab?.scrollIntoView({
-      behavior: getMotionAwareScrollBehavior(),
-      block: 'nearest',
-      inline: 'nearest',
-    });
-  };
-
-  const handleSectionTabsWheel = (event: React.WheelEvent<HTMLDivElement>) => {
-    const tabsContainer = event.currentTarget;
-    if (tabsContainer.scrollWidth <= tabsContainer.clientWidth) return;
-
-    // Keep the wheel gesture inside this horizontal strip. A regular vertical
-    // mouse wheel is mapped to horizontal scrolling; native horizontal
-    // trackpad and shift-wheel deltas are preserved as horizontal movement.
-    const deltaMagnitude =
-      event.deltaMode === 1
-        ? 16
-        : event.deltaMode === 2
-          ? tabsContainer.clientWidth
-          : 1;
-    const wheelDelta =
-      (Math.abs(event.deltaX) >= Math.abs(event.deltaY)
-        ? event.deltaX
-        : event.deltaY) * deltaMagnitude;
-    if (wheelDelta === 0) return;
-
-    const isRtl = getComputedStyle(tabsContainer).direction === 'rtl';
-    const scrollDelta = isRtl ? -wheelDelta : wheelDelta;
-    const canScrollInDirection =
-      scrollDelta < 0 ? canScrollSectionTabsLeft : canScrollSectionTabsRight;
-
-    event.preventDefault();
-    if (!canScrollInDirection) return;
-    tabsContainer.scrollBy({ left: scrollDelta, behavior: 'auto' });
-  };
 
   const handleMainTabKeyDown = (
     event: React.KeyboardEvent<HTMLButtonElement>,
@@ -1487,7 +1120,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               id="settings-modal-title"
               className="settings-modal__title truncate text-lg font-bold"
             >
-              PixivUtil2 與 Web Viewer 設定
+              {t('settings.webViewerTitle')}
             </h2>
           </div>
           <IconButton
@@ -1495,7 +1128,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             type="button"
             onClick={requestClose}
             variant="ghost"
-            aria-label="關閉設定"
+            aria-label={t('settings.closeButton')}
             className="settings-modal__close"
           >
             <X className="mx-auto h-5 w-5" aria-hidden="true" />
@@ -1520,21 +1153,25 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 aria-hidden="true"
               />
             )}
-            <span className="break-words">{message.text}</span>
+            <span className="break-words">
+              {message.translationKey
+                ? t(message.translationKey, message.translationValues)
+                : message.text}
+            </span>
           </div>
         )}
 
         <div
           role="tablist"
-          aria-label="設定分類"
+          aria-label={t('settings.tabs')}
           className="settings-modal__tabs shrink-0"
         >
           {(
             [
-              ['web', '顯示與瀏覽', Sliders],
-              ['library', '媒體資料庫', Database],
-              ['pixiv', 'PixivUtil2 config.ini', Settings],
-              ['backup', '備份與維護', Shield],
+              ['web', t('settings.displayAndBrowsing'), Sliders],
+              ['library', t('settings.library'), Database],
+              ['pixiv', t('settings.configFile'), Settings],
+              ['backup', t('settings.backup'), Shield],
             ] as const
           ).map(([tab, label, Icon], index) => (
             <button
@@ -1563,1659 +1200,76 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               onUnhideArtist={handleUnhideArtist}
               onOpenRecycleBin={onOpenRecycleBin}
             >
-              <section
-                className="settings-modal__display-section space-y-4"
-                aria-labelledby="settings-general-display-title"
+              <SettingsWebPreferencesPanel
+                webConfig={webConfig}
+                setWebConfig={setWebConfig}
+                uiLanguageOptions={uiLanguageOptions}
+                localizedThemeOptions={localizedThemeOptions}
+                localizedPreferredBrowsingModeOptions={localizedPreferredBrowsingModeOptions}
+                localizedVideoSeekOptions={localizedVideoSeekOptions}
+                localizedVideoHoldSpeedOptions={localizedVideoHoldSpeedOptions}
               >
-                <div>
-                  <h4
-                    id="settings-general-display-title"
-                    className="settings-modal__heading text-sm font-bold"
-                  >
-                    一般瀏覽
-                  </h4>
-                  <p className="settings-modal__description mt-1 text-xs leading-5">
-                    調整主題、列表密度、作品群組與預覽行為。
-                  </p>
-                </div>
-
-                <div className="grid gap-4 md:grid-cols-2">
-                  <div>
-                    <label
-                      htmlFor="web-theme"
-                      className="settings-modal__label mb-1.5 block text-sm font-semibold"
-                    >
-                      主題
-                    </label>
-                    <CustomSelect
-                      id="web-theme"
-                      value={webConfig.webTheme}
-                      options={themeOptions}
-                      onChange={(webTheme) =>
-                        setWebConfig((current) => ({ ...current, webTheme }))
-                      }
-                      ariaLabel="主題"
-                      className="w-full"
-                      style={
-                        {
-                          '--ui-field-icon': 'var(--settings-text-muted)',
-                          '--ui-field-icon-focus': 'var(--settings-accent)',
-                        } as React.CSSProperties
-                      }
-                    />
-                  </div>
-                  <div>
-                    <label
-                      htmlFor="default-view-mode"
-                      className="settings-modal__label mb-1.5 block text-sm font-semibold"
-                    >
-                      偏好的瀏覽模式
-                    </label>
-                    <CustomSelect
-                      id="default-view-mode"
-                      value={webConfig.defaultViewMode}
-                      options={preferredBrowsingModeOptions}
-                      onChange={(defaultViewMode) =>
-                        setWebConfig((current) => ({
-                          ...current,
-                          defaultViewMode,
-                        }))
-                      }
-                      ariaLabel="偏好的瀏覽模式"
-                      className="w-full"
-                      style={
-                        {
-                          '--ui-field-icon': 'var(--settings-text-muted)',
-                          '--ui-field-icon-focus': 'var(--settings-accent)',
-                        } as React.CSSProperties
-                      }
-                    />
-                    <p className="settings-modal__description mt-1 text-xs leading-5">
-                      點選一般圖片或圖包中的頁面時，使用這個閱讀模式。
-                    </p>
-                  </div>
-                  <div>
-                    <label
-                      htmlFor="thumbnail-size"
-                      className="settings-modal__label mb-1.5 block text-sm font-semibold"
-                    >
-                      縮圖尺寸 (thumbnailSize)
-                    </label>
-                    <Input
-                      controlSize="md"
-                      id="thumbnail-size"
-                      type="number"
-                      min={16}
-                      max={4096}
-                      value={webConfig.thumbnailSize}
-                      onChange={(event) =>
-                        setWebConfig((current) => ({
-                          ...current,
-                          thumbnailSize: Number(event.target.value),
-                        }))
-                      }
-                    />
-                  </div>
-                  <div>
-                    <label
-                      htmlFor="items-per-page"
-                      className="settings-modal__label mb-1.5 block text-sm font-semibold"
-                    >
-                      每頁顯示數量
-                    </label>
-                    <Input
-                      controlSize="md"
-                      id="items-per-page"
-                      type="number"
-                      min={1}
-                      max={5000}
-                      value={webConfig.itemsPerPage}
-                      onChange={(event) =>
-                        setWebConfig((current) => ({
-                          ...current,
-                          itemsPerPage: Number(event.target.value),
-                        }))
-                      }
-                    />
-                  </div>
-                </div>
-
-                <div className="space-y-3">
-                  <label
-                    htmlFor="group-manga-posts"
-                    className="settings-modal__check-row flex min-h-11 cursor-pointer items-center gap-3 rounded-xl px-3 py-2 text-sm"
-                  >
-                    <SettingsSwitch
-                      id="group-manga-posts"
-                      checked={!!webConfig.groupMangaPosts}
-                      onChange={(event) =>
-                        setWebConfig((current) => ({
-                          ...current,
-                          groupMangaPosts: event.target.checked,
-                        }))
-                      }
-                    />
-                    <span>將漫畫作品合併成作品群組</span>
-                  </label>
-                  <label
-                    htmlFor="auto-open-browser"
-                    className="settings-modal__check-row flex min-h-11 cursor-pointer items-center gap-3 rounded-xl px-3 py-2 text-sm"
-                  >
-                    <SettingsSwitch
-                      id="auto-open-browser"
-                      checked={!!webConfig.autoOpenBrowser}
-                      onChange={(event) =>
-                        setWebConfig((current) => ({
-                          ...current,
-                          autoOpenBrowser: event.target.checked,
-                        }))
-                      }
-                    />
-                    <span>啟動時自動開啟瀏覽器</span>
-                  </label>
-                  <label
-                    htmlFor="blur-enabled"
-                    className="settings-modal__check-row flex min-h-11 cursor-pointer items-start gap-3 rounded-xl px-3 py-2 text-sm"
-                  >
-                    <SettingsSwitch
-                      id="blur-enabled"
-                      checked={!!webConfig.blurEnabled}
-                      onChange={(event) =>
-                        setWebConfig((current) => ({
-                          ...current,
-                          blurEnabled: event.target.checked,
-                        }))
-                      }
-                    />
-                    <span className="min-w-0">
-                      <span className="block font-semibold">套用模糊遮罩</span>
-                      <span className="settings-modal__description mt-1 block text-xs leading-5">
-                        在縮圖、條漫與全螢幕預覽套用模糊遮罩。
-                      </span>
-                    </span>
-                  </label>
-                  <label
-                    htmlFor="demo-mode"
-                    className="settings-modal__check-row flex min-h-11 cursor-pointer items-start gap-3 rounded-xl px-3 py-2 text-sm"
-                  >
-                    <SettingsSwitch
-                      id="demo-mode"
-                      checked={!!webConfig.demoMode}
-                      onChange={(event) =>
-                        setWebConfig((current) => ({
-                          ...current,
-                          demoMode: event.target.checked,
-                        }))
-                      }
-                    />
-                    <span className="min-w-0">
-                      <span className="block font-semibold">Demo 模式</span>
-                      <span className="settings-modal__description mt-1 block text-xs leading-5">
-                        以圖片主要色彩顯示色塊，不載入圖片內容，適合展示或錄製畫面。
-                      </span>
-                    </span>
-                  </label>
-                </div>
-              </section>
-
-              <section
-                className="settings-modal__display-section space-y-4"
-                aria-labelledby="settings-video-playback-title"
-              >
-                <div>
-                  <h4
-                    id="settings-video-playback-title"
-                    className="settings-modal__heading text-sm font-bold"
-                  >
-                    影片設定
-                  </h4>
-                  <p className="settings-modal__description mt-1 text-xs leading-5">
-                    全螢幕與條漫共用影片播放設定。音量大於 0
-                    時不會預設靜音；音量為 0 時才會靜音。
-                  </p>
-                </div>
-
-                <div className="grid gap-4 md:grid-cols-2">
-                  <SliderField
-                    controlSize="md"
-                    id="video-volume"
-                    label="媒體音量"
-                    icon={<Volume2 className="h-4 w-4" />}
-                    valueLabel={`${Math.round(webConfig.videoVolume * 100)}%`}
-                    description="條漫與全螢幕共用；靜音時仍會保留這個音量。"
-                    min={0}
-                    max={100}
-                    step={1}
-                    value={Math.round(webConfig.videoVolume * 100)}
-                    onChange={(event) =>
-                      setWebConfig((current) => {
-                        const videoVolume = Number(event.target.value) / 100;
-                        return {
-                          ...current,
-                          videoVolume,
-                          videoMuted: videoVolume === 0,
-                        };
-                      })
-                    }
-                    className="settings-modal__video-volume"
-                  />
-
-                  <label
-                    htmlFor="video-autoplay"
-                    className="settings-modal__check-row flex min-h-11 cursor-pointer items-start gap-3 rounded-xl px-3 py-2 text-sm"
-                  >
-                    <SettingsSwitch
-                      id="video-autoplay"
-                      checked={!!webConfig.videoAutoplay}
-                      onChange={(event) =>
-                        setWebConfig((current) => ({
-                          ...current,
-                          videoAutoplay: event.target.checked,
-                        }))
-                      }
-                    />
-                    <span className="min-w-0">
-                      <span className="flex items-center gap-2 font-semibold">
-                        <Play className="h-4 w-4" aria-hidden="true" />
-                        影片自動播放
-                      </span>
-                      <span className="settings-modal__description mt-1 block text-xs leading-5">
-                        全螢幕切換影片時自動播放；條漫影片進入主要可視區時播放，離開後自動暫停。
-                      </span>
-                    </span>
-                  </label>
-                </div>
-
-                <div className="grid gap-4 md:grid-cols-2">
-                  <div>
-                    <label
-                      htmlFor="video-seek-seconds"
-                      className="settings-modal__label mb-1.5 block text-sm font-semibold"
-                    >
-                      雙擊倒轉／快轉秒數
-                    </label>
-                    <CustomSelect
-                      id="video-seek-seconds"
-                      value={webConfig.fullscreenVideoSeekSeconds}
-                      options={videoSeekOptions}
-                      onChange={(fullscreenVideoSeekSeconds) =>
-                        setWebConfig((current) => ({
-                          ...current,
-                          fullscreenVideoSeekSeconds,
-                        }))
-                      }
-                      ariaLabel="雙擊倒轉／快轉秒數"
-                      className="w-full"
-                    />
-                  </div>
-                  <div>
-                    <label
-                      htmlFor="video-hold-speed"
-                      className="settings-modal__label mb-1.5 block text-sm font-semibold"
-                    >
-                      按住播放倍速
-                    </label>
-                    <CustomSelect
-                      id="video-hold-speed"
-                      value={webConfig.fullscreenVideoHoldPlaybackRate}
-                      options={videoHoldSpeedOptions}
-                      onChange={(fullscreenVideoHoldPlaybackRate) =>
-                        setWebConfig((current) => ({
-                          ...current,
-                          fullscreenVideoHoldPlaybackRate,
-                        }))
-                      }
-                      ariaLabel="按住播放倍速"
-                      className="w-full"
-                    />
-                  </div>
-                </div>
-              </section>
-
-              <section
-                className="settings-modal__display-section space-y-4"
-                aria-labelledby="settings-fullscreen-title"
-              >
-                <div>
-                  <h4
-                    id="settings-fullscreen-title"
-                    className="settings-modal__heading text-sm font-bold"
-                  >
-                    全螢幕模式
-                  </h4>
-                  <p className="settings-modal__description mt-1 text-xs leading-5">
-                    調整全螢幕閱讀時的工具列與預載行為。
-                  </p>
-                </div>
-
-                <div className="max-w-xs">
-                  <label
-                    htmlFor="preload-image-count"
-                    className="settings-modal__label mb-1.5 block text-sm font-semibold"
-                  >
-                    預載圖片張數
-                  </label>
-                  <Input
-                    controlSize="md"
-                    id="preload-image-count"
-                    type="number"
-                    min={0}
-                    max={10}
-                    value={webConfig.preloadImageCount}
-                    onChange={(event) =>
-                      setWebConfig((current) => ({
-                        ...current,
-                        preloadImageCount: Number(event.target.value),
-                      }))
-                    }
-                  />
-                  <p className="settings-modal__description mt-1 text-xs leading-5">
-                    切換圖片時，預先載入鄰近圖片的數量。
-                  </p>
-                </div>
-
-                <div className="space-y-3">
-                  <label
-                    htmlFor="fullscreen-toolbar-simple-mode"
-                    className="settings-modal__check-row flex min-h-11 cursor-pointer items-start gap-3 rounded-xl px-3 py-2 text-sm"
-                  >
-                    <SettingsSwitch
-                      id="fullscreen-toolbar-simple-mode"
-                      checked={!!webConfig.fullscreenToolbarSimpleMode}
-                      onChange={(event) =>
-                        setWebConfig((current) => ({
-                          ...current,
-                          fullscreenToolbarSimpleMode: event.target.checked,
-                        }))
-                      }
-                    />
-                    <span className="min-w-0">
-                      <span className="flex items-center gap-2 font-semibold">
-                        <PanelTop className="h-4 w-4" aria-hidden="true" />
-                        使用簡易工具列
-                      </span>
-                      <span className="settings-modal__description mt-1 block text-xs leading-5">
-                        只顯示常用閱讀控制；可在全螢幕工具列中隨時展開完整功能。
-                      </span>
-                    </span>
-                  </label>
-                  <label
-                    htmlFor="fullscreen-show-toolbar"
-                    className="settings-modal__check-row flex min-h-11 cursor-pointer items-start gap-3 rounded-xl px-3 py-2 text-sm"
-                  >
-                    <SettingsSwitch
-                      id="fullscreen-show-toolbar"
-                      checked={!!webConfig.fullscreenShowToolbar}
-                      onChange={(event) =>
-                        setWebConfig((current) => ({
-                          ...current,
-                          fullscreenShowToolbar: event.target.checked,
-                        }))
-                      }
-                    />
-                    <span className="min-w-0">
-                      <span className="flex items-center gap-2 font-semibold">
-                        <PanelTopOpen className="h-4 w-4" aria-hidden="true" />
-                        顯示工具列
-                      </span>
-                      <span className="settings-modal__description mt-1 block text-xs leading-5">
-                        進入全螢幕時套用這個預設；也可以使用 T 暫時切換工具列。
-                      </span>
-                    </span>
-                  </label>
-                  <label
-                    htmlFor="fullscreen-show-thumbnails"
-                    className="settings-modal__check-row flex min-h-11 cursor-pointer items-start gap-3 rounded-xl px-3 py-2 text-sm"
-                  >
-                    <SettingsSwitch
-                      id="fullscreen-show-thumbnails"
-                      checked={!!webConfig.fullscreenShowThumbnails}
-                      onChange={(event) =>
-                        setWebConfig((current) => ({
-                          ...current,
-                          fullscreenShowThumbnails: event.target.checked,
-                        }))
-                      }
-                    />
-                    <span className="min-w-0">
-                      <span className="flex items-center gap-2 font-semibold">
-                        <GalleryThumbnails
-                          className="h-4 w-4"
-                          aria-hidden="true"
-                        />
-                        顯示圖庫面板
-                      </span>
-                      <span className="settings-modal__description mt-1 block text-xs leading-5">
-                        關閉後進入全螢幕時預設隱藏圖庫面板，仍可使用 G 暫時顯示。
-                      </span>
-                    </span>
-                  </label>
-                </div>
-
-                <div className="space-y-4">
-                  <div>
-                    <h5
-                      id="settings-fullscreen-visual-title"
-                      className="settings-modal__heading text-sm font-bold"
-                    >
-                      閱讀畫面
-                    </h5>
-                    <p className="settings-modal__description mt-1 text-xs leading-5">
-                      記住全螢幕閱讀時的背景與縮放偏好；工具列中的暫時切換不會覆寫這裡的預設值。
-                    </p>
-                  </div>
-
-                  <div className="grid gap-4 md:grid-cols-2">
-                    <div>
-                      <label
-                        htmlFor="fullscreen-zoom-mode"
-                        className="settings-modal__label mb-1.5 block text-sm font-semibold"
-                      >
-                        預設縮放模式
-                      </label>
-                      <CustomSelect
-                        id="fullscreen-zoom-mode"
-                        value={webConfig.fullscreenZoomMode}
-                        options={fullscreenZoomModeOptions}
-                        onChange={(fullscreenZoomMode) =>
-                          setWebConfig((current) => ({
-                            ...current,
-                            fullscreenZoomMode,
-                          }))
-                        }
-                        ariaLabel="預設縮放模式"
-                        className="w-full"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="space-y-3">
-                    <label
-                      htmlFor="fullscreen-show-checkerboard"
-                      className="settings-modal__check-row flex min-h-11 cursor-pointer items-start gap-3 rounded-xl px-3 py-2 text-sm"
-                    >
-                      <SettingsSwitch
-                        id="fullscreen-show-checkerboard"
-                        checked={!!webConfig.fullscreenShowCheckerboard}
-                        onChange={(event) =>
-                          setWebConfig((current) => ({
-                            ...current,
-                            fullscreenShowCheckerboard: event.target.checked,
-                          }))
-                        }
-                      />
-                      <span className="min-w-0">
-                        <span className="flex items-center gap-2 font-semibold">
-                          <Grid2X2 className="h-4 w-4" aria-hidden="true" />
-                          顯示棋盤格背景
-                        </span>
-                        <span className="settings-modal__description mt-1 block text-xs leading-5">
-                          適合檢視 PNG 透明區域；只會套用在全螢幕閱讀背景。
-                        </span>
-                      </span>
-                    </label>
-                  </div>
-                </div>
-              </section>
-
-              <section
-                className="settings-modal__display-section space-y-4"
-                aria-labelledby="settings-webtoon-title"
-              >
-                <div>
-                  <h4
-                    id="settings-webtoon-title"
-                    className="settings-modal__heading text-sm font-bold"
-                  >
-                    條漫模式
-                  </h4>
-                  <p className="settings-modal__description mt-1 text-xs leading-5">
-                    調整條漫閱讀的圖片尺寸、資訊與直式縮圖導覽。
-                  </p>
-                </div>
-
-                <div className="grid gap-4 md:grid-cols-2">
-                  <div>
-                    <label
-                      htmlFor="webtoon-image-scale"
-                      className="settings-modal__label mb-1.5 block text-sm font-semibold"
-                    >
-                      圖片寬度比例（%）
-                    </label>
-                    <Input
-                      controlSize="md"
-                      id="webtoon-image-scale"
-                      type="number"
-                      min={30}
-                      max={100}
-                      step={5}
-                      value={webConfig.webtoonImageScale}
-                      onChange={(event) =>
-                        setWebConfig((current) => ({
-                          ...current,
-                          webtoonImageScale: Number(event.target.value),
-                        }))
-                      }
-                    />
-                  </div>
-                  <div>
-                    <label
-                      htmlFor="webtoon-image-gap"
-                      className="settings-modal__label mb-1.5 block text-sm font-semibold"
-                    >
-                      圖片間距（px）
-                    </label>
-                    <Input
-                      controlSize="md"
-                      id="webtoon-image-gap"
-                      type="number"
-                      min={0}
-                      max={300}
-                      step={4}
-                      value={webConfig.webtoonImageGap}
-                      onChange={(event) =>
-                        setWebConfig((current) => ({
-                          ...current,
-                          webtoonImageGap: Number(event.target.value),
-                        }))
-                      }
-                    />
-                  </div>
-                </div>
-
-                <div className="space-y-3">
-                  <label
-                    htmlFor="webtoon-show-info"
-                    className="settings-modal__check-row flex min-h-11 cursor-pointer items-start gap-3 rounded-xl px-3 py-2 text-sm"
-                  >
-                    <SettingsSwitch
-                      id="webtoon-show-info"
-                      checked={!!webConfig.webtoonShowInfo}
-                      onChange={(event) =>
-                        setWebConfig((current) => ({
-                          ...current,
-                          webtoonShowInfo: event.target.checked,
-                        }))
-                      }
-                    />
-                    <span className="min-w-0">
-                      <span className="block font-semibold">
-                        顯示圖片資訊欄
-                      </span>
-                      <span className="settings-modal__description mt-1 block text-xs leading-5">
-                        關閉後只保留圖片內容。
-                      </span>
-                    </span>
-                  </label>
-                  <label
-                    htmlFor="webtoon-show-page-number"
-                    className="settings-modal__check-row flex min-h-11 cursor-pointer items-start gap-3 rounded-xl px-3 py-2 text-sm"
-                  >
-                    <SettingsSwitch
-                      id="webtoon-show-page-number"
-                      checked={!!webConfig.webtoonShowPageNumber}
-                      onChange={(event) =>
-                        setWebConfig((current) => ({
-                          ...current,
-                          webtoonShowPageNumber: event.target.checked,
-                        }))
-                      }
-                    />
-                    <span className="min-w-0">
-                      <span className="block font-semibold">顯示頁碼</span>
-                      <span className="settings-modal__description mt-1 block text-xs leading-5">
-                        在圖片上保留目前圖片的全域頁碼。
-                      </span>
-                    </span>
-                  </label>
-                  <label
-                    htmlFor="webtoon-show-thumbnails"
-                    className="settings-modal__check-row flex min-h-11 cursor-pointer items-start gap-3 rounded-xl px-3 py-2 text-sm"
-                  >
-                    <SettingsSwitch
-                      id="webtoon-show-thumbnails"
-                      checked={!!webConfig.webtoonShowThumbnails}
-                      onChange={(event) =>
-                        setWebConfig((current) => ({
-                          ...current,
-                          webtoonShowThumbnails: event.target.checked,
-                        }))
-                      }
-                    />
-                    <span className="min-w-0">
-                      <span className="block font-semibold">
-                        顯示直式縮圖導覽
-                      </span>
-                      <span className="settings-modal__description mt-1 block text-xs leading-5">
-                        桌面版以固定欄位快速跳到其他圖片。
-                      </span>
-                    </span>
-                  </label>
-                </div>
-              </section>
+                <SettingsFullscreenPanel
+                  webConfig={webConfig}
+                  setWebConfig={setWebConfig}
+                  fullscreenPageLayoutOptions={fullscreenPageLayoutOptions}
+                  fullscreenReadingDirectionOptions={fullscreenReadingDirectionOptions}
+                  fullscreenSpreadPairingOptions={fullscreenSpreadPairingOptions}
+                  localizedFullscreenZoomModeOptions={localizedFullscreenZoomModeOptions}
+                />
+              </SettingsWebPreferencesPanel>
             </SettingsWebTab>
           )}
 
           {mainTab === 'library' && (
             <SettingsLibraryTab>
-              <section
-                aria-labelledby="media-library-images-title"
-                className="settings-modal__library-section space-y-4"
-              >
-                <div>
-                  <h4
-                    id="media-library-images-title"
-                    className="settings-modal__heading text-sm font-bold"
-                  >
-                    圖片資料庫
-                  </h4>
-                  <p className="settings-modal__description mt-1 text-xs leading-5">
-                    尋找新增或變更的圖片，更新 Web Viewer
-                    使用的圖片清單。不會修改或刪除原始圖片。
-                  </p>
-                </div>
-
-                <fieldset className="settings-modal__source-settings space-y-4">
-                  <legend className="settings-modal__label text-sm font-semibold">
-                    媒體來源
-                  </legend>
-                  <div className="settings-modal__source-mode grid gap-2 sm:grid-cols-2">
-                    <label className="settings-modal__check-row flex min-h-11 cursor-pointer items-center gap-3 rounded-xl px-3 py-2 text-sm">
-                      <input
-                        type="radio"
-                        name="library-source-mode"
-                        value="pixiv"
-                        checked={webConfig.librarySourceMode === 'pixiv'}
-                        onChange={() =>
-                          setWebConfig((current) => ({
-                            ...current,
-                            librarySourceMode: 'pixiv',
-                          }))
-                        }
-                        disabled={libraryJobIsBusy}
-                        className="settings-modal__checkbox h-4 w-4 shrink-0"
-                      />
-                      <span>
-                        <span className="block font-semibold">PixivUtil2</span>
-                        <span className="settings-modal__description block text-xs">
-                          從 config.ini 讀取圖片根目錄與 Pixiv metadata。
-                        </span>
-                      </span>
-                    </label>
-                    <label className="settings-modal__check-row flex min-h-11 cursor-pointer items-center gap-3 rounded-xl px-3 py-2 text-sm">
-                      <input
-                        type="radio"
-                        name="library-source-mode"
-                        value="folder"
-                        checked={webConfig.librarySourceMode === 'folder'}
-                        onChange={() =>
-                          setWebConfig((current) => ({
-                            ...current,
-                            librarySourceMode: 'folder',
-                          }))
-                        }
-                        disabled={libraryJobIsBusy}
-                        className="settings-modal__checkbox h-4 w-4 shrink-0"
-                      />
-                      <span>
-                        <span className="block font-semibold">
-                          僅使用資料夾
-                        </span>
-                        <span className="settings-modal__description block text-xs">
-                          直接建立 Viewer 索引，不需要 PixivUtil2 或 db.sqlite。
-                        </span>
-                      </span>
-                    </label>
-                  </div>
-                  {webConfig.librarySourceMode === 'folder' ? (
-                    <div>
-                      <label
-                        htmlFor="library-folder-path"
-                        className="settings-modal__label mb-1.5 block text-sm font-semibold"
-                      >
-                        圖片資料夾
-                      </label>
-                      <PathPickerField
-                        id="library-folder-path"
-                        value={webConfig.mediaRootPath}
-                        label="圖片資料夾"
-                        placeholder="選擇圖片資料夾"
-                        metadata={{
-                          mode: 'folder',
-                          purpose: 'root-directory',
-                          access: 'read',
-                        }}
-                        onChange={(mediaRootPath) =>
-                          setWebConfig((current) => ({
-                            ...current,
-                            mediaRootPath,
-                          }))
-                        }
-                      />
-                    </div>
-                  ) : (
-                    <div>
-                      <label
-                        htmlFor="library-pixiv-config-path"
-                        className="settings-modal__label mb-1.5 block text-sm font-semibold"
-                      >
-                        PixivUtil2 config.ini
-                      </label>
-                      <PathPickerField
-                        id="library-pixiv-config-path"
-                        value={webConfig.pixivConfigPath}
-                        label="PixivUtil2 config.ini"
-                        placeholder="選擇 config.ini"
-                        metadata={{
-                          mode: 'existing-file',
-                          purpose: 'pixiv-config',
-                          extensions: ['.ini'],
-                          access: 'read',
-                        }}
-                        onChange={(pixivConfigPath) =>
-                          setWebConfig((current) => ({
-                            ...current,
-                            pixivConfigPath,
-                          }))
-                        }
-                      />
-                    </div>
-                  )}
-                </fieldset>
-
-                <div className="settings-modal__library-source flex min-w-0 flex-col gap-1 rounded-xl p-4 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
-                  <div className="min-w-0">
-                    <span className="settings-modal__text-subtle block text-xs font-semibold">
-                      圖片資料夾
-                    </span>
-                    <code className="settings-modal__library-path mt-1 block break-all font-mono text-xs">
-                      {rootDirectory}
-                    </code>
-                  </div>
-                  <span className="settings-modal__library-source-label shrink-0 text-xs">
-                    唯讀來源
-                  </span>
-                </div>
-                <p className="settings-modal__description text-xs leading-5">
-                  {webConfig.librarySourceMode === 'folder'
-                    ? 'Web Viewer 會直接掃描這個資料夾。'
-                    : '路徑來自 PixivUtil2 的 rootDirectory 設定。'}
-                </p>
-
-                <div className="flex flex-wrap items-center gap-3">
-                  <Button
-                    type="button"
-                    onClick={handleRescanDirectory}
-                    disabled={
-                      libraryJobIsBusy || librarySourceHasUnsavedChanges
-                    }
-                    variant="primary"
-                  >
-                    <RefreshCw
-                      className={`settings-modal__library-status-icon h-4 w-4 ${libraryJobIsBusy ? 'is-active' : ''}`}
-                      aria-hidden="true"
-                    />
-                    {libraryJobIsBusy ? '更新中…' : '更新圖片資料庫'}
-                  </Button>
-                  <span className="settings-modal__description text-xs">
-                    {librarySourceHasUnsavedChanges
-                      ? '請先儲存新的媒體來源，再更新圖片資料庫。'
-                      : '工作會在背景執行，完成或取消時會保留已處理的資料。'}
-                  </span>
-                </div>
-
-                <div
-                  className="settings-modal__library-options space-y-3 rounded-xl p-4"
-                  aria-label="圖片色彩分析功能"
-                >
-                  <div
-                    className="space-y-3"
-                    role="group"
-                    aria-labelledby="selected-artists-title"
-                    aria-describedby="selected-artists-help"
-                  >
-                    <div>
-                      <h5
-                        id="selected-artists-title"
-                        className="settings-modal__heading text-sm font-semibold"
-                      >
-                        更新選取的繪師
-                      </h5>
-                      <p
-                        id="selected-artists-help"
-                        className="settings-modal__description mt-1 text-xs leading-5"
-                      >
-                        選取一位或多位繪師；更新會在背景執行，既有索引可繼續瀏覽。
-                      </p>
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        onClick={() =>
-                          setSelectedArtistIds(
-                            artists
-                              .filter((artist) => artist.member_id > 0)
-                              .map((artist) => getArtistScopeKey(artist)),
-                          )
-                        }
-                        disabled={libraryJobIsBusy || artists.length === 0}
-                      >
-                        選取全部繪師
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="plain"
-                        onClick={() => setSelectedArtistIds([])}
-                        disabled={
-                          libraryJobIsBusy || selectedArtistIds.length === 0
-                        }
-                      >
-                        清除選取
-                      </Button>
-                    </div>
-                    {artists.length > 0 ? (
-                      <div className="max-h-56 overflow-y-auto overscroll-contain space-y-1 pr-1">
-                        {artists
-                          .filter((artist) => artist.member_id > 0)
-                          .map((artist) => {
-                            const artistKey = getArtistScopeKey(artist);
-                            const checked = selectedArtistIds.includes(artistKey);
-                            const inputId = `library-artist-${artistKey}`;
-                            return (
-                              <label
-                                key={artistKey}
-                                htmlFor={inputId}
-                                className="settings-modal__check-row flex min-h-11 cursor-pointer items-center gap-3 rounded-lg px-3 py-2 text-sm"
-                              >
-                                <input
-                                  id={inputId}
-                                  type="checkbox"
-                                  checked={checked}
-                                  onChange={() =>
-                                    setSelectedArtistIds((current) =>
-                                      checked
-                                        ? current.filter(
-                                            (artistId) =>
-                                              artistId !== artistKey,
-                                          )
-                                        : [...current, artistKey],
-                                    )
-                                  }
-                                  disabled={libraryJobIsBusy}
-                                  className="settings-modal__checkbox h-4 w-4 shrink-0 rounded"
-                                />
-                                <span className="min-w-0 flex-1 truncate">
-                                  {artist.name || `繪師 ${artist.member_id}`}
-                                </span>
-                                <span className="settings-modal__text-subtle shrink-0 text-xs">
-                                  {artist.artwork_count.toLocaleString()}
-                                </span>
-                              </label>
-                            );
-                          })}
-                      </div>
-                    ) : (
-                      <p className="settings-modal__text-subtle text-xs">
-                        目前沒有可更新的繪師。
-                      </p>
-                    )}
-                    <Button
-                      type="button"
-                      onClick={() => void handleUpdateSelectedArtists()}
-                      disabled={
-                        libraryJobIsBusy || selectedArtistIds.length === 0
-                      }
-                      variant="secondary"
-                      aria-describedby="selected-artists-help"
-                    >
-                      <RefreshCw
-                        className={`h-4 w-4 ${scanning && selectedArtistIds.length > 0 ? 'is-active' : ''}`}
-                        aria-hidden="true"
-                      />
-                      更新選取的繪師（{selectedArtistIds.length}）
-                    </Button>
-                  </div>
-
-                  <label
-                    htmlFor="analyze-colors-after-update"
-                    className="settings-modal__check-row flex min-h-11 cursor-pointer items-start gap-3 rounded-lg px-3 py-2 text-sm"
-                  >
-                    <SettingsSwitch
-                      id="analyze-colors-after-update"
-                      checked={webConfig.analyzeColorsAfterLibraryUpdate}
-                      onChange={(event) =>
-                        setWebConfig((current) => ({
-                          ...current,
-                          analyzeColorsAfterLibraryUpdate: event.target.checked,
-                        }))
-                      }
-                      disabled={libraryJobIsBusy}
-                    />
-                    <span className="min-w-0">
-                      <span className="block font-semibold">
-                        更新後分析圖片色彩
-                      </span>
-                      <span className="settings-modal__description mt-1 block text-xs leading-5">
-                        更新工作完成後，會在背景分析目前圖片的色彩。
-                      </span>
-                    </span>
-                  </label>
-                  <Button
-                    type="button"
-                    onClick={handleAnalyzeMissingColors}
-                    disabled={libraryJobIsBusy}
-                    variant="secondary"
-                  >
-                    只分析缺少的圖片色彩
-                  </Button>
-                  <p className="settings-modal__text-subtle text-xs leading-5">
-                    在背景分析尚未處理的圖片，讓圖片載入前先顯示相近的背景色。
-                  </p>
-                </div>
-              </section>
-
-              <section
-                aria-labelledby="media-library-jobs-title"
-                className="settings-modal__library-section space-y-4"
-              >
-                <div>
-                  <h4
-                    id="media-library-jobs-title"
-                    className="settings-modal__heading text-sm font-bold"
-                  >
-                    背景工作
-                  </h4>
-                  <p className="settings-modal__description mt-1 text-xs leading-5">
-                    這裡會顯示目前工作、處理進度與錯誤統計。
-                  </p>
-                </div>
-                <div
-                  className="settings-modal__library-status flex items-start gap-3 rounded-xl p-4"
-                  role="status"
-                  aria-live="polite"
-                  aria-atomic="true"
-                >
-                  <RefreshCw
-                    className={`settings-modal__library-status-icon mt-0.5 h-4 w-4 shrink-0 ${libraryJobIsBusy ? 'is-active' : ''}`}
-                    aria-hidden="true"
-                  />
-                  <div className="min-w-0">
-                    <p className="settings-modal__library-status-title text-sm font-semibold">
-                      {getLibraryJobStatusTitle(libraryJob)}
-                    </p>
-                    <p className="settings-modal__description mt-1 text-xs leading-5">
-                      {getLibraryJobStatusDescription(libraryJob)}
-                    </p>
-                    {libraryJob &&
-                      (libraryJobIsActive ||
-                        libraryJob.errors > 0 ||
-                        libraryJob.conflicts > 0) && (
-                        <p className="settings-modal__text-subtle mt-2 text-xs leading-5">
-                          {libraryJobIsActive
-                            ? `已處理 ${libraryJob.processed} / ${libraryJob.total ?? '…'} 張，錯誤 ${libraryJob.errors} 個，衝突 ${libraryJob.conflicts} 個。`
-                            : `錯誤 ${libraryJob.errors} 個，衝突 ${libraryJob.conflicts} 個。`}
-                        </p>
-                      )}
-                    {libraryProgress !== null && libraryJobIsActive && (
-                      <div
-                        className="settings-modal__library-progress mt-3"
-                        role="progressbar"
-                        aria-label="圖片資料庫更新進度"
-                        aria-valuemin={0}
-                        aria-valuemax={100}
-                        aria-valuenow={libraryProgress}
-                      >
-                        <span
-                          className="settings-modal__library-progress-bar"
-                          style={{ width: `${libraryProgress}%` }}
-                        />
-                      </div>
-                    )}
-                    {libraryJobIsActive &&
-                      libraryJob?.status === 'cancelling' && (
-                        <Button
-                          type="button"
-                          disabled
-                          variant="secondary"
-                          className="mt-3"
-                        >
-                          正在停止…
-                        </Button>
-                      )}
-                    {libraryJobIsActive &&
-                      libraryJob?.status !== 'cancelling' && (
-                        <Button
-                          type="button"
-                          onClick={handleCancelLibraryJob}
-                          variant="plain"
-                          className="mt-3"
-                        >
-                          取消工作
-                        </Button>
-                      )}
-                  </div>
-                </div>
-              </section>
-
-              <section
-                aria-labelledby="media-library-cache-title"
-                className="settings-modal__library-section space-y-4"
-              >
-                <div>
-                  <h4
-                    id="media-library-cache-title"
-                    className="settings-modal__heading text-sm font-bold"
-                  >
-                    縮圖儲存空間
-                  </h4>
-                  <p className="settings-modal__description mt-1 text-xs leading-5">
-                    只管理 Web Viewer 使用中的縮圖；原始圖片不會被修改或刪除。
-                  </p>
-                </div>
-                <div
-                  className="settings-modal__cache-summary flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 rounded-xl p-4"
-                  aria-live="polite"
-                >
-                  <Database
-                    className="mt-0.5 h-4 w-4 shrink-0"
-                    aria-hidden="true"
-                  />
-                  <p className="min-w-0 flex-1 text-sm font-semibold">
-                    {thumbnailCacheLoading
-                      ? '讀取縮圖容量中…'
-                      : `${formatBytes(thumbnailCacheStats.active_bytes)}・${thumbnailCacheStats.active_files.toLocaleString()} 個縮圖`}
-                  </p>
-                  <span className="settings-modal__text-subtle w-full text-xs">
-                    已追蹤來源版本：
-                    {thumbnailCacheStats.tracked_files.toLocaleString()} 個
-                  </span>
-                </div>
-                <div className="settings-modal__library-options space-y-3 rounded-xl p-4">
-                  <label
-                    htmlFor="manage-thumbnail-cache"
-                    className="settings-modal__check-row flex min-h-11 cursor-pointer items-start gap-3 rounded-lg px-3 py-2 text-sm"
-                  >
-                    <SettingsSwitch
-                      id="manage-thumbnail-cache"
-                      checked={webConfig.manageThumbnailCache}
-                      onChange={(event) =>
-                        setWebConfig((current) => ({
-                          ...current,
-                          manageThumbnailCache: event.target.checked,
-                        }))
-                      }
-                      disabled={libraryJobIsBusy}
-                    />
-                    <span className="min-w-0">
-                      <span className="block font-semibold">
-                        自動管理縮圖空間
-                      </span>
-                      <span className="settings-modal__description mt-1 block text-xs leading-5">
-                        圖片資料庫更新完成後，依空間上限整理無來源、舊版本、舊尺寸與最久未使用的縮圖。
-                      </span>
-                    </span>
-                  </label>
-                  <div className="flex flex-wrap items-end gap-3">
-                    <div className="min-w-44">
-                      <label
-                        htmlFor="thumbnail-cache-limit"
-                        className="settings-modal__label mb-1.5 block text-sm font-semibold"
-                      >
-                        空間上限（MiB）
-                      </label>
-                      <Input
-                        controlSize="md"
-                        id="thumbnail-cache-limit"
-                        type="number"
-                        min={128}
-                        max={102400}
-                        step={128}
-                        value={webConfig.thumbnailCacheLimitMiB}
-                        onChange={(event) =>
-                          setWebConfig((current) => ({
-                            ...current,
-                            thumbnailCacheLimitMiB: Number(event.target.value),
-                          }))
-                        }
-                        disabled={libraryJobIsBusy}
-                        className="max-w-52"
-                      />
-                    </div>
-                  </div>
-                </div>
-                <div className="flex flex-wrap items-center gap-3">
-                  <Button
-                    type="button"
-                    onClick={handleOrganizeThumbnailCache}
-                    disabled={libraryJobIsBusy}
-                    variant="secondary"
-                  >
-                    <RefreshCw
-                      className={`h-4 w-4 ${libraryJob?.phase === 'organizing_cache' ? 'is-active' : ''}`}
-                      aria-hidden="true"
-                    />
-                    整理縮圖
-                  </Button>
-                  <span className="settings-modal__description text-xs">
-                    整理只會移到可復原位置，不代表已釋放整體磁碟空間。
-                  </span>
-                </div>
-                {thumbnailCacheStats.recovery_jobs.some(
-                  (job) => job.restorable,
-                ) && (
-                  <div
-                    className="settings-modal__cache-recovery space-y-2"
-                    aria-label="可復原的縮圖整理"
-                  >
-                    <div>
-                      <p className="settings-modal__text-subtle text-xs font-semibold">
-                        可復原位置
-                      </p>
-                      <p className="settings-modal__description mt-1 text-xs leading-5">
-                        點選「查看內容」可預覽這批縮圖，並查看來源檔案、尺寸、容量與整理原因。
-                      </p>
-                    </div>
-                    {thumbnailCacheStats.recovery_jobs
-                      .filter((job) => job.restorable)
-                      .map((job) => {
-                        const isExpanded = expandedRecoveryJobId === job.job_id;
-                        const detailsForJob =
-                          recoveryDetails?.job_id === job.job_id
-                            ? recoveryDetails
-                            : null;
-                        const visibleStart = detailsForJob
-                          ? detailsForJob.offset + 1
-                          : 0;
-                        const visibleEnd = detailsForJob
-                          ? detailsForJob.offset + detailsForJob.entries.length
-                          : 0;
-                        return (
-                          <React.Fragment key={job.job_id}>
-                            <div className="settings-modal__cache-recovery-row flex flex-wrap items-start justify-between gap-3 rounded-lg px-3 py-3">
-                              <div className="min-w-0 flex-1">
-                                <p className="text-sm font-semibold">
-                                  {job.recoverable_files.toLocaleString()}{' '}
-                                  個縮圖・{formatBytes(job.recoverable_bytes)}
-                                </p>
-                                <p className="settings-modal__description mt-1 text-xs leading-5">
-                                  整理於 {formatDateTime(job.created_at)}
-                                  ；目前仍占用磁碟空間。
-                                </p>
-                              </div>
-                              <div className="flex flex-wrap items-center gap-2">
-                                <Button
-                                  type="button"
-                                  onClick={() =>
-                                    handleToggleRecoveryDetails(job.job_id)
-                                  }
-                                  aria-expanded={isExpanded}
-                                  aria-controls={`thumbnail-cache-recovery-${job.job_id}`}
-                                  variant="secondary"
-                                >
-                                  <Eye
-                                    className="h-3.5 w-3.5"
-                                    aria-hidden="true"
-                                  />
-                                  {isExpanded ? '收合內容' : '查看內容'}
-                                  {isExpanded ? (
-                                    <ChevronUp
-                                      className="h-3.5 w-3.5"
-                                      aria-hidden="true"
-                                    />
-                                  ) : (
-                                    <ChevronDown
-                                      className="h-3.5 w-3.5"
-                                      aria-hidden="true"
-                                    />
-                                  )}
-                                </Button>
-                                <Button
-                                  type="button"
-                                  onClick={() =>
-                                    handleRestoreThumbnailCache(job.job_id)
-                                  }
-                                  disabled={
-                                    thumbnailCacheLoading || libraryJobIsBusy
-                                  }
-                                  variant="secondary"
-                                >
-                                  {thumbnailCacheLoading ? '處理中…' : '還原'}
-                                </Button>
-                                <Button
-                                  type="button"
-                                  onClick={() => setRecycleCacheTarget(job)}
-                                  disabled={
-                                    thumbnailCacheLoading || libraryJobIsBusy
-                                  }
-                                  variant="danger"
-                                >
-                                  <Trash2
-                                    className="h-3.5 w-3.5"
-                                    aria-hidden="true"
-                                  />
-                                  送到資源回收筒
-                                </Button>
-                              </div>
-                            </div>
-
-                            {isExpanded && (
-                              <div
-                                id={`thumbnail-cache-recovery-${job.job_id}`}
-                                className="settings-modal__cache-recovery-detail space-y-3 rounded-2xl p-3"
-                              >
-                                {recoveryDetailsLoading && (
-                                  <p className="settings-modal__description px-1 py-2 text-xs">
-                                    讀取縮圖內容中…
-                                  </p>
-                                )}
-                                {!recoveryDetailsLoading && detailsForJob && (
-                                  <>
-                                    <div className="flex flex-wrap items-center justify-between gap-2 px-1 text-xs">
-                                      <span className="settings-modal__text-subtle">
-                                        顯示 {visibleStart.toLocaleString()}–
-                                        {visibleEnd.toLocaleString()} /{' '}
-                                        {detailsForJob.total.toLocaleString()}{' '}
-                                        個縮圖
-                                      </span>
-                                      <span className="settings-modal__text-subtle">
-                                        這批共{' '}
-                                        {formatBytes(detailsForJob.total_bytes)}
-                                      </span>
-                                    </div>
-                                    {detailsForJob.entries.length > 0 ? (
-                                      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                                        {detailsForJob.entries.map((entry) => {
-                                          const displayName = entry.source_path
-                                            ? getPathFileName(entry.source_path)
-                                            : entry.recovery_name;
-                                          return (
-                                            <article
-                                              key={entry.recovery_name}
-                                              className="settings-modal__cache-detail-card overflow-hidden rounded-xl"
-                                            >
-                                              <div className="settings-modal__cache-detail-preview">
-                                                {webConfig.demoMode ? (
-                                                  <DemoMediaBlock />
-                                                ) : (
-                                                  <img
-                                                    src={`/api/library/cache/${encodeURIComponent(job.job_id)}/preview/${encodeURIComponent(entry.recovery_name)}`}
-                                                    alt={`縮圖預覽：${displayName}`}
-                                                    loading="lazy"
-                                                  />
-                                                )}
-                                              </div>
-                                              <div className="space-y-1.5 p-3 text-xs">
-                                                <p
-                                                  className="truncate text-sm font-semibold"
-                                                  title={
-                                                    entry.source_path ||
-                                                    entry.recovery_name
-                                                  }
-                                                >
-                                                  {displayName}
-                                                </p>
-                                                <p className="settings-modal__text-subtle">
-                                                  縮圖{' '}
-                                                  {formatBytes(
-                                                    entry.cache_bytes,
-                                                  )}
-                                                  ・
-                                                  {entry.width && entry.height
-                                                    ? `${entry.width} × ${entry.height}`
-                                                    : '尺寸未知'}
-                                                </p>
-                                                <p
-                                                  className="settings-modal__text-subtle truncate"
-                                                  title={entry.recovery_name}
-                                                >
-                                                  快取檔案：
-                                                  {entry.recovery_name}
-                                                </p>
-                                                <p className="settings-modal__text-subtle">
-                                                  來源檔案：
-                                                  {entry.source_file_size
-                                                    ? formatBytes(
-                                                        entry.source_file_size,
-                                                      )
-                                                    : '大小未知'}
-                                                </p>
-                                                <p className="settings-modal__text-subtle">
-                                                  原因：
-                                                  {getRecoveryReasonLabel(
-                                                    entry.reason,
-                                                  )}
-                                                </p>
-                                                <p
-                                                  className="settings-modal__text-subtle truncate"
-                                                  title={
-                                                    entry.source_path ||
-                                                    undefined
-                                                  }
-                                                >
-                                                  來源：
-                                                  {entry.source_path ||
-                                                    '未追蹤'}
-                                                </p>
-                                              </div>
-                                            </article>
-                                          );
-                                        })}
-                                      </div>
-                                    ) : (
-                                      <p className="settings-modal__description px-1 py-2 text-xs">
-                                        目前找不到可預覽的縮圖，可能已被其他程序移除。
-                                      </p>
-                                    )}
-                                    <div className="flex items-center justify-between gap-3 px-1 pt-1">
-                                      <Button
-                                        type="button"
-                                        onClick={() =>
-                                          handleRecoveryPageChange(
-                                            job.job_id,
-                                            Math.max(
-                                              0,
-                                              detailsForJob.offset -
-                                                detailsForJob.limit,
-                                            ),
-                                          )
-                                        }
-                                        disabled={
-                                          detailsForJob.offset === 0 ||
-                                          recoveryDetailsLoading
-                                        }
-                                        variant="secondary"
-                                      >
-                                        <ChevronLeft
-                                          className="h-3.5 w-3.5"
-                                          aria-hidden="true"
-                                        />
-                                        上一頁
-                                      </Button>
-                                      <span className="settings-modal__text-subtle text-xs">
-                                        第{' '}
-                                        {Math.floor(
-                                          detailsForJob.offset /
-                                            detailsForJob.limit,
-                                        ) + 1}{' '}
-                                        頁
-                                      </span>
-                                      <Button
-                                        type="button"
-                                        onClick={() =>
-                                          handleRecoveryPageChange(
-                                            job.job_id,
-                                            detailsForJob.offset +
-                                              detailsForJob.limit,
-                                          )
-                                        }
-                                        disabled={
-                                          !detailsForJob.has_more ||
-                                          recoveryDetailsLoading
-                                        }
-                                        variant="secondary"
-                                      >
-                                        下一頁{' '}
-                                        <span aria-hidden="true">&gt;</span>
-                                      </Button>
-                                    </div>
-                                  </>
-                                )}
-                              </div>
-                            )}
-                          </React.Fragment>
-                        );
-                      })}
-                  </div>
-                )}
-              </section>
+              <SettingsLibraryContent
+                webConfig={webConfig}
+                setWebConfig={setWebConfig}
+                rootDirectory={rootDirectory}
+                librarySourceHasUnsavedChanges={librarySourceHasUnsavedChanges}
+                libraryJobIsBusy={libraryJobIsBusy}
+                onRescanDirectory={() => void handleRescanDirectory()}
+                artists={artists}
+                selectedArtistIds={selectedArtistIds}
+                setSelectedArtistIds={setSelectedArtistIds}
+                onUpdateSelectedArtists={() => void handleUpdateSelectedArtists()}
+                scanning={scanning}
+                onAnalyzeMissingColors={() => void handleAnalyzeMissingColors()}
+                onOrganizeThumbnailCache={() => void handleOrganizeThumbnailCache()}
+                libraryJob={libraryJob}
+                libraryJobIsActive={libraryJobIsActive}
+                libraryProgress={libraryProgress}
+                onCancelLibraryJob={() => void handleCancelLibraryJob()}
+                thumbnailCacheStats={thumbnailCacheStats}
+                thumbnailCacheLoading={thumbnailCacheLoading}
+                expandedRecoveryJobId={expandedRecoveryJobId}
+                recoveryDetails={recoveryDetails}
+                recoveryDetailsLoading={recoveryDetailsLoading}
+                onToggleRecoveryDetails={handleToggleRecoveryDetails}
+                onRestoreThumbnailCache={(jobId) => void handleRestoreThumbnailCache(jobId)}
+                onRecycleThumbnailCache={setRecycleCacheTarget}
+                onRecoveryPageChange={handleRecoveryPageChange}
+              />
             </SettingsLibraryTab>
           )}
 
           {mainTab === 'pixiv' && (
             <SettingsPixivTab>
-              <div className="settings-modal__info-card">
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <h3 className="settings-modal__info-title text-base font-bold">
-                      PixivUtil2 設定檔位置
-                    </h3>
-                    <p className="settings-modal__info-description mt-1 text-sm leading-5">
-                      留白會使用預設位置；填寫完整路徑後，下面的分類與欄位會改讀該份
-                      config.ini。
-                    </p>
-                  </div>
-                  <Badge
-                    variant="neutral"
-                    size="sm"
-                    className="settings-modal__badge"
-                  >
-                    {configPathInfo.usingDefaultPath
-                      ? '使用預設位置'
-                      : '使用自訂位置'}
-                  </Badge>
-                </div>
-                <div className="mt-4 space-y-2">
-                  <label
-                    htmlFor="pixiv-config-path"
-                    className="settings-modal__label block text-sm font-semibold"
-                  >
-                    config.ini 路徑
-                  </label>
-                  <PathPickerField
-                    id="pixiv-config-path"
-                    label="config.ini 路徑"
-                    value={webConfig.pixivConfigPath || ''}
-                    placeholder="留白：使用預設位置"
-                    metadata={{
-                      mode: 'existing-file',
-                      purpose: 'pixiv-config',
-                      extensions: ['.ini'],
-                      access: 'read',
-                    }}
-                    onChange={(value) =>
-                      setWebConfig((current) => ({
-                        ...current,
-                        pixivConfigPath: value,
-                      }))
-                    }
-                    onClear={() =>
-                      setWebConfig((current) => ({
-                        ...current,
-                        pixivConfigPath: '',
-                      }))
-                    }
-                    clearLabel="使用預設位置"
-                  />
-                  <p className="settings-modal__description break-all text-xs leading-5">
-                    目前讀取：
-                    <code className="settings-modal__code">
-                      {configPathInfo.configPath || '載入中…'}
-                    </code>
-                    <br />
-                    預設位置：
-                    <code className="settings-modal__code">
-                      {configPathInfo.defaultConfigPath || '載入中…'}
-                    </code>
-                  </p>
-                  <Button
-                    type="button"
-                    onClick={handleSaveConfigPath}
-                    disabled={loading}
-                    variant="primary"
-                    className="mt-2"
-                  >
-                    <Save className="h-4 w-4" aria-hidden="true" />
-                    {loading ? '載入中…' : '儲存路徑並重新載入'}
-                  </Button>
-                </div>
-              </div>
-
-              <div className="space-y-4">
-                <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-                  <div className="settings-modal__search-field min-w-0 flex-1">
-                    <label htmlFor="pixiv-config-search" className="sr-only">
-                      搜尋整份 config.ini
-                    </label>
-                    <Input
-                      controlSize="md"
-                      leadingIcon={<Search aria-hidden="true" />}
-                      wrapperClassName="w-full"
-                      clearable
-                      onClear={() => {
-                        setSectionFilter('');
-                        setActiveSection(
-                          sectionKeys.includes('Settings')
-                            ? 'Settings'
-                            : sectionKeys[0] || '',
-                        );
-                      }}
-                      clearButtonLabel="清除搜尋"
-                      id="pixiv-config-search"
-                      type="search"
-                      value={sectionFilter}
-                      onChange={(event) => {
-                        const nextValue = event.target.value;
-                        setSectionFilter(nextValue);
-                        if (nextValue.trim()) {
-                          setActiveSection('');
-                        } else {
-                          setActiveSection(
-                            sectionKeys.includes('Settings')
-                              ? 'Settings'
-                              : sectionKeys[0] || '',
-                          );
-                        }
-                      }}
-                      placeholder="搜尋整份 config.ini：分類、欄位、值或說明"
-                      autoComplete="off"
-                      className="w-full"
-                    />
-                  </div>
-                </div>
-
-                <div className="settings-modal__section-tabs-shell">
-                  <IconButton
-                    type="button"
-                    variant="ghost"
-                    className="settings-modal__section-tabs-control"
-                    onClick={() => scrollSectionTabs('left')}
-                    disabled={!canScrollSectionTabsLeft}
-                    aria-label="向左瀏覽 config.ini 分類"
-                    title="向左瀏覽 config.ini 分類"
-                    aria-controls="pixiv-config-section-tabs"
-                  >
-                    <ChevronLeft aria-hidden="true" />
-                  </IconButton>
-
-                  <div
-                    id="pixiv-config-section-tabs"
-                    ref={sectionTabsRef}
-                    className="settings-modal__section-tabs"
-                    role="tablist"
-                    aria-label="PixivUtil2 config.ini 分類"
-                    onWheel={handleSectionTabsWheel}
-                  >
-                    {sectionKeys.map((sectionName, index) => {
-                      const selected =
-                        !isSearching && activeSection === sectionName;
-                      const sectionMetadata = getSectionMetadata(sectionName);
-                      return (
-                        <button
-                          key={sectionName}
-                          type="button"
-                          role="tab"
-                          aria-selected={selected}
-                          aria-controls="pixiv-config-panel"
-                          tabIndex={isSearching || selected ? 0 : -1}
-                          data-pixiv-section-tab={sectionName}
-                          onClick={() => {
-                            setSectionFilter('');
-                            setActiveSection(sectionName);
-                          }}
-                          onKeyDown={(event) =>
-                            handleSectionKeyDown(event, index)
-                          }
-                          className={`settings-modal__section-tab text-xs font-semibold ${selected ? 'is-selected' : ''}`}
-                        >
-                          <span className="settings-modal__section-label">
-                            <span className="settings-modal__section-label-en">
-                              [{sectionMetadata?.eng_category || sectionName}]
-                            </span>
-                            <span className="settings-modal__section-label-zh">
-                              {sectionMetadata?.zh_category || '自訂'}
-                            </span>
-                          </span>
-                        </button>
-                      );
-                    })}
-                  </div>
-
-                  <IconButton
-                    type="button"
-                    variant="ghost"
-                    className="settings-modal__section-tabs-control"
-                    onClick={() => scrollSectionTabs('right')}
-                    disabled={!canScrollSectionTabsRight}
-                    aria-label="向右瀏覽 config.ini 分類"
-                    title="向右瀏覽 config.ini 分類"
-                    aria-controls="pixiv-config-section-tabs"
-                  >
-                    <ChevronRight aria-hidden="true" />
-                  </IconButton>
-                </div>
-
-                <div
-                  id="pixiv-config-panel"
-                  role="tabpanel"
-                  aria-live="polite"
-                  className="space-y-8"
-                >
-                  <div
-                    role="status"
-                    className="settings-modal__description text-xs"
-                  >
-                    {isSearching
-                      ? `已跨整份 config.ini 找到 ${matchedFieldCount} 個欄位，結果已依分類分組。`
-                      : `目前分類：${getSectionMetadata(activeSection)?.zh_category || activeSection || '尚未選擇'}`}
-                  </div>
-                  {filteredSectionGroups.length > 0 ? (
-                    filteredSectionGroups.map((group) =>
-                      renderSectionGroup(group.section, group.entries),
-                    )
-                  ) : (
-                    <div className="settings-modal__empty rounded-xl px-6 py-10 text-center">
-                      <Search
-                        className="settings-modal__muted-icon mx-auto h-8 w-8"
-                        aria-hidden="true"
-                      />
-                      <p className="settings-modal__empty-title mt-3 text-sm font-semibold">
-                        找不到符合的設定欄位
-                      </p>
-                      <p className="settings-modal__empty-text mt-1 text-xs">
-                        請換一個關鍵字，或清除搜尋以回到目前分類。
-                      </p>
-                      {isSearching && (
-                        <Button
-                          type="button"
-                          onClick={() => {
-                            setSectionFilter('');
-                            setActiveSection(
-                              sectionKeys.includes('Settings')
-                                ? 'Settings'
-                                : sectionKeys[0] || '',
-                            );
-                          }}
-                          variant="plain"
-                          className="mt-4"
-                        >
-                          清除搜尋
-                        </Button>
-                      )}
-                    </div>
-                  )}
-                </div>
-              </div>
+              <SettingsPixivContent
+                webConfig={webConfig}
+                setWebConfig={setWebConfig}
+                pixivSections={pixivSections}
+                activeSection={activeSection}
+                setActiveSection={setActiveSection}
+                sectionFilter={sectionFilter}
+                setSectionFilter={setSectionFilter}
+                configPathInfo={configPathInfo}
+                loading={loading}
+                onSaveConfigPath={() => void handleSaveConfigPath()}
+                onUpdateValue={updatePixivValue}
+                onNavigateToLibrary={() => setMainTab('library')}
+              />
             </SettingsPixivTab>
           )}
 
@@ -3233,7 +1287,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
         <footer className="settings-modal__footer flex shrink-0 flex-wrap items-center justify-end gap-3">
           <Button type="button" onClick={requestClose} variant="plain">
-            關閉
+            {t('settings.closeSettings')}
           </Button>
           {(mainTab === 'web' || mainTab === 'library') && (
             <Button
@@ -3244,10 +1298,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             >
               <Save className="h-4 w-4" aria-hidden="true" />
               {loading
-                ? '儲存中…'
+                ? t('settings.loading')
                 : mainTab === 'library'
-                  ? '儲存媒體資料庫設定'
-                  : '儲存顯示與瀏覽設定'}
+                  ? t('settings.saveLibrarySettings')
+                  : t('settings.saveDisplaySettings')}
             </Button>
           )}
           {mainTab === 'pixiv' && (
@@ -3258,7 +1312,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               variant="primary"
             >
               <Save className="h-4 w-4" aria-hidden="true" />
-              儲存 PixivUtil2 設定
+              {t('settings.savePixivSettings')}
             </Button>
           )}
         </footer>
@@ -3283,16 +1337,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               className="settings-modal__confirm-title text-base font-bold"
             >
               {sourceClosePrompt === 'unsaved'
-                ? '媒體來源尚未儲存'
-                : '圖片資料庫尚未更新'}
+                ? t('settings.unsavedSourceTitle')
+                : t('settings.outdatedLibraryTitle')}
             </h3>
             <p
               id="source-close-description"
               className="settings-modal__confirm-text text-sm leading-6"
             >
               {sourceClosePrompt === 'unsaved'
-                ? '你已切換媒體來源或修改圖片資料夾。請儲存設定並更新圖片資料庫，否則圖庫仍會顯示舊來源的索引。'
-                : '新的媒體來源已儲存，但圖片資料庫尚未更新。現在開始更新，才能顯示新來源的圖片。'}
+                ? t('settings.unsavedSourceMessage')
+                : t('settings.outdatedLibraryMessage')}
             </p>
             <div className="flex flex-wrap justify-end gap-3 pt-2">
               <Button
@@ -3302,7 +1356,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 disabled={loading}
                 variant="plain"
               >
-                返回設定
+                {t('settings.backToSettings')}
               </Button>
               <Button
                 type="button"
@@ -3311,10 +1365,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 variant="primary"
               >
                 {loading
-                  ? '處理中…'
+                  ? t('common.processing')
                   : sourceClosePrompt === 'unsaved'
-                    ? '儲存並開始更新'
-                    : '開始更新圖片資料庫'}
+                    ? t('settings.saveAndUpdate')
+                    : t('settings.updateLibrary')}
               </Button>
             </div>
           </div>
@@ -3338,11 +1392,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               id="save-confirm-title"
               className="settings-modal__confirm-title text-base font-bold"
             >
-              儲存 PixivUtil2 設定？
+              {t('settings.savePixivConfirmTitle')}
             </h3>
             <p className="settings-modal__confirm-text text-sm leading-6">
-              儲存前會先把目前 config.ini 複製成
-              .bak；若寫入失敗，系統會嘗試從備份還原。
+              {t('settings.savePixivConfirmMessage')}
             </p>
             <div className="flex flex-wrap justify-end gap-3 pt-2">
               <Button
@@ -3351,7 +1404,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 onClick={() => setShowSaveConfirm(false)}
                 variant="plain"
               >
-                取消
+                {t('common.cancel')}
               </Button>
               <Button
                 type="button"
@@ -3359,7 +1412,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 disabled={loading}
                 variant="primary"
               >
-                儲存設定
+                {t('common.save')}
               </Button>
             </div>
           </div>
@@ -3388,19 +1441,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   id="thumbnail-recycle-title"
                   className="settings-modal__confirm-title text-base font-bold"
                 >
-                  將這批縮圖送到資源回收筒？
+                  {t('settings.thumbnailRecycleTitle')}
                 </h3>
                 <p className="settings-modal__confirm-text mt-1 text-sm leading-6">
-                  這會將可復原位置中的{' '}
-                  {recycleCacheTarget.recoverable_files.toLocaleString()}{' '}
-                  個縮圖送到 Windows 資源回收筒，釋放約{' '}
-                  {formatBytes(recycleCacheTarget.recoverable_bytes)}。之後可由
-                  Windows 還原。
+                  {t('settings.thumbnailRecycleMessage', {
+                    count: formatNumber(recycleCacheTarget.recoverable_files),
+                    bytes: formatBytes(recycleCacheTarget.recoverable_bytes),
+                  })}
                 </p>
               </div>
             </div>
             <p className="settings-modal__danger-note rounded-lg px-3 py-2 text-xs leading-5">
-              只會刪除縮圖快取，不會刪除原始圖片。
+              {t('settings.thumbnailRecycleNote')}
             </p>
             <div className="flex flex-wrap justify-end gap-3 pt-2">
               <Button
@@ -3410,7 +1462,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 disabled={recycleCacheLoading}
                 variant="plain"
               >
-                取消
+                {t('common.cancel')}
               </Button>
               <Button
                 type="button"
@@ -3419,7 +1471,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 variant="danger"
               >
                 <Trash2 className="h-4 w-4" aria-hidden="true" />
-                {recycleCacheLoading ? '移動中…' : '送到資源回收筒'}
+                {recycleCacheLoading ? t('settings.moving') : t('settings.sendToRecycle')}
               </Button>
             </div>
           </div>

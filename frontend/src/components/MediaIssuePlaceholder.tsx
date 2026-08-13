@@ -1,5 +1,6 @@
 import React from 'react';
 import { ImageOff } from 'lucide-react';
+import { useI18n } from '../i18n';
 
 interface MediaIssuePlaceholderProps {
   message?: string;
@@ -8,20 +9,24 @@ interface MediaIssuePlaceholderProps {
 }
 
 export const MediaIssuePlaceholder: React.FC<MediaIssuePlaceholderProps> = ({
-  message = '檔案可能未完成或已損壞',
+  message,
   compact = false,
   className = '',
-}) => (
-  <div
+}) => {
+  const { t } = useI18n();
+  const resolvedMessage = message ?? t('common.mediaIssueMessage');
+  return (
+    <div
     role="img"
-    aria-label={`圖片檔案有問題：${message}`}
-    title={message}
+    aria-label={`${t('common.mediaIssue')}：${resolvedMessage}`}
+    title={resolvedMessage}
     className={`media-issue-placeholder${compact ? ' media-issue-placeholder--compact' : ''} ${className}`}
   >
     <ImageOff className="media-issue-placeholder__icon" aria-hidden="true" />
-    {!compact && <span className="media-issue-placeholder__title">圖片檔案有問題</span>}
+    {!compact && <span className="media-issue-placeholder__title">{t('common.mediaIssue')}</span>}
     <span className="media-issue-placeholder__message">
-      {message}
+      {resolvedMessage}
     </span>
-  </div>
-);
+    </div>
+  );
+};

@@ -1,8 +1,10 @@
 # Web Viewer 繪師列表、Indexing、快取與 Gallery Grid 設計規格
 
-狀態：規格、現況差異與修正紀錄
+狀態：繪師／索引契約仍有效；第 8 節舊 Gallery 分頁設計已由全域導覽契約取代
 
 日期：2026-08-04
+
+> 修改繪師邊界、背景索引或 Viewer snapshot 時仍使用本文。修改 Gallery range 載入、月份跳轉、虛擬軌道、chunk／pin／LRU 時改讀 `docs/global-gallery-navigation-contract.md`；該文件是目前的單一事實來源。
 
 ## 1. 目的
 
@@ -240,36 +242,31 @@ thumbnail/media endpoint
 
 ## 8. Gallery Grid 與 MonthQuickNav
 
-### 8.1 載入順序
+### 8.1 現行載入順序
 
 ```text
 App
  ├─ /api/artists + /api/months（並行、Viewer snapshot）
- └─ /api/images（依目前 filter、sort、page）
-       ├─ page cache hit：立即套用
-       ├─ in-flight hit：共用同一 Promise
-       └─ miss：只取得目前 page，成功後加入 LRU 24 頁
-              └─ prefetch 只作為低優先度暖機，不得取代目前頁面
+ └─ /api/images（依目前 filter、sort、offset、limit）
+       └─ GlobalMediaWindow
+              ├─ 固定 chunk、request dedupe 與 revision 隔離
+              ├─ viewport／navigation／reader pin
+              └─ bounded LRU 與 intent priority
 ```
 
-`/api/images` 回傳目前 page、`total` 與每個月份的第一筆 offset。月份 offset 是在目前 artist／filter／sort 條件下計算，MonthQuickNav 不應重新掃描資料夾，也不應把月份選擇誤當成新的 filter。
+`/api/images` 的現行 range response 回傳 `revision`、`total`、`offset`、`limit` 與完整 `month_index`。月份 offset 依目前 artist／filter／sort 計算；MonthQuickNav 使用 dense layout 直接取得目的座標，不重新掃描資料夾，也不把月份選擇當成新的 filter。
 
 ### 8.2 MonthQuickNav
 
-- 同頁跳轉：使用已取得的 month section，直接以 gallery scroll container 對齊。
-- 跨頁跳轉：依 month offset 計算 page，先 request 目標 page，再設定 destination month／global index。
-- scrub：以 100 ms debounce 合併跨頁預取，取消已離開的 speculative request，避免拖曳經過大量月份時 queue 無限增長。
-- 目標月份的 row 優先載入；目前 viewport 次之；overscan 再次之。
-- 沒有目標 DOM 時，可以等待目標 page render，但不能以固定 `requestAnimationFrame` 無限輪詢。
-- 目標 page request 與 scroll movement 可以重疊；使用者不必等整頁縮圖 decode 完才開始移動。
+- 月份點擊依 `month_index` 的 dense layout 座標立即開始捲動，不等待目標 range 載入。
+- 月份導覽 pin 目標 range；`month-jump` 可搶占較低優先度工作，settle 後釋放 pin。
+- scrub 每個 animation frame 只提交最新 fractional target，並取消不再重疊的 speculative request。
+- 導覽途中使用固定幾何 placeholder；停穩後才讓最終可見縮圖取得載入排程。
+- active month 由實際 scroll position 計算，不以 navigation intent 或目前掛載的 DOM section 推斷。
 
 ### 8.3 Grid 虛擬化
 
-目前 `GalleryGrid` 先將當前 page 的作品依月份分組，再由 `GalleryMonthSection`：
-
-1. 透過 `ResizeObserver` 取得欄數、卡片尺寸與 row stride。
-2. 以 scroll viewport、overscan rows 與 destination row 計算 `getVirtualRange()`。
-3. 保留完整 section shell 高度，但只 mount viewport 附近的 card。
+目前 `globalLayoutIndex.ts` 建立完整月份座標，`GalleryGlobalTrack` 只 mount viewport 與 overscan 範圍內的月份／列。Ready card 與 placeholder 共用相同幾何；完整 `ImageItem` 維持稀疏載入，不能把全集放進記憶體或 DOM。容量、pin 釋放與瀏覽器驗收以 `docs/global-gallery-navigation-contract.md` 為準。
 4. 進行 MonthQuickNav 大跳轉時，強制 mount 目標 row 附近範圍，避免 scroll 已到位但 DOM 還沒有目標縮圖。
 5. 只讓 bounded virtual window 進入 thumbnail scheduler；destination row priority 0、可見卡 priority 1、overscan priority 2。
 

@@ -1,6 +1,7 @@
 import React, { useEffect } from 'react';
 import { AlertCircle, CheckCircle2, Info, X } from 'lucide-react';
 import { IconButton } from './Button';
+import { useI18n } from '../../i18n';
 
 export type ToastVariant = 'info' | 'success' | 'warning' | 'error';
 
@@ -26,6 +27,7 @@ export const Toast: React.FC<ToastProps> = ({
   onClose,
   autoDismissMs = 3000,
 }) => {
+  const { t } = useI18n();
   useEffect(() => {
     if (!isOpen || !autoDismissMs) return undefined;
     const timer = setTimeout(() => {
@@ -40,7 +42,7 @@ export const Toast: React.FC<ToastProps> = ({
     <div
       role="status"
       aria-live="polite"
-      className="fixed top-[90px] left-1/2 -translate-x-1/2 sm:top-[90px] sm:right-6 sm:left-auto sm:translate-x-0 z-50 flex w-[calc(100%-2rem)] max-w-md items-center justify-between gap-3 rounded-2xl border border-[var(--viewer-border)] bg-[var(--viewer-surface-raised)] p-4 text-sm font-medium text-[var(--viewer-text)] transition-all duration-200"
+      className="fixed top-[90px] left-1/2 -translate-x-1/2 sm:top-[90px] sm:right-6 sm:left-auto sm:translate-x-0 z-50 flex w-[calc(100%-2rem)] max-w-md items-center justify-between gap-3 rounded-2xl border border-[var(--viewer-border)] bg-[var(--viewer-surface-raised)] p-4 text-sm font-medium text-[var(--viewer-text)] transition-opacity transition-transform duration-200"
     >
       <div className="flex items-center gap-3 min-w-0">
         {variantIconMap[variant]}
@@ -50,8 +52,8 @@ export const Toast: React.FC<ToastProps> = ({
         type="button"
         variant="ghost"
         onClick={onClose}
-        aria-label="關閉通知"
-        title="關閉通知"
+        aria-label={t('common.close')}
+        title={t('common.close')}
         className="shrink-0"
       >
         <X className="h-4 w-4" aria-hidden="true" />

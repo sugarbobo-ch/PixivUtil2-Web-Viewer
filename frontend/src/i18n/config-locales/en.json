@@ -1,0 +1,606 @@
+{
+  "sections": {
+    "Network": {
+      "label": "Network settings",
+      "description": "Control the connection, retry and version checking behavior of PixivUtil2."
+    },
+    "Debug": {
+      "label": "Debugging and logging",
+      "description": "Control the debugging page, log output and console display."
+    },
+    "IrfanView": {
+      "label": "IrfanView integration",
+      "description": "Controls whether IrfanView opens after downloads and whether download lists are created."
+    },
+    "Settings": {
+      "label": "General settings",
+      "description": "Control the download root directory, database and image information output method."
+    },
+    "Filename": {
+      "label": "Filenames and folders",
+      "description": "Controls naming rules for images, metadata files, series data, and tag folders."
+    },
+    "Authentication": {
+      "label": "Login and verification",
+      "description": "Stores authentication information required for Pixiv, Fanbox and Cloudflare login."
+    },
+    "Pixiv": {
+      "label": "Pixiv downloads",
+      "description": "Controls which Pixiv works are downloaded, R-18 filters, and metadata saved to the database."
+    },
+    "FANBOX": {
+      "label": "FANBOX download",
+      "description": "Control how Fanbox covers, article HTML, and work information are saved."
+    },
+    "FFmpeg": {
+      "label": "FFmpeg conversion",
+      "description": "Controls the FFmpeg executable and arguments used to convert Ugoira into video or animated image formats."
+    },
+    "Ugoira": {
+      "label": "Ugoira animation",
+      "description": "Controls whether source Ugoira files are kept and which converted formats are created."
+    },
+    "DownloadControl": {
+      "label": "Download control",
+      "description": "Controls file-size limits, update checks, blocklists, post-processing, and archive output."
+    }
+  },
+  "fields": {
+    "Network.useproxy": {
+      "label": "Enable proxy server",
+      "description": "When set to True, all network requests will use the proxy specified by proxyAddress."
+    },
+    "Network.proxyaddress": {
+      "label": "Proxy server address",
+      "description": "Supports http, socks4, and socks5 URLs, including an optional username, password, and port."
+    },
+    "Network.useragent": {
+      "label": "Browser User-Agent",
+      "description": "Browser identification string sent to Pixiv; usually maintains the browser's current User-Agent."
+    },
+    "Network.userobots": {
+      "label": "Read robots.txt",
+      "description": "Whether to download and follow the robots.txt rules used by mechanize."
+    },
+    "Network.timeout": {
+      "label": "Connection timeout seconds",
+      "description": "The connection is considered failed after waiting for more than this number of seconds."
+    },
+    "Network.retry": {
+      "label": "Retry attempts",
+      "description": "The number of retries when a network request fails."
+    },
+    "Network.retrywait": {
+      "label": "Number of seconds to wait for retry",
+      "description": "The number of seconds to wait before each retry."
+    },
+    "Network.downloaddelay": {
+      "label": "Download delay cap",
+      "description": "Maximum random delay before downloading each work; set to 0 to disable it."
+    },
+    "Network.checknewversion": {
+      "label": "Check for new version",
+      "description": "Whether to check for new versions of PixivUtil2 on GitHub."
+    },
+    "Network.notifybetaversion": {
+      "label": "Notify about beta versions",
+      "description": "Whether to display beta version update notifications."
+    },
+    "Network.opennewversion": {
+      "label": "Open new version page",
+      "description": "Whether to automatically open the release page in the browser when a new version is discovered."
+    },
+    "Network.enablesslverification": {
+      "label": "Verify SSL certificate",
+      "description": "Whether to verify SSL certificates; disabling is only recommended if you continue to encounter SSL errors."
+    },
+    "Debug.loglevel": {
+      "label": "Log level",
+      "description": "Available values are CRITICAL, ERROR, WARNING, INFO, DEBUG, NOTSET."
+    },
+    "Debug.enabledump": {
+      "label": "Enable HTML Dump",
+      "description": "Whether to save the HTML page for debugging when an error occurs."
+    },
+    "Debug.skipdumpfilter": {
+      "label": "Skip Dump error codes",
+      "description": "Regular expression for error codes that should not save an HTML dump, such as 1.*|2.*."
+    },
+    "Debug.dumpmediumpage": {
+      "label": "Save medium pages",
+      "description": "Whether to save all medium pages for debugging."
+    },
+    "Debug.dumptagsearchpage": {
+      "label": "Save tag search page",
+      "description": "Whether to save the tag search page for debugging."
+    },
+    "Debug.debughttp": {
+      "label": "Output HTTP Header",
+      "description": "Whether to print HTTP headers in the console for diagnosing connection problems."
+    },
+    "Debug.disablelog": {
+      "label": "Disable log files",
+      "description": "Whether to disable PixivUtil2 log file output."
+    },
+    "Debug.disablescreenclear": {
+      "label": "Disable Clear Console",
+      "description": "Whether to retain the main console screen and not clear existing output during the process."
+    },
+    "IrfanView.irfanviewpath": {
+      "label": "IrfanView installation path",
+      "description": "The installation directory of IrfanView; it needs to be set when activating the IrfanView function."
+    },
+    "IrfanView.startirfanview": {
+      "label": "Launch IrfanView on exit",
+      "description": "Whether to open downloaded images in IrfanView when PixivUtil2 exits."
+    },
+    "IrfanView.startirfanslide": {
+      "label": "Launch slideshow on exit",
+      "description": "Whether to start an IrfanView slideshow when PixivUtil2 exits."
+    },
+    "IrfanView.createdownloadlists": {
+      "label": "Automatically create a download list",
+      "description": "Whether to automatically create a download list for IrfanView to use."
+    },
+    "Settings.downloadlistdirectory": {
+      "label": "Download list directory",
+      "description": "list.txt and the location where the IrfanView download list is saved; if left blank, use the PixivUtil2 directory."
+    },
+    "Settings.uselist": {
+      "label": "Read list.txt",
+      "description": "Whether to parse list.txt and use it to update member_id and custom download folder."
+    },
+    "Settings.processfromdb": {
+      "label": "Read artist folders from the database",
+      "description": "Whether to use the member_id and folder information recorded in the database."
+    },
+    "Settings.rootdirectory": {
+      "label": "Image root directory",
+      "description": "Root directory for downloaded images and work folders."
+    },
+    "Settings.downloadavatar": {
+      "label": "Download artist avatars",
+      "description": "Whether to download the artist's avatar as folder.jpg in each folder."
+    },
+    "Settings.usesuppresstags": {
+      "label": "Exclude suppressed tags",
+      "description": "Whether to remove tags listed in suppress_tags.txt from %tags%."
+    },
+    "Settings.tagslimit": {
+      "label": "Maximum number of tags",
+      "description": "Maximum number of tags included by %tags% in filenames; set to -1 to include every tag."
+    },
+    "Settings.writeimagejson": {
+      "label": "Output image JSON",
+      "description": "Whether to export compact image metadata as JSON using filenameInfoFormat."
+    },
+    "Settings.writeimageinfo": {
+      "label": "Output image text information",
+      "description": "Whether to export compact image metadata as a text file using filenameInfoFormat."
+    },
+    "Settings.writerawjson": {
+      "label": "Output raw JSON",
+      "description": "Whether to save the original unmodified image JSON from the source."
+    },
+    "Settings.rawjsonfilter": {
+      "label": "Raw JSON field filtering",
+      "description": "Comma-separate the JSON fields to remove from writeRawJSON."
+    },
+    "Settings.includeseriesjson": {
+      "label": "Output series JSON",
+      "description": "Whether to output JSON of work series information; non-series works will not have this information."
+    },
+    "Settings.writeimagexmp": {
+      "label": "Export XMP information file",
+      "description": "Whether to export image metadata to an XMP sidecar without modifying the image itself."
+    },
+    "Settings.writeimagexmpperimage": {
+      "label": "Output XMP per image",
+      "description": "Whether to output an XMP for comics or each encoded image; when enabled, it will take precedence over writeImageXMP."
+    },
+    "Settings.verifyimage": {
+      "label": "Verify download file",
+      "description": "Whether to check whether the downloaded file is a valid image or ZIP."
+    },
+    "Settings.writeurlindescription": {
+      "label": "Save URL in description",
+      "description": "Whether to write URLs found in work descriptions to a URL list in the root directory."
+    },
+    "Settings.striphtmltagsfromcaption": {
+      "label": "Remove HTML from description",
+      "description": "Whether to remove HTML tags and their content in the description when outputting metadata; link text will also be removed."
+    },
+    "Settings.urlblacklistregex": {
+      "label": "URL blacklist regex",
+      "description": "Filtering URLs in work descriptions using regular expressions."
+    },
+    "Settings.dbpath": {
+      "label": "Database path",
+      "description": "Specify the SQLite database to use; leave blank to use the default database."
+    },
+    "Settings.setlastmodified": {
+      "label": "Set file modification time",
+      "description": "Whether to set the last modification time of local files based on the upload time of Pixiv works."
+    },
+    "Settings.uselocaltimezone": {
+      "label": "Use local time zone",
+      "description": "Whether to use the local time zone when outputting text information and XMP."
+    },
+    "Settings.defaultsketchoption": {
+      "label": "Pixiv Sketch default options",
+      "description": "Skips the Pixiv Sketch prompt for member_id downloads: y always includes Sketch and n always excludes it."
+    },
+    "Filename.filenameformat": {
+      "label": "Artwork filename format",
+      "description": "File name template used for general images; reserved characters will be cleaned, and the full path can be up to 250 characters."
+    },
+    "Filename.filenamemangaformat": {
+      "label": "Comic page file name format",
+      "description": "The file name template used for each page of the comic; can be used with %page_index% or %page_number%."
+    },
+    "Filename.filenameinfoformat": {
+      "label": "Image information file name format",
+      "description": "File name template used for image JSON, text information, XMP and other information files."
+    },
+    "Filename.filenamemangainfoformat": {
+      "label": "Comic information file name format",
+      "description": "The file name template used for comic information files."
+    },
+    "Filename.filenameseriesjson": {
+      "label": "Series JSON file name format",
+      "description": "The file name template used by series information JSON, commonly used are %manga_series_id% and %manga_series_title%."
+    },
+    "Filename.filenameformatsketch": {
+      "label": "Pixiv Sketch file name format",
+      "description": "File name template used in Pixiv Sketch works."
+    },
+    "Filename.filenameformatnovel": {
+      "label": "Novel filename format",
+      "description": "Filename template for Pixiv novels; commonly includes the series ID, series order, and URL filename."
+    },
+    "Filename.avatarnameformat": {
+      "label": "Avatar file name format",
+      "description": "File name template used by artist avatars; fewer available substitution variables than for regular images."
+    },
+    "Filename.backgroundnameformat": {
+      "label": "Background image file name format",
+      "description": "Filename template for artist background images; fewer substitution variables are available than for regular images."
+    },
+    "Filename.tagsseparator": {
+      "label": "Tag separator",
+      "description": "The delimiting character used between tags in a file name; %space% or %ideo_space% can be used."
+    },
+    "Filename.createmangadir": {
+      "label": "Create comic folder",
+      "description": "When downloading comics mode, whether to create a folder based on the _pxx segment of image_id."
+    },
+    "Filename.usetagsasdir": {
+      "label": "Create folders with search tags",
+      "description": "Whether to append the query tags of tagslist.txt to the root directory as the saving folder."
+    },
+    "Filename.urldumpfilename": {
+      "label": "URL list file name format",
+      "description": "URL list file name in strftime format; default is url_list_%Y%m%d."
+    },
+    "Filename.usetranslatedtag": {
+      "label": "Use translated tags",
+      "description": "Whether to use translated tags for %tags% in the file name."
+    },
+    "Filename.tagtranslationlocale": {
+      "label": "Tag translation language",
+      "description": "Locale used to translate tags, such as en."
+    },
+    "Filename.custombadchars": {
+      "label": "Custom invalid-character rules",
+      "description": "Regular-expression rules applied when sanitizing filenames."
+    },
+    "Filename.customcleanupre": {
+      "label": "Custom filename cleanup rules",
+      "description": "Regular expressions that remove or clean filename content using PixivUtil2 cleanup syntax."
+    },
+    "Authentication.username": {
+      "label": "Pixiv username",
+      "description": "Pixiv username or email address for OAuth login."
+    },
+    "Authentication.password": {
+      "label": "Pixiv password",
+      "description": "OAuth password for login; PixivUtil2 will read this setting in clear text, please protect the file properly."
+    },
+    "Authentication.cookie": {
+      "label": "Pixiv Cookies",
+      "description": "Pixiv login cookie; may be automatically updated by PixivUtil2 after successful login."
+    },
+    "Authentication.cookiefanbox": {
+      "label": "Fanbox Cookies",
+      "description": "Cookies used by fanbox.cc usually do not need to be filled in manually."
+    },
+    "Authentication.cookiefanboxtemp": {
+      "label": "Fanbox temporary cookies",
+      "description": "A temporary cookie used by the Fanbox login process."
+    },
+    "Authentication.refresh_token": {
+      "label": "OAuth Refresh Token",
+      "description": "OAuth refresh token used to avoid frequent sign-ins; normally generated automatically during login."
+    },
+    "Authentication.cf_clearance": {
+      "label": "Cloudflare clearance",
+      "description": "Cloudflare clearance cookie; only required when encountering Cloudflare verification."
+    },
+    "Authentication.cf_bm": {
+      "label": "Cloudflare bot management",
+      "description": "Cloudflare bot management Cookie; fill in only if required."
+    },
+    "Pixiv.numberofpage": {
+      "label": "Maximum number of pages processed",
+      "description": "Number of pages to process; set to 0 to process all pages."
+    },
+    "Pixiv.r18mode": {
+      "label": "Download R-18 only",
+      "description": "Whether to list only works tagged R-18 when searching for members, bookmarks, and tags."
+    },
+    "Pixiv.r18type": {
+      "label": "R-18 type filter",
+      "description": "0 means downloading both R-18 and R-18G, 1 means downloading only R-18, and 2 means downloading only R-18G."
+    },
+    "Pixiv.dateformat": {
+      "label": "Pixiv date format",
+      "description": "The strftime format of Pixiv datetime; leave blank to use the default YYYY-MM-DD."
+    },
+    "Pixiv.autoaddmember": {
+      "label": "Add artists automatically",
+      "description": "Whether to automatically write the artist member_id into the database during all downloads."
+    },
+    "Pixiv.autoaddtag": {
+      "label": "Automatically add tags",
+      "description": "Whether to automatically write the work tags into the database when downloading."
+    },
+    "Pixiv.autoaddcaption": {
+      "label": "Automatically add description",
+      "description": "Whether to automatically write the work description into the database when downloading."
+    },
+    "Pixiv.autoaddseries": {
+      "label": "Add series automatically",
+      "description": "Whether to automatically write series information into the database during all downloads."
+    },
+    "Pixiv.aidisplayfewer": {
+      "label": "Exclude AI-generated works",
+      "description": "Whether to exclude AI-generated works whose aiType is 2."
+    },
+    "FANBOX.filenameformatfanboxcover": {
+      "label": "Fanbox cover file name format",
+      "description": "The file name template used by Fanbox article cover images."
+    },
+    "FANBOX.filenameformatfanboxcontent": {
+      "label": "Fanbox content file name format",
+      "description": "The file name template used for images in Fanbox articles."
+    },
+    "FANBOX.filenameformatfanboxinfo": {
+      "label": "Fanbox information file name format",
+      "description": "File name template used by Fanbox article information and HTML."
+    },
+    "FANBOX.writehtml": {
+      "label": "Output Fanbox HTML",
+      "description": "Whether to write Fanbox articles as HTML; non-articles will be judged based on text length and number of pictures."
+    },
+    "FANBOX.mintextlengthfornonarticle": {
+      "label": "Minimum text length for non-articles",
+      "description": "When writeHtml is enabled, the minimum amount of text that non-articles must have before outputting HTML."
+    },
+    "FANBOX.minimagecountfornonarticle": {
+      "label": "Minimum number of images for non-articles",
+      "description": "When writeHtml is enabled, the minimum number of images that non-articles must have before outputting HTML."
+    },
+    "FANBOX.useabsolutepathsinhtml": {
+      "label": "HTML uses absolute paths",
+      "description": "Whether Fanbox HTML uses absolute file paths; False uses relative paths."
+    },
+    "FANBOX.downloadcoverwhenrestricted": {
+      "label": "Download restricted article covers",
+      "description": "Whether to still download article covers when Fanbox articles are restricted."
+    },
+    "FANBOX.downloadcover": {
+      "label": "Download Fanbox cover",
+      "description": "Whether to download cover images for Fanbox articles."
+    },
+    "FANBOX.checkdbprocesshistory": {
+      "label": "Check Fanbox processing history",
+      "description": "Whether to skip unchanged Fanbox articles based on updated_date in the database."
+    },
+    "FANBOX.listpathfanbox": {
+      "label": "Fanbox creator list file",
+      "description": "Fanbox creator list with one creator per line; the native setting does not support a custom path."
+    },
+    "FFmpeg.ffmpeg": {
+      "label": "FFmpeg executable",
+      "description": "FFmpeg executable file path; you can fill in the full path or the file name that can be found in the system PATH."
+    },
+    "FFmpeg.ffmpegcodec": {
+      "label": "WebM encoder",
+      "description": "The FFmpeg codec used when building WebM, such as libvpx-vp9."
+    },
+    "FFmpeg.ffmpegext": {
+      "label": "WebM file extension",
+      "description": "The container extension used when building WebM."
+    },
+    "FFmpeg.ffmpegparam": {
+      "label": "WebM FFmpeg parameters",
+      "description": "The complete parameters passed to FFmpeg when building WebM."
+    },
+    "FFmpeg.mkvcodec": {
+      "label": "MKV encoder",
+      "description": "The codec used when creating MKV; copy means no recoding."
+    },
+    "FFmpeg.mkvparam": {
+      "label": "MKV FFmpeg parameters",
+      "description": "Parameters passed to FFmpeg when building MKV."
+    },
+    "FFmpeg.webpcodec": {
+      "label": "WebP encoder",
+      "description": "A codec used when building WebP animations, such as libwebp."
+    },
+    "FFmpeg.webpparam": {
+      "label": "WebP FFmpeg parameters",
+      "description": "The complete parameters passed to FFmpeg when creating WebP animations."
+    },
+    "FFmpeg.gifparam": {
+      "label": "GIF FFmpeg parameters",
+      "description": "The complete parameters passed to FFmpeg when creating a GIF, usually including palettegen/paletteuse."
+    },
+    "FFmpeg.apngparam": {
+      "label": "APNG FFmpeg parameters",
+      "description": "The complete parameters passed to FFmpeg when creating the APNG."
+    },
+    "FFmpeg.avifcodec": {
+      "label": "AVIF encoder",
+      "description": "Codec used when creating AVIF animations, such as libaom-av1."
+    },
+    "FFmpeg.avifparam": {
+      "label": "AVIF FFmpeg parameters",
+      "description": "The complete parameters passed to FFmpeg when creating an AVIF animation."
+    },
+    "FFmpeg.verboseoutput": {
+      "label": "Show FFmpeg verbose output",
+      "description": "Whether to display detailed commands and output content of FFmpeg."
+    },
+    "Ugoira.writeugoirainfo": {
+      "label": "Export Ugoira frame information",
+      "description": "Whether to write Ugoira information for each frame into the information ZIP; writeImageJSON will also include this information."
+    },
+    "Ugoira.createugoira": {
+      "label": "Create Ugoira file",
+      "description": "Whether to create Pixiv's native .ugoira animation file."
+    },
+    "Ugoira.createmkv": {
+      "label": "Create MKV",
+      "description": "Whether to convert Ugoira to MKV; requires FFmpeg, the default is usually no re-encoding."
+    },
+    "Ugoira.createwebm": {
+      "label": "Build WebM",
+      "description": "Whether to convert Ugoira to WebM; requires FFmpeg."
+    },
+    "Ugoira.createwebp": {
+      "label": "Build WebP",
+      "description": "Whether to convert Ugoira to animated WebP; requires FFmpeg."
+    },
+    "Ugoira.creategif": {
+      "label": "Create GIF",
+      "description": "Whether to convert Ugoira to GIF; requires FFmpeg."
+    },
+    "Ugoira.createapng": {
+      "label": "Create APNG",
+      "description": "Whether to convert Ugoira to animated PNG; requires FFmpeg."
+    },
+    "Ugoira.createavif": {
+      "label": "Create AVIF",
+      "description": "Whether to convert Ugoira to animated AVIF; requires FFmpeg."
+    },
+    "Ugoira.deleteugoira": {
+      "label": "Delete Ugoira after conversion",
+      "description": "Whether to delete the generated .ugoira file after the conversion is completed."
+    },
+    "Ugoira.deletezipfile": {
+      "label": "Delete ZIP after conversion",
+      "description": "Whether to delete the original ZIP image file after Ugoira conversion is completed."
+    },
+    "DownloadControl.minfilesize": {
+      "label": "Minimum file size",
+      "description": "Skip files smaller than this size; set to 0 to disable this limit."
+    },
+    "DownloadControl.maxfilesize": {
+      "label": "Maximum file size",
+      "description": "Skip files larger than this size; set to 0 to disable this limit."
+    },
+    "DownloadControl.checklastmodified": {
+      "label": "Check file modification time",
+      "description": "Skip if the local file modification time is the same as the work upload time; setLastModified needs to be enabled."
+    },
+    "DownloadControl.alwayscheckfilesize": {
+      "label": "Always check file size",
+      "description": "Even if there is already a record in the database, re-obtain the remote size to confirm the file status."
+    },
+    "DownloadControl.overwrite": {
+      "label": "Overwrite files of different sizes",
+      "description": "Whether to delete the old file and re-download it when the file sizes are different; backupOldFile can save the old file first."
+    },
+    "DownloadControl.backupoldfile": {
+      "label": "Back up old files",
+      "description": "Whether to rename the old file to a backup file with Unix time before re-downloading."
+    },
+    "DownloadControl.daylastupdated": {
+      "label": "Number of days between artist updates",
+      "description": "Only process member_ids that have been at least this many days since the last check."
+    },
+    "DownloadControl.checkupdatedlimit": {
+      "label": "Downloaded works check upper limit",
+      "description": "Jump to the next member_id after seeing the specified number of existing works; alwaysCheckFileSize needs to be turned off."
+    },
+    "DownloadControl.useblacklisttags": {
+      "label": "Enable tag blacklist",
+      "description": "Works containing the blacklist_tags.txt tag will be skipped."
+    },
+    "DownloadControl.useblacklisttitles": {
+      "label": "Enable title blacklist",
+      "description": "Works whose titles contain the string blacklist_titles.txt will be skipped."
+    },
+    "DownloadControl.useblacklisttitlesregex": {
+      "label": "Compare titles using regular expressions",
+      "description": "Whether to treat each line in the title blocklist as a regular expression."
+    },
+    "DownloadControl.datediff": {
+      "label": "Work age limit",
+      "description": "Only process new works within the specified number of days; set to 0 to disable it."
+    },
+    "DownloadControl.enableinfiniteloop": {
+      "label": "Enable infinite loop for tag downloads",
+      "description": "Whether to continuously poll for new entries when tag downloads are performed in newest to oldest order."
+    },
+    "DownloadControl.useblacklistmembers": {
+      "label": "Enable artist blocklist",
+      "description": "Skip the specified member_id according to blacklist_members.txt in the application directory."
+    },
+    "DownloadControl.downloadresized": {
+      "label": "Download medium size image",
+      "description": "Whether to download medium size images instead of original size."
+    },
+    "DownloadControl.skipunknownsize": {
+      "label": "Skip files of unknown size",
+      "description": "Whether to skip downloading when alwaysCheckFileSize is enabled but the remote size is unknown."
+    },
+    "DownloadControl.enablepostprocessing": {
+      "label": "Enable post-download processing",
+      "description": "Whether to execute postProcessingCmd after each file is downloaded."
+    },
+    "DownloadControl.postprocessingcmd": {
+      "label": "Post-download command",
+      "description": "The command to be executed after each download is completed; use %filename% to substitute the file name, and command errors will not be handled."
+    },
+    "DownloadControl.extensionfilter": {
+      "label": "File extension filter",
+      "description": "Acceptable file extensions are separated by |, for example jpg|png|gif|ugoira."
+    },
+    "DownloadControl.downloadbuffer": {
+      "label": "Download buffer KB",
+      "description": "The download buffer size (KB) to use before writing to disk; usually leave it at the default of 512."
+    },
+    "DownloadControl.createpixivarchive": {
+      "label": "Create Pixiv zip file",
+      "description": "Whether to download the work as a ZIP archive instead of creating a folder."
+    },
+    "DownloadControl.createpixivarchivecompressiontype": {
+      "label": "Compression algorithm",
+      "description": "ZIP_STORED, ZIP_DEFLATED, ZIP_BZIP2, or ZIP_LZMA; the default ZIP_STORED is no compression."
+    },
+    "DownloadControl.createpixivarchivecompressionlevel": {
+      "label": "Compression level",
+      "description": "The compression level used by ZIP_DEFLATED or ZIP_BZIP2; valid range is 0 to 9."
+    },
+    "DownloadControl.autoextractzip": {
+      "label": "Automatically decompress ZIP",
+      "description": "Whether to automatically decompress and organize the contents after downloading the ZIP."
+    },
+    "DownloadControl.deletezipafterextract": {
+      "label": "Delete ZIP after unzipping",
+      "description": "Whether to delete the original ZIP file after automatic decompression is completed."
+    }
+  }
+}

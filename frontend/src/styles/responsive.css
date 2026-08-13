@@ -215,7 +215,7 @@
     bottom: 0.75rem;
     left: 0.75rem;
     width: auto;
-    padding: 1rem;
+    padding: 0;
   }
 
   .fullscreen-viewer__details h4 {

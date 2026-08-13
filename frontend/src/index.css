@@ -29,6 +29,7 @@ body {
     --ui-control-height: 2.5rem;
     --ui-control-radius: 999px;
     --ui-field-radius: 0.75rem;
+    --ui-card-radius: 0.75rem;
     --ui-field-height: 2.75rem;
 
     /* Readable type floors: regular UI text is 14px on desktop and 15px on

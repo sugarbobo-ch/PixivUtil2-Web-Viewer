@@ -2,6 +2,7 @@ import React, { useEffect, useRef } from 'react';
 import { AlertTriangle, RefreshCw, Trash2 } from 'lucide-react';
 import { Button } from './ui/Button';
 import { useModalFocusTrap } from '../utils/useModalFocusTrap';
+import { useI18n } from '../i18n';
 
 type ConfirmModalVariant = 'danger' | 'primary';
 
@@ -20,12 +21,15 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({
   isOpen,
   title,
   message,
-  confirmLabel = '確定刪除',
-  cancelLabel = '取消',
+  confirmLabel,
+  cancelLabel,
   variant = 'danger',
   onConfirm,
   onCancel,
 }) => {
+  const { t } = useI18n();
+  const resolvedConfirmLabel = confirmLabel ?? t('common.confirmDelete');
+  const resolvedCancelLabel = cancelLabel ?? t('common.cancel');
   const dialogRef = useRef<HTMLDivElement>(null);
   const cancelButtonRef = useRef<HTMLButtonElement>(null);
 
@@ -89,7 +93,7 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({
             onClick={onCancel}
             variant="plain"
           >
-            {cancelLabel}
+            {resolvedCancelLabel}
           </Button>
 
           <Button
@@ -98,7 +102,7 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({
             variant={isPrimary ? 'primary' : 'danger'}
           >
             <ActionIcon className="w-4 h-4" aria-hidden="true" />
-            <span>{confirmLabel}</span>
+            <span>{resolvedConfirmLabel}</span>
           </Button>
         </div>
       </div>

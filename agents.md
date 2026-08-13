@@ -5,7 +5,10 @@
 ## 快速專案導覽
 
 - 新 Agent 先讀 `docs/ai-agent-project-map.md`，掌握前後端入口、資料責任、常見任務路由與驗證矩陣。
-- 第一次執行專案或需要重現開發環境時，讀根目錄英文 `README.md`；繁中操作說明在 `README.zh-TW.md`。
+- 第一次執行專案或需要重現開發環境時，讀根目錄 `README.md`；繁中、簡中與日文操作說明分別在 `README.zh-TW.md`、`README.zh-CN.md`、`README.ja.md`。
+- 修改介面語言、可見文案、日期／數字格式、translation key、`config.ini` 欄位名稱或說明前，必須先讀 `docs/i18n-maintenance-guide.md`，並維持四份 locale JSON 的 key 與 placeholder 一致。
+- 修改單頁／雙頁閱讀、書頁配對、閱讀方向、spread 導覽或 announcement 前，必須先讀 `docs/fullscreen-spread-reader-spec.md`。
+- 修改全域 Gallery 載入、chunk／pin／LRU、月份版面、MonthQuickNav、跨月份 smooth scroll、拖曳 scrub、active month 指標或相關容量上限前，必須先讀 `docs/global-gallery-navigation-contract.md`，並以其中的不可破壞契約與通過條件驗收。
 - 本文件仍是 UI、資料操作與交付流程的強制規範；快速導覽文件不可覆寫本文件要求。
 
 ## 禁止的視覺語言
@@ -65,7 +68,14 @@
 1. 先用 `rg` 定位元件、class、token 與 theme 覆寫，並保留工作區既有修改。
 2. 以最小範圍修改實作；跨元件共用的視覺規則放在對應的 `frontend/src/styles/*.css`，不要散落在 JSX。
 3. 使用 `apply_patch` 修改檔案；移除檔案或資料時遵守可復原處理規則，不使用硬刪除。
-4. 執行 `pnpm.cmd build`，確認 TypeScript 與 Vite build 通過，再回報實際修改檔案與尚未完成的視覺驗證。
+4. 在 `frontend/` 執行 `..\.runtime\pnpm\pnpm.cmd build`，確認 TypeScript 與 Vite build 通過，再回報實際修改檔案與尚未完成的視覺驗證。
+
+## 開發伺服器隔離
+
+- 驗證預設使用 build、type-check 與不需常駐服務的測試；既有 listening port 與 dev server 一律視為使用者持有，不重啟、不停止，也不接管其程序。
+- 必須進行 live server 或瀏覽器驗證時，先選擇未占用且不同於專案預設值的臨時 port，並記錄本次由 Agent 啟動的 PID、完整命令與 port。
+- 清理只針對本次 Agent 明確啟動且身分核對相符的 PID。禁止依 port、程序名稱或模糊條件批次終止程序，包括停止所有 Node、Python 或 dev server。
+- 若測試工具只能使用已占用的固定 port，改用可配置的替代 port；無法隔離時回報限制，不得關閉既有 listener。完成條件是 Agent 啟動的程序已結束，且執行前已存在的 listener 仍保持運作。
 
 ## 強制禁止紫色、陰影與光暈
 
@@ -96,7 +106,7 @@
 - `IconButton` requires an accessible `aria-label`. Keep `tab` controls separate so their existing flat indicator is not changed by the action-button primitive.
 - Local component CSS may only override semantic token scope or layout. It must not reintroduce a different radius, shadow, glow, underline hover, or color utility for a migrated button.
 - Metadata and status labels should use `frontend/src/components/ui/Badge.tsx` and its semantic variants (`neutral`, `primary`, `hud`, `surface`, `success`, `danger`). Badges are non-interactive full pills; icon-only badges may use the circular `iconOnly` form.
-- Webtoon floating controls must reuse `Button` / `IconButton` variants and keep the current page indicator visible as `current / total` while collapsed; thumbnail, HUD, and reader metadata page labels use the same `current / total` format.
+- Webtoon floating controls must reuse `Button` / `IconButton` variants. Existing thumbnail and content page labels use the `current / total` format and follow `webtoonShowPageNumber`; collapsing the toolbar or hiding thumbnails must not create an additional persistent page HUD.
 
 ## Agent 交接：本次 Pixiv UI 調整的已實作基準
 
@@ -120,7 +130,7 @@
 - 所有 metadata、頁碼、組圖與影片 badge 使用 `Badge`，badge 是非互動資訊且以完整膠囊為主；不要自行建立另一套圓角、hover 或高彩度 badge。
 - Settings modal 的關閉 X 使用 `IconButton`；「顯示與瀏覽」分為一般瀏覽、全螢幕模式、條漫模式。全螢幕包含 `fullscreenShowThumbnails`，條漫包含縮放、間距、資訊、頁碼與縮圖導覽設定。
 - `fullscreenShowThumbnails` 只控制進入全螢幕時的橫式縮圖導覽預設值，仍可在 viewer toolbar 暫時切換；舊設定缺欄位時由 normalize／backend default 補成 `true`。
-- Webtoon floating toolbar、縮圖與 HUD 的頁碼統一顯示 `current / total`；收合後仍須保留目前頁碼與總頁數。條漫縮圖不得加黑框。
+- Webtoon 既有縮圖與內容頁碼統一顯示 `current / total`，並受 `webtoonShowPageNumber` 控制；工具列收合或隱藏縮圖時不得額外新增常駐頁碼 HUD。條漫縮圖不得加黑框。
 - Grid card 預設不顯示作品名稱，作品名稱只在 hover／focus 時顯示；作品 badge 仍使用 shared `Badge`。Footer、fullscreen toolbar、sidebar、settings、mobile menu 也必須沿用相同 button primitive。
 - Settings config path 使用留白與低對比結構分隔，不用大型彩色色塊；搜尋圖示需保留固定空間避免文字錯位；分類 tab 必須可水平滑動。
 
@@ -136,4 +146,4 @@
 1. 先用 `rg` 檢查修改範圍的紫色系 class／色值、shadow／glow 宣告，以及 Tailwind utility 是否覆蓋 semantic rule。
 2. 檢查 normal、hover、active、selected、focus-visible、disabled；至少涵蓋窄手機、一般 desktop、長文字、light／dark、fullscreen 與 webtoon。
 3. 確認 tab、dropdown、搜尋列、modal X、footer 分頁與 icon-only control 沒有位移、裁切或不可水平滑動；檢查鍵盤 focus、Escape、focus trap、touch target 與 reduced motion。
-4. UI 或 CSS 變更在 `frontend/` 工作目錄執行 `pnpm.cmd build`；文件變更至少執行 `git diff --check`，並在交付時回報尚未做的實際 render 驗證。
+4. UI 或 CSS 變更在 `frontend/` 工作目錄執行 `..\.runtime\pnpm\pnpm.cmd build`；文件變更至少執行 `git diff --check`，並在交付時回報尚未做的實際 render 驗證。

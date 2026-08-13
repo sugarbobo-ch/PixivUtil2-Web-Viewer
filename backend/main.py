@@ -149,7 +149,15 @@ def get_media_source_service() -> MediaSourceService:
 
 
 def is_valid_thumbnail_file(thumb_path: str) -> bool:
-    """Check that a generated WebP can be decoded before serving it."""
+    """Fast check to verify an existing thumbnail file on disk."""
+    try:
+        return os.path.isfile(thumb_path) and os.path.getsize(thumb_path) > 0
+    except OSError:
+        return False
+
+
+def verify_generated_thumbnail(thumb_path: str) -> bool:
+    """Verify that a newly generated thumbnail WebP file can be decoded before serving."""
     if not os.path.isfile(thumb_path):
         return False
     try:
@@ -221,6 +229,7 @@ LEGACY_SIDEBAR_DEFAULT_WIDTHS = {300, 500, "300", "500"}
 
 DEFAULT_WEB_CONFIG = {
     "webTheme": "dark",
+    "uiLanguage": "zh-TW",
     "defaultViewMode": "fullscreen",
     "thumbnailSize": 320,
     "itemsPerPage": 200,
@@ -238,6 +247,9 @@ DEFAULT_WEB_CONFIG = {
     "fullscreenShowToolbar": True,
     "fullscreenShowThumbnails": True,
     "fullscreenShowCheckerboard": True,
+    "fullscreenPageLayout": "single",
+    "fullscreenReadingDirection": "ltr",
+    "fullscreenSpreadPairing": "cover-single",
     "fullscreenZoomMode": "auto",
     "fullscreenVideoSeekSeconds": 5,
     "fullscreenVideoHoldPlaybackRate": 2,
@@ -290,6 +302,10 @@ def normalize_web_config_file(data: Any) -> Dict[str, Any]:
         "webtoon" if normalized.get("defaultViewMode") == "webtoon" else "fullscreen"
     )
     normalized["webTheme"] = "light" if normalized.get("webTheme") == "light" else "dark"
+    normalized["uiLanguage"] = normalized.get("uiLanguage") if normalized.get("uiLanguage") in {"zh-TW", "zh-CN", "en", "ja"} else DEFAULT_WEB_CONFIG["uiLanguage"]
+    normalized["fullscreenPageLayout"] = normalized.get("fullscreenPageLayout") if normalized.get("fullscreenPageLayout") in {"single", "spread"} else DEFAULT_WEB_CONFIG["fullscreenPageLayout"]
+    normalized["fullscreenReadingDirection"] = normalized.get("fullscreenReadingDirection") if normalized.get("fullscreenReadingDirection") in {"ltr", "rtl"} else DEFAULT_WEB_CONFIG["fullscreenReadingDirection"]
+    normalized["fullscreenSpreadPairing"] = normalized.get("fullscreenSpreadPairing") if normalized.get("fullscreenSpreadPairing") in {"cover-single", "first-page"} else DEFAULT_WEB_CONFIG["fullscreenSpreadPairing"]
     if normalized.get("fullscreenZoomMode") not in {"auto", "lock", "width", "height", "fit", "fill"}:
         normalized["fullscreenZoomMode"] = DEFAULT_WEB_CONFIG["fullscreenZoomMode"]
     if normalized.get("librarySourceMode") not in {"unconfigured", "pixiv", "folder"}:
@@ -636,7 +652,7 @@ def get_thumbnail(
         if generate_thumbnail_once(
             thumb_path,
             lambda temporary_path: extract_video_frame(resolved, temporary_path, width, height),
-            is_valid_thumbnail_file,
+            verify_generated_thumbnail,
         ):
             if source_stat is not None:
                 library_jobs.record_thumbnail_cache_access(
@@ -666,7 +682,7 @@ def get_thumbnail(
             return False
 
     try:
-        if not generate_thumbnail_once(thumb_path, generate_raster_thumbnail, is_valid_thumbnail_file):
+        if not generate_thumbnail_once(thumb_path, generate_raster_thumbnail, verify_generated_thumbnail):
             return Response(
                 content=generate_media_error_svg(filename),
                 media_type="image/svg+xml",

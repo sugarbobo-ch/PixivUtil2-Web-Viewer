@@ -1,10 +1,12 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import '../styles/recycle-bin.css';
 import { Folder, Search, Trash2, X } from 'lucide-react';
 import { ConfirmModal } from './ConfirmModal';
 import { CustomSelect } from './CustomSelect';
 import { Badge, Button, IconButton, Input } from './ui';
 import { RecycleEntry } from '../types';
 import { apiClient } from '../api/client';
+import { useI18n } from '../i18n';
 
 interface RecycleBinModalProps {
   isOpen: boolean;
@@ -20,20 +22,21 @@ const focusableSelector = [
   '[tabindex]:not([tabindex="-1"])',
 ].join(', ');
 
-const formatBytes = (bytes: number | null) => {
-  if (!Number.isFinite(bytes) || !bytes || bytes <= 0) return '大小未知';
-  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
-};
-
-const formatDate = (value: string) => {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat('zh-TW', { dateStyle: 'medium', timeStyle: 'short' }).format(date);
+const formatBytes = (
+  bytes: number | null,
+  formatNumber: (value: number, options?: Intl.NumberFormatOptions) => string,
+  unknownLabel: string,
+) => {
+  if (!Number.isFinite(bytes) || !bytes || bytes <= 0) return unknownLabel;
+  if (bytes < 1024 * 1024) return `${formatNumber(Math.max(1, Math.round(bytes / 1024)))} KB`;
+  if (bytes < 1024 * 1024 * 1024) {
+    return `${formatNumber(bytes / (1024 * 1024), { minimumFractionDigits: 1, maximumFractionDigits: 1 })} MB`;
+  }
+  return `${formatNumber(bytes / (1024 * 1024 * 1024), { minimumFractionDigits: 2, maximumFractionDigits: 2 })} GB`;
 };
 
 export const RecycleBinModal: React.FC<RecycleBinModalProps> = ({ isOpen, onClose }) => {
+  const { t, formatNumber, formatDate } = useI18n();
   const [entries, setEntries] = useState<RecycleEntry[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [artistFilter, setArtistFilter] = useState('all');
@@ -53,7 +56,7 @@ export const RecycleBinModal: React.FC<RecycleBinModalProps> = ({ isOpen, onClos
       const data = await apiClient.recycleBin.list();
       setEntries(data.entries);
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : '讀取回收區失敗');
+      setError(loadError instanceof Error ? loadError.message : t('recycle.loadFailed'));
     } finally {
       setLoading(false);
     }
@@ -83,7 +86,7 @@ export const RecycleBinModal: React.FC<RecycleBinModalProps> = ({ isOpen, onClos
       window.setTimeout(() => {
         if (document.querySelector('.recycle-bin-modal')) return;
         const fallbackElement = Array.from(document.querySelectorAll<HTMLElement>(
-          '[aria-label="開啟設定"], [aria-label="切換功能選單"], [aria-label="開啟篩選條件"]',
+          '[data-focus-fallback="settings"], [data-focus-fallback="menu"], [data-focus-fallback="sidebar"]',
         )).find(candidate => candidate.getClientRects().length > 0);
         if (element && document.contains(element)) {
           element.focus({ preventScroll: true });
@@ -132,9 +135,9 @@ export const RecycleBinModal: React.FC<RecycleBinModalProps> = ({ isOpen, onClos
   ), [entries]);
 
   const artistFilterOptions = useMemo(() => [
-    { value: 'all', label: '所有繪師' },
+    { value: 'all', label: t('common.allArtists') },
     ...artistOptions,
-  ], [artistOptions]);
+  ], [artistOptions, t]);
 
   const visibleEntries = useMemo(() => {
     const query = searchQuery.trim().toLocaleLowerCase();
@@ -151,14 +154,14 @@ export const RecycleBinModal: React.FC<RecycleBinModalProps> = ({ isOpen, onClos
     visibleEntries.forEach(entry => {
       const key = entry.folder_id || `legacy:${entry.member_id ?? entry.artist_name}`;
       const group = groups.get(key) || {
-        label: entry.artist_name || '未分類作品',
+        label: entry.artist_name || t('recycle.uncategorized'),
         entries: [],
       };
       group.entries.push(entry);
       groups.set(key, group);
     });
     return Array.from(groups.entries());
-  }, [visibleEntries]);
+  }, [t, visibleEntries]);
 
   const sendToSystemRecycleBin = async () => {
     if (!confirmTarget || actionLoading) return;
@@ -171,10 +174,13 @@ export const RecycleBinModal: React.FC<RecycleBinModalProps> = ({ isOpen, onClos
       setConfirmTarget(null);
       await loadEntries();
       if (Array.isArray(data.errors) && data.errors.length > 0) {
-        setError(`已處理 ${typeof data.moved === 'number' ? data.moved : 0} 項，但仍有部分項目未完成：${data.errors.join('；')}`);
+        setError(t('recycle.partialFailure', {
+          count: formatNumber(typeof data.moved === 'number' ? data.moved : 0),
+          errors: data.errors.join('；'),
+        }));
       }
     } catch (actionError) {
-      setError(actionError instanceof Error ? actionError.message : '移至系統資源回收筒失敗');
+      setError(actionError instanceof Error ? actionError.message : t('recycle.sendFailed'));
     } finally {
       setActionLoading(false);
     }
@@ -202,24 +208,24 @@ export const RecycleBinModal: React.FC<RecycleBinModalProps> = ({ isOpen, onClos
         >
           <header className="recycle-bin-modal__header flex shrink-0 items-start justify-between gap-4">
             <div className="min-w-0">
-              <p className="recycle-bin-modal__eyebrow font-semibold">可復原檔案管理</p>
-              <h2 id="recycle-bin-title" className="mt-1 truncate text-lg font-bold">回收區</h2>
-              <p id="recycle-bin-description" className="recycle-bin-modal__description mt-1 leading-5">這裡的檔案尚未永久刪除；執行後會交給 Windows 資源回收筒，仍可從系統還原。</p>
+              <p className="recycle-bin-modal__eyebrow font-semibold">{t('recycle.eyebrow')}</p>
+              <h2 id="recycle-bin-title" className="mt-1 truncate text-lg font-bold">{t('recycle.title')}</h2>
+              <p id="recycle-bin-description" className="recycle-bin-modal__description mt-1 leading-5">{t('recycle.description')}</p>
             </div>
-            <IconButton ref={closeButtonRef} type="button" onClick={onClose} variant="ghost" aria-label="關閉回收區" title="關閉回收區">
+            <IconButton ref={closeButtonRef} type="button" onClick={onClose} variant="ghost" aria-label={t('recycle.close')} title={t('recycle.close')}>
               <X className="h-5 w-5" aria-hidden="true" />
             </IconButton>
           </header>
 
           <div className="recycle-bin-modal__toolbar flex shrink-0 flex-wrap items-center">
             <label className="recycle-bin-modal__search min-w-[12rem] flex-1">
-              <span className="sr-only">搜尋回收區</span>
+              <span className="sr-only">{t('recycle.searchLabel')}</span>
               <Input
                 controlSize="md"
                 type="search"
                 value={searchQuery}
                 onChange={event => setSearchQuery(event.target.value)}
-                placeholder="搜尋檔名、繪師或原始路徑"
+                placeholder={t('recycle.searchPlaceholder')}
                 leadingIcon={<Search aria-hidden="true" />}
                 clearable
                 onClear={() => setSearchQuery('')}
@@ -231,13 +237,13 @@ export const RecycleBinModal: React.FC<RecycleBinModalProps> = ({ isOpen, onClos
                 value={artistFilter}
                 options={artistFilterOptions}
                 onChange={setArtistFilter}
-                ariaLabel="依繪師篩選"
+                ariaLabel={t('recycle.filterByArtist')}
                 className="recycle-bin-modal__select"
                 menuPlacement="end"
               />
             </div>
             <Badge variant="neutral" size="sm" className="recycle-bin-modal__count">
-              {visibleEntries.length} / {entries.length} 項
+              {t('recycle.count', { visible: formatNumber(visibleEntries.length), total: formatNumber(entries.length) })}
             </Badge>
             <Button
               type="button"
@@ -247,7 +253,7 @@ export const RecycleBinModal: React.FC<RecycleBinModalProps> = ({ isOpen, onClos
               className="recycle-bin-modal__bulk-action"
             >
               <Trash2 className="h-4 w-4" aria-hidden="true" />
-              移至資源回收筒
+              {t('recycle.sendAll')}
             </Button>
           </div>
 
@@ -256,14 +262,14 @@ export const RecycleBinModal: React.FC<RecycleBinModalProps> = ({ isOpen, onClos
           <div className="recycle-bin-modal__content min-h-0 flex-1 overflow-y-auto">
             {loading ? (
               <div className="recycle-bin-modal__empty" role="status" aria-live="polite" aria-busy="true">
-                <div className="recycle-bin-modal__empty-icon" aria-hidden="true"><Trash2 className="h-6 w-6" /></div>
-                <p className="text-sm font-semibold">正在讀取回收區…</p>
+              <div className="recycle-bin-modal__empty-icon" aria-hidden="true"><Trash2 className="h-6 w-6" /></div>
+                <p className="text-sm font-semibold">{t('recycle.loading')}</p>
               </div>
             ) : groupedEntries.length === 0 ? (
               <div className="recycle-bin-modal__empty" role="status">
                 <div className="recycle-bin-modal__empty-icon" aria-hidden="true"><Trash2 className="h-6 w-6" /></div>
-                <p className="text-sm font-semibold">回收區目前是空的</p>
-                <p className="recycle-bin-modal__description mt-1">移入回收區的作品會保留在這裡，等待你確認是否交給系統資源回收筒。</p>
+                <p className="text-sm font-semibold">{t('recycle.emptyTitle')}</p>
+                <p className="recycle-bin-modal__description mt-1">{t('recycle.emptyDescription')}</p>
               </div>
             ) : (
               <div className="space-y-6">
@@ -273,7 +279,7 @@ export const RecycleBinModal: React.FC<RecycleBinModalProps> = ({ isOpen, onClos
                       <Folder className="h-4 w-4" aria-hidden="true" />
                       <h3 id={`recycle-group-${folderKey}`} className="text-sm font-semibold">{group.label}</h3>
                       <Badge variant="neutral" size="xs" className="recycle-bin-modal__count">
-                        {group.entries.length} 項
+                        {t('recycle.entryCount', { count: formatNumber(group.entries.length) })}
                       </Badge>
                     </div>
                     <div className="recycle-bin-modal__group overflow-hidden">
@@ -282,7 +288,7 @@ export const RecycleBinModal: React.FC<RecycleBinModalProps> = ({ isOpen, onClos
                           <div className="min-w-0 flex-1">
                             <p className="truncate text-sm font-semibold" title={entry.file_name}>{entry.file_name}</p>
                             <p className="recycle-bin-modal__meta mt-1 truncate" title={entry.original_path}>
-                              {formatDate(entry.trashed_at)} · {formatBytes(entry.file_size)} · {entry.original_path}
+                              {formatDate(entry.trashed_at)} · {formatBytes(entry.file_size, formatNumber, t('recycle.unknownSize'))} · {entry.original_path}
                             </p>
                           </div>
                           <Button
@@ -291,10 +297,10 @@ export const RecycleBinModal: React.FC<RecycleBinModalProps> = ({ isOpen, onClos
                             disabled={!entry.available || actionLoading}
                             variant="danger"
                             className="recycle-bin-modal__row-action"
-                            title={entry.available ? '移至 Windows 資源回收筒' : '找不到回收區檔案'}
+                            title={entry.available ? t('recycle.sendToWindows') : t('recycle.missingFile')}
                           >
                             <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
-                            {entry.available ? '移至資源回收筒' : '檔案不存在'}
+                            {entry.available ? t('recycle.sendAll') : t('recycle.fileMissingLabel')}
                           </Button>
                         </article>
                       ))}
@@ -309,12 +315,12 @@ export const RecycleBinModal: React.FC<RecycleBinModalProps> = ({ isOpen, onClos
 
       <ConfirmModal
         isOpen={confirmTarget !== null}
-        title={confirmTarget === 'all' ? '將回收區檔案移至系統回收筒？' : '將此檔案移至系統回收筒？'}
+        title={confirmTarget === 'all' ? t('recycle.confirmAllTitle') : t('recycle.confirmOneTitle')}
         message={confirmTarget === 'all'
-          ? `即將處理 ${entries.filter(entry => entry.available).length} 個檔案。Windows 會保留它們以便日後還原，Web Viewer 回收區記錄會標記為已處理。`
-          : `「${confirmTarget?.file_name ?? ''}」會交給 Windows 資源回收筒，不會直接抹除。`}
-        confirmLabel="移至資源回收筒"
-        cancelLabel="先保留"
+          ? t('recycle.confirmAllMessage', { count: formatNumber(entries.filter(entry => entry.available).length) })
+          : t('recycle.confirmOneMessage', { name: confirmTarget?.file_name ?? '' })}
+        confirmLabel={t('recycle.confirm')}
+        cancelLabel={t('recycle.keep')}
         onConfirm={() => void sendToSystemRecycleBin()}
         onCancel={() => {
           if (!actionLoading) setConfirmTarget(null);

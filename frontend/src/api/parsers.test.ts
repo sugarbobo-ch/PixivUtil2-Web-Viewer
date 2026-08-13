@@ -132,6 +132,35 @@ describe('API runtime parsers', () => {
     });
   });
 
+  it('parses the sparse range revision and grouped layout counts', () => {
+    const result = parseImagePageResponse({
+      revision: 'gallery-snapshot-42',
+      offset: 500,
+      limit: 2,
+      images: [image(501)],
+      total: 1_004,
+      month_index: [{
+        key: '2026-08',
+        month: '2026-08',
+        label: '2026-08',
+        offset: 500,
+        image_count: 318,
+        card_count: 201,
+      }],
+    });
+
+    expect(result.revision).toBe('gallery-snapshot-42');
+    expect(result.offset).toBe(500);
+    expect(result.limit).toBe(2);
+    expect(result.monthIndexItems[0]).toMatchObject({
+      key: '2026-08',
+      count: 318,
+      offset: 500,
+      imageCount: 318,
+      cardCount: 201,
+    });
+  });
+
   it('rejects malformed image records instead of asserting their shape', () => {
     expect(() => parseImagePageResponse({ images: [{ image_id: 'wrong' }] })).toThrow(/image_id/);
   });

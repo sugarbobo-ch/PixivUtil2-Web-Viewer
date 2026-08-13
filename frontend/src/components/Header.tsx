@@ -18,6 +18,7 @@ import {
   X,
 } from 'lucide-react';
 import { LibraryJob, ThemeMode, ViewMode } from '../types';
+import { useI18n, type I18nContextValue } from '../i18n';
 import { Button, IconButton, Input } from './ui';
 
 interface HeaderProps {
@@ -46,13 +47,19 @@ const isLibraryJobActive = (job?: LibraryJob | null) => (
   !!job && ['queued', 'running', 'cancelling'].includes(job.status)
 );
 
-const getLibraryJobLabel = (job: LibraryJob) => {
-  if (job.status === 'queued') return '排隊中';
-  if (job.status === 'cancelling') return '正在停止…';
-  if (job.phase === 'discovering') return `讀取資料夾：${job.discovered.toLocaleString()}`;
-  if (job.phase === 'analyzing_colors') return `分析色彩：${job.processed.toLocaleString()} / ${job.total ?? '…'}`;
-  if (job.phase === 'organizing_cache') return `整理縮圖：${job.processed.toLocaleString()} / ${job.total ?? '…'}`;
-  return `更新資料庫：${job.processed.toLocaleString()} / ${job.total ?? '…'}`;
+const getLibraryJobLabel = (
+  job: LibraryJob,
+  t: I18nContextValue['t'],
+  formatNumber: I18nContextValue['formatNumber'],
+) => {
+  if (job.status === 'queued') return t('library.jobQueued');
+  if (job.status === 'cancelling') return t('library.jobCancelling');
+  const processed = formatNumber(job.processed);
+  const total = job.total === undefined || job.total === null ? '…' : formatNumber(job.total);
+  if (job.phase === 'discovering') return t('library.jobDiscovering', { count: formatNumber(job.discovered) });
+  if (job.phase === 'analyzing_colors') return t('library.jobAnalyzing', { processed, total });
+  if (job.phase === 'organizing_cache') return t('library.jobOrganizing', { processed, total });
+  return t('library.jobUpdating', { processed, total });
 };
 
 export const Header: React.FC<HeaderProps> = ({
@@ -76,7 +83,9 @@ export const Header: React.FC<HeaderProps> = ({
   onToggleBlur,
   libraryJob = null,
 }) => {
+  const { t, formatNumber } = useI18n();
   const [isMobileSearchOpen, setIsMobileSearchOpen] = useState(false);
+  const libraryJobLabel = libraryJob ? getLibraryJobLabel(libraryJob, t, formatNumber) : '';
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -107,22 +116,24 @@ export const Header: React.FC<HeaderProps> = ({
         <IconButton
           type="button"
           onClick={toggleSidebar}
-          aria-label="切換側邊欄"
+          aria-label={t('common.toggleSidebar')}
           aria-expanded={isSidebarOpen}
           aria-controls="gallery-filter-sidebar"
+          data-focus-fallback="sidebar"
           className="app-header__desktop-sidebar-trigger header-action header-action-icon"
-          title="顯示或隱藏側邊欄"
+          title={t('common.sidebarVisibility')}
         >
           <Menu className="h-5 w-5" aria-hidden="true" />
         </IconButton>
         <IconButton
           type="button"
           onClick={toggleMenu}
-          aria-label="切換功能選單"
+          aria-label={t('common.openMenu')}
           aria-expanded={isMobileMenuOpen}
           aria-controls="mobile-menu-drawer"
+          data-focus-fallback="menu"
           className="app-header__mobile-menu-trigger header-action header-action-icon"
-          title="開啟功能選單"
+          title={t('common.openMenu')}
         >
           <Menu className="h-5 w-5" aria-hidden="true" />
         </IconButton>
@@ -130,11 +141,11 @@ export const Header: React.FC<HeaderProps> = ({
           <a
             href="/"
             className="header-logo"
-            aria-label="回到首頁，顯示全部繪師"
+            aria-label={t('common.homeGallery')}
           >
             PixivUtil2 Gallery
           </a>
-          <span className="header-count">{totalCount} 作品</span>
+          <span className="header-count">{t('common.worksCount', { count: formatNumber(totalCount) })}</span>
         </div>
         {isLibraryJobActive(libraryJob) && (
           <Button
@@ -142,11 +153,11 @@ export const Header: React.FC<HeaderProps> = ({
             onClick={onOpenSettings}
             variant="secondary"
             className="header-library-status header-action"
-            aria-label={`媒體資料庫工作：${getLibraryJobLabel(libraryJob!)}`}
-            title="查看媒體資料庫工作進度"
+            aria-label={`${t('common.jobProgress')}：${libraryJobLabel}`}
+            title={t('common.jobProgress')}
           >
             <RefreshCw className="header-library-status__icon" aria-hidden="true" />
-            <span className="header-library-status__label">{getLibraryJobLabel(libraryJob!)}</span>
+            <span className="header-library-status__label">{libraryJobLabel}</span>
           </Button>
         )}
       </div>
@@ -156,9 +167,9 @@ export const Header: React.FC<HeaderProps> = ({
         onClick={() => setIsMobileSearchOpen(open => !open)}
         aria-expanded={isMobileSearchOpen}
         aria-controls="header-search"
-        aria-label={isMobileSearchOpen ? '關閉搜尋' : '開啟搜尋'}
+        aria-label={isMobileSearchOpen ? t('common.closeSearch') : t('common.openSearch')}
         className="app-header__mobile-search-toggle header-action header-action-icon"
-        title={isMobileSearchOpen ? '關閉搜尋' : '開啟搜尋'}
+        title={isMobileSearchOpen ? t('common.closeSearch') : t('common.openSearch')}
       >
         {isMobileSearchOpen ? (
           <X className="h-5 w-5" aria-hidden="true" />
@@ -175,35 +186,35 @@ export const Header: React.FC<HeaderProps> = ({
           wrapperClassName="header-search-input-wrap"
           clearable
           onClear={() => setSearchQuery('')}
-          clearButtonLabel="清除搜尋"
+          clearButtonLabel={t('common.clearSearch')}
           type="text"
           value={searchQuery}
           onChange={(event) => setSearchQuery(event.target.value)}
-          aria-label="搜尋標題或繪師名稱"
-          placeholder="搜尋標題或繪師名稱..."
+          aria-label={t('common.searchTitleArtist')}
+          placeholder={`${t('common.searchTitleArtist')}...`}
           className="header-search-input"
         />
       </div>
 
       <div className="app-header__desktop-actions">
         <div className="app-header__controls">
-        <div className="header-mode-group" role="group" aria-label="檢視模式">
+        <div className="header-mode-group" role="group" aria-label={t('common.viewMode')}>
           <Button
             type="button"
             onClick={() => setViewMode('grid')}
             aria-pressed={viewMode === 'grid'}
             variant={viewMode === 'grid' ? 'primary' : 'ghost'}
             size="sm"
-            aria-label={viewMode === 'grid' ? '作品清單' : '返回作品清單'}
+            aria-label={viewMode === 'grid' ? t('common.galleryList') : t('common.returnGallery')}
             className={`header-mode-button ${viewMode === 'grid' ? 'is-active' : ''}`}
-            title={viewMode === 'grid' ? '作品清單' : '返回作品清單'}
+            title={viewMode === 'grid' ? t('common.galleryList') : t('common.returnGallery')}
           >
             {viewMode === 'grid' ? (
               <Grid className="h-4 w-4" aria-hidden="true" />
             ) : (
               <ArrowLeft className="h-4 w-4" aria-hidden="true" />
             )}
-            <span className="hidden sm:inline">{viewMode === 'grid' ? '作品清單' : '返回作品清單'}</span>
+            <span className="hidden sm:inline">{viewMode === 'grid' ? t('common.galleryList') : t('common.returnGallery')}</span>
           </Button>
           <Button
             type="button"
@@ -211,12 +222,12 @@ export const Header: React.FC<HeaderProps> = ({
             aria-pressed={viewMode === 'fullscreen'}
             variant={viewMode === 'fullscreen' ? 'primary' : 'ghost'}
             size="sm"
-            aria-label="全螢幕檢視"
+            aria-label={t('common.fullscreenView')}
             className={`header-mode-button ${viewMode === 'fullscreen' ? 'is-active' : ''}`}
-            title="全螢幕檢視"
+            title={t('common.fullscreenView')}
           >
             <Maximize2 className="h-4 w-4" aria-hidden="true" />
-            <span className="hidden sm:inline">全螢幕</span>
+            <span className="hidden sm:inline">{t('common.fullscreen')}</span>
           </Button>
           <Button
             type="button"
@@ -224,12 +235,12 @@ export const Header: React.FC<HeaderProps> = ({
             aria-pressed={viewMode === 'webtoon'}
             variant={viewMode === 'webtoon' ? 'primary' : 'ghost'}
             size="sm"
-            aria-label="條漫檢視"
+            aria-label={t('common.webtoonView')}
             className={`header-mode-button ${viewMode === 'webtoon' ? 'is-active' : ''}`}
-            title="條漫檢視"
+            title={t('common.webtoonView')}
           >
             <ScrollText className="h-4 w-4" aria-hidden="true" />
-            <span className="hidden sm:inline">條漫</span>
+            <span className="hidden sm:inline">{t('common.webtoon')}</span>
           </Button>
         </div>
       </div>
@@ -237,7 +248,7 @@ export const Header: React.FC<HeaderProps> = ({
         <div
           id="header-mobile-tools"
         className="app-header__mobile-tools"
-        aria-label="更多工具"
+        aria-label={t('common.moreTools')}
       >
         <div className="app-header__mode-actions">
           {onToggleGroupMangaPosts && (
@@ -245,13 +256,13 @@ export const Header: React.FC<HeaderProps> = ({
               type="button"
               onClick={onToggleGroupMangaPosts}
               aria-pressed={groupMangaPosts}
-              aria-label={groupMangaPosts ? '關閉組圖模式' : '開啟組圖模式'}
+              aria-label={groupMangaPosts ? t('common.closeGroupMode') : t('common.openGroupMode')}
               variant={groupMangaPosts ? 'primary' : 'secondary'}
               className={`header-action header-action-labeled ${groupMangaPosts ? 'is-active' : ''}`}
-              title="切換組圖模式"
+              title={t('common.groupMode')}
             >
               <Layers className="h-4 w-4" aria-hidden="true" />
-              <span className="hidden md:inline">{groupMangaPosts ? '組圖模式（開）' : '組圖模式'}</span>
+              <span className="hidden md:inline">{groupMangaPosts ? t('common.groupModeOn') : t('common.groupMode')}</span>
             </Button>
           )}
 
@@ -260,17 +271,17 @@ export const Header: React.FC<HeaderProps> = ({
               type="button"
               onClick={onToggleBlur}
               aria-pressed={blurEnabled}
-              aria-label={blurEnabled ? '關閉模糊遮罩' : '開啟模糊遮罩'}
+              aria-label={blurEnabled ? t('common.closeBlur') : t('common.openBlur')}
               variant={blurEnabled ? 'primary' : 'secondary'}
               className={`header-action header-action-labeled ${blurEnabled ? 'is-active' : ''}`}
-              title={blurEnabled ? '關閉模糊遮罩' : '開啟模糊遮罩'}
+              title={blurEnabled ? t('common.closeBlur') : t('common.openBlur')}
             >
               {blurEnabled ? (
                 <EyeOff className="h-4 w-4" aria-hidden="true" />
               ) : (
                 <Eye className="h-4 w-4" aria-hidden="true" />
               )}
-              <span className="hidden md:inline">{blurEnabled ? '模糊遮罩（開）' : '模糊遮罩'}</span>
+              <span className="hidden md:inline">{blurEnabled ? t('common.blurOn') : t('common.blur')}</span>
             </Button>
           )}
 
@@ -279,13 +290,13 @@ export const Header: React.FC<HeaderProps> = ({
               type="button"
               onClick={() => setIsEditMode(!isEditMode)}
               aria-pressed={isEditMode}
-              aria-label={isEditMode ? '結束編輯模式' : '開啟編輯模式'}
+              aria-label={isEditMode ? t('common.endEditMode') : t('common.openEditMode')}
               variant={isEditMode ? 'primary' : 'secondary'}
               className={`header-action header-action-labeled ${isEditMode ? 'is-active' : ''}`}
-              title="切換編輯模式 (E)"
+              title={`${t('common.editMode')} (E)`}
             >
               <CheckSquare className="h-4 w-4" aria-hidden="true" />
-              <span>{isEditMode ? '編輯中' : '編輯模式'}</span>
+              <span>{isEditMode ? t('common.editing') : t('common.editMode')}</span>
               <kbd className="header-shortcut">E</kbd>
             </Button>
           )}
@@ -296,10 +307,10 @@ export const Header: React.FC<HeaderProps> = ({
             type="button"
             onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
             variant="ghost"
-            aria-label={theme === 'dark' ? '切換至亮色模式' : '切換至暗色模式'}
+            aria-label={theme === 'dark' ? t('common.switchToLight') : t('common.switchToDark')}
             aria-pressed={theme === 'light'}
             className="header-action header-action-icon"
-            title={theme === 'dark' ? '切換至亮色模式' : '切換至暗色模式'}
+            title={theme === 'dark' ? t('common.switchToLight') : t('common.switchToDark')}
           >
             {theme === 'dark' ? <Sun className="h-5 w-5" aria-hidden="true" /> : <Moon className="h-5 w-5" aria-hidden="true" />}
           </IconButton>
@@ -308,9 +319,10 @@ export const Header: React.FC<HeaderProps> = ({
             type="button"
             onClick={onOpenSettings}
             variant="ghost"
-            aria-label="開啟設定"
+            aria-label={t('common.openSettings')}
+            data-focus-fallback="settings"
             className="header-action header-action-icon"
-            title="開啟設定"
+            title={t('common.openSettings')}
           >
             <Settings className="h-5 w-5" aria-hidden="true" />
           </IconButton>

@@ -1,7 +1,9 @@
 # Gallery 編輯模式快選規格與失效分析
 
 日期：2026-08-10
-狀態：已實作並完成測試與畫廊操作驗證
+狀態：歷史失效分析與已完成修復紀錄
+
+> 本文第 3～7 節保留當時 page-local Gallery 的診斷脈絡，不代表目前載入架構。現行 Gallery 使用 `GlobalMediaWindow`、`GalleryGlobalTrack` 與 range-first API；修改快選時以 `frontend/src/hooks/useSelectionWorkflow.ts` 的 selection owner 和 `docs/global-gallery-navigation-contract.md` 的全域索引／虛擬化契約為準。
 
 ## 1. 目的與範圍
 

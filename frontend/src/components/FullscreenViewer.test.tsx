@@ -108,6 +108,14 @@ describe('FullscreenViewer regression', () => {
     fireEvent.keyDown(video, { key: 'ArrowRight', code: 'ArrowRight' });
     expect(onNavigate).not.toHaveBeenCalled();
 
+    fireEvent.click(dialog.querySelector<HTMLButtonElement>('button[aria-label="顯示影片詳細資訊"]')!);
+    expect(dialog.querySelector('#fullscreen-details-heading')?.textContent).toBe('影片資訊 (I)');
+    expect(dialog.querySelector('.fullscreen-viewer__details-body')?.textContent).toContain('影片尺寸');
+    expect(dialog.querySelector('.fullscreen-viewer__details-body')?.textContent).toContain('影片大小');
+    expect(dialog.querySelector('.viewer-primary-action')?.textContent).toContain('下載／開啟原影片');
+    expect(dialog.querySelector('.fullscreen-viewer__details-folder-actions')?.textContent)
+      .toContain('影片資料夾');
+
     view.unmount();
   });
 
@@ -353,11 +361,15 @@ describe('FullscreenViewer regression', () => {
       const video = dialog.querySelector<HTMLVideoElement>('video');
       expect(video).toBeTruthy();
       if (!video) throw new Error('video element was not rendered');
+      fireEvent.loadedData(video);
+      const gestureLayer = dialog.querySelector<HTMLElement>('.fullscreen-viewer__video-gesture-layer');
+      expect(gestureLayer).toBeTruthy();
+      if (!gestureLayer) throw new Error('video gesture layer was not rendered');
       mockVideoBounds(video);
       Object.defineProperty(video, 'paused', { configurable: true, value: false });
       const pause = vi.spyOn(video, 'pause').mockImplementation(() => undefined);
 
-      fireEvent.click(video, { clientX: 100, clientY: 180 });
+      fireEvent.click(gestureLayer, { clientX: 100, clientY: 180 });
       act(() => {
         vi.advanceTimersByTime(120);
       });
@@ -370,7 +382,7 @@ describe('FullscreenViewer regression', () => {
       act(() => {
         vi.advanceTimersByTime(281);
       });
-      fireEvent.click(video, { clientX: 700, clientY: 180 });
+      fireEvent.click(gestureLayer, { clientX: 700, clientY: 180 });
       act(() => {
         vi.advanceTimersByTime(120);
       });
@@ -397,12 +409,16 @@ describe('FullscreenViewer regression', () => {
     const video = dialog.querySelector<HTMLVideoElement>('video');
     expect(video).toBeTruthy();
     if (!video) throw new Error('video element was not rendered');
+    fireEvent.loadedData(video);
+    const gestureLayer = dialog.querySelector<HTMLElement>('.fullscreen-viewer__video-gesture-layer');
+    expect(gestureLayer).toBeTruthy();
+    if (!gestureLayer) throw new Error('video gesture layer was not rendered');
     mockVideoBounds(video);
     Object.defineProperty(video, 'duration', { configurable: true, value: 100 });
     Object.defineProperty(video, 'currentTime', { configurable: true, writable: true, value: 20 });
     const dispatchDoubleClick = (clientX: number) => {
-      fireEvent.click(video, { clientX, clientY: 180, detail: 1 });
-      fireEvent.click(video, { clientX, clientY: 180, detail: 2 });
+      fireEvent.click(gestureLayer, { clientX, clientY: 180, detail: 1 });
+      fireEvent.click(gestureLayer, { clientX, clientY: 180, detail: 2 });
     };
 
     dispatchDoubleClick(100);
@@ -415,10 +431,59 @@ describe('FullscreenViewer regression', () => {
     dispatchDoubleClick(700);
     expect(video.currentTime).toBe(25);
     expect(dialog.querySelector('.fullscreen-viewer__video-feedback')?.textContent).toContain('快轉 10 秒');
-    fireEvent.click(video, { clientX: 700, clientY: 180, detail: 3 });
+    fireEvent.click(gestureLayer, { clientX: 700, clientY: 180, detail: 3 });
     expect(video.currentTime).toBe(25);
 
     view.unmount();
+  });
+
+  it('keeps a real pointer double-tap on the video surface out of native controls', () => {
+    vi.useFakeTimers();
+    try {
+      const view = renderViewer({
+        images: images.map((item, index) => ({
+          ...item,
+          save_name: `artist/video-pointer-seek-${index + 1}.mp4`,
+        })),
+        currentIndex: 0,
+        demoMode: false,
+      });
+      const dialog = screen.getByRole('dialog', { name: 'Image 1' });
+      const video = dialog.querySelector<HTMLVideoElement>('video');
+      expect(video).toBeTruthy();
+      if (!video) throw new Error('video element was not rendered');
+      fireEvent.loadedData(video);
+      const gestureLayer = dialog.querySelector<HTMLElement>('.fullscreen-viewer__video-gesture-layer');
+      expect(gestureLayer).toBeTruthy();
+      if (!gestureLayer) throw new Error('video gesture layer was not rendered');
+      mockVideoBounds(video);
+      Object.defineProperty(video, 'duration', { configurable: true, value: 100 });
+      Object.defineProperty(video, 'currentTime', { configurable: true, writable: true, value: 20 });
+      Object.defineProperty(video, 'paused', { configurable: true, value: false });
+      const pause = vi.spyOn(video, 'pause').mockImplementation(() => undefined);
+      const play = vi.spyOn(video, 'play').mockResolvedValue(undefined);
+
+      const dispatchTap = (pointerId: number) => {
+        fireEvent.pointerDown(gestureLayer, { pointerId, button: 0, clientX: 100, clientY: 180 });
+        fireEvent.pointerUp(gestureLayer, { pointerId, button: 0, clientX: 100, clientY: 180 });
+        fireEvent.click(gestureLayer, { clientX: 100, clientY: 180 });
+      };
+
+      dispatchTap(1);
+      act(() => {
+        vi.advanceTimersByTime(60);
+      });
+      dispatchTap(2);
+
+      expect(video.currentTime).toBe(15);
+      expect(dialog.querySelector('.fullscreen-viewer__video-feedback')?.textContent).toContain('5');
+      expect(pause).not.toHaveBeenCalled();
+      expect(play).not.toHaveBeenCalled();
+
+      view.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('preserves playback state for mouse double-click and touch double-tap seek', () => {
@@ -436,6 +501,10 @@ describe('FullscreenViewer regression', () => {
       const video = dialog.querySelector<HTMLVideoElement>('video');
       expect(video).toBeTruthy();
       if (!video) throw new Error('video element was not rendered');
+      fireEvent.loadedData(video);
+      const gestureLayer = dialog.querySelector<HTMLElement>('.fullscreen-viewer__video-gesture-layer');
+      expect(gestureLayer).toBeTruthy();
+      if (!gestureLayer) throw new Error('video gesture layer was not rendered');
       mockVideoBounds(video);
       Object.defineProperty(video, 'duration', { configurable: true, value: 100 });
       Object.defineProperty(video, 'currentTime', { configurable: true, writable: true, value: 20 });
@@ -449,22 +518,22 @@ describe('FullscreenViewer regression', () => {
         return Promise.resolve();
       });
 
-      fireEvent.click(video, { clientX: 100, clientY: 180, detail: 1 });
+      fireEvent.click(gestureLayer, { clientX: 100, clientY: 180, detail: 1 });
       act(() => {
         vi.advanceTimersByTime(150);
       });
       expect(paused).toBe(true);
-      fireEvent.click(video, { clientX: 100, clientY: 180, detail: 2 });
+      fireEvent.click(gestureLayer, { clientX: 100, clientY: 180, detail: 2 });
       expect(video.currentTime).toBe(15);
       expect(paused).toBe(false);
 
       paused = true;
       Object.defineProperty(video, 'currentTime', { configurable: true, writable: true, value: 20 });
-      fireEvent.click(video, { clientX: 700, clientY: 180, detail: 1 });
+      fireEvent.click(gestureLayer, { clientX: 700, clientY: 180, detail: 1 });
       act(() => {
         vi.advanceTimersByTime(60);
       });
-      fireEvent.click(video, { clientX: 700, clientY: 180, detail: 1 });
+      fireEvent.click(gestureLayer, { clientX: 700, clientY: 180, detail: 1 });
       expect(video.currentTime).toBe(25);
       expect(paused).toBe(true);
 
@@ -489,23 +558,27 @@ describe('FullscreenViewer regression', () => {
       const video = dialog.querySelector<HTMLVideoElement>('video');
       expect(video).toBeTruthy();
       if (!video) throw new Error('video element was not rendered');
+      fireEvent.loadedData(video);
+      const gestureLayer = dialog.querySelector<HTMLElement>('.fullscreen-viewer__video-gesture-layer');
+      expect(gestureLayer).toBeTruthy();
+      if (!gestureLayer) throw new Error('video gesture layer was not rendered');
       mockVideoBounds(video);
       Object.defineProperty(video, 'playbackRate', { configurable: true, writable: true, value: 1 });
       Object.defineProperty(video, 'paused', { configurable: true, value: false });
       const pause = vi.spyOn(video, 'pause').mockImplementation(() => undefined);
 
-      fireEvent.pointerDown(video, { pointerId: 1, button: 0, clientX: 100, clientY: 180 });
+      fireEvent.pointerDown(gestureLayer, { pointerId: 1, button: 0, clientX: 100, clientY: 180 });
       act(() => {
         vi.advanceTimersByTime(160);
       });
       expect(video.playbackRate).toBe(2);
       expect(dialog.querySelector('.fullscreen-viewer__video-feedback')?.textContent).toContain('2 倍速');
 
-      fireEvent.pointerUp(video, { pointerId: 1, button: 0, clientX: 100, clientY: 180 });
+      fireEvent.pointerUp(gestureLayer, { pointerId: 1, button: 0, clientX: 100, clientY: 180 });
       expect(video.playbackRate).toBe(1);
       expect(dialog.querySelector('.fullscreen-viewer__video-feedback--top')).toBeNull();
 
-      fireEvent.click(video, { clientX: 100, clientY: 180 });
+      fireEvent.click(gestureLayer, { clientX: 100, clientY: 180 });
       act(() => {
         vi.advanceTimersByTime(120);
       });
@@ -716,12 +789,28 @@ describe('FullscreenViewer regression', () => {
       expect(detailsButton).toBeTruthy();
       if (!detailsButton) throw new Error('details button was not rendered');
       fireEvent.click(detailsButton);
+      expect(document.querySelectorAll('.fullscreen-viewer__details-item')).toHaveLength(1);
+      expect(dialog.querySelector('.fullscreen-viewer__details-folder-actions')?.textContent)
+        .toContain('圖片資料夾');
+      expect(dialog.querySelectorAll('.viewer-media-action')).toHaveLength(2);
+      expect(Array.from(dialog.querySelectorAll<HTMLButtonElement>('.viewer-media-action'))
+        .every(button => button.dataset.fullWidth === 'true')).toBe(true);
+      expect(dialog.querySelectorAll('.fullscreen-viewer__details-folder-actions')).toHaveLength(1);
+      expect(dialog.querySelectorAll('.fullscreen-viewer__details-folder-copy')).toHaveLength(1);
+      expect(dialog.querySelectorAll('.fullscreen-viewer__details-folder-open')).toHaveLength(1);
 
       fireEvent.click(dialog.querySelector<HTMLButtonElement>('button[aria-label="複製檔案路徑"]')!);
-      await waitFor(() => expect(writeText).toHaveBeenCalledWith('artist/image-2.jpg'));
+      await waitFor(() => {
+        expect(writeText).toHaveBeenCalledWith('artist/image-2.jpg');
+        expect(dialog.querySelector('.fullscreen-viewer__details-path-copy .lucide-check')).toBeTruthy();
+      });
+      expect(dialog.querySelector('.fullscreen-viewer__copy-feedback')).toBeNull();
 
       fireEvent.click(screen.getByRole('button', { name: '複製資料夾路徑' }));
-      await waitFor(() => expect(writeText).toHaveBeenLastCalledWith('artist'));
+      await waitFor(() => {
+        expect(writeText).toHaveBeenLastCalledWith('artist');
+        expect(dialog.querySelector('.fullscreen-viewer__details-folder-copy .lucide-check')).toBeTruthy();
+      });
 
       view.unmount();
     } finally {

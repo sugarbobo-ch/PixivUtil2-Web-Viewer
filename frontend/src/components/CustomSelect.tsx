@@ -8,6 +8,7 @@ import {
   type FloatingCustomProperties,
 } from '../utils/useAnchoredPopover';
 import { Button } from './ui/Button';
+import { useI18n } from '../i18n';
 
 export interface CustomSelectOption<T extends string | number> {
   value: T;
@@ -46,10 +47,12 @@ export function CustomSelect<T extends string | number>({
   leadingContent,
   style,
   disabled = false,
-  placeholder = '請選擇',
+  placeholder,
   menuPlacement = 'start',
   boundaryRef,
 }: CustomSelectProps<T>) {
+  const { t } = useI18n();
+  const resolvedPlaceholder = placeholder ?? t('common.select');
   const generatedId = useId().replace(/:/g, '');
   const controlId = id ?? `custom-select-${generatedId}`;
   const listboxId = `${controlId}-listbox`;
@@ -328,7 +331,7 @@ export function CustomSelect<T extends string | number>({
           </span>
         )}
         <span className={`custom-select__value ${selectedOption ? '' : 'is-placeholder'}`}>
-          {selectedOption?.label ?? placeholder}
+          {selectedOption?.label ?? resolvedPlaceholder}
         </span>
         <ChevronDown className="ui-select-icon" aria-hidden="true" strokeWidth={2} />
       </Button>

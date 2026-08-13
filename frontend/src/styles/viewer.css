@@ -71,6 +71,7 @@
   .fullscreen-viewer__topbar-group {
     display: flex;
     grid-column: 1;
+    grid-row: 1;
     align-items: center;
     max-width: 100%;
     min-width: 0;
@@ -81,6 +82,7 @@
   .fullscreen-viewer__topbar-actions {
     position: absolute;
     inset-inline-start: 50%;
+    inset-block-start: 50%;
     display: flex;
     grid-column: 1 / -1;
     width: max-content;
@@ -90,12 +92,12 @@
     gap: 0.75rem;
     justify-content: center;
     overflow: visible;
-    transform: translateX(-50%);
     border: 0;
     border-radius: 0;
     padding: 0;
     background: transparent;
     color: var(--viewer-hud-text);
+    transform: translate(-50%, -50%);
   }
 
   .fullscreen-viewer__mobile-toolbar-toggle {
@@ -204,6 +206,7 @@
 
   .fullscreen-viewer__close-button {
     grid-column: 3;
+    grid-row: 1;
     justify-self: end;
   }
 
@@ -355,6 +358,19 @@
     max-height: none;
   }
 
+  /* Keep custom playback gestures on a separate content layer. The lower
+     control band remains owned by the browser's native video controls. */
+  .fullscreen-viewer__video-gesture-layer {
+    position: absolute;
+    z-index: 3;
+    inset-block-start: 0;
+    inset-inline: 0;
+    inset-block-end: 72px;
+    touch-action: manipulation;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
   /* Blur filters can expose transparent pixels around the media bounds. Give
      the filtered video surface its own opaque backing plane so the checkerboard
      stays outside the video instead of bleeding through its softened edges. */
@@ -492,9 +508,9 @@
   .fullscreen-viewer__media-stack {
     position: relative;
     display: grid;
-    align-self: flex-start;
-    width: min(90vw, 100%);
-    height: min(85vh, 100%);
+    align-self: stretch;
+    width: 100%;
+    height: 100%;
     max-width: 100%;
     max-height: 100%;
     min-width: 0;
@@ -502,16 +518,6 @@
     overflow: hidden;
     place-items: center;
     isolation: isolate;
-  }
-
-  /* When the rail is hidden or the toolbar is collapsed, let the media stack
-     consume the full remaining stage instead of retaining its compact
-     rail-aware max size. */
-  .fullscreen-viewer:not(.has-filmstrip) .fullscreen-viewer__media-stack,
-  .fullscreen-viewer.is-toolbar-hidden .fullscreen-viewer__media-stack {
-    align-self: stretch;
-    width: 100%;
-    height: 100%;
   }
 
   /* Keep the media layer above the gallery's sticky/grid stacking contexts,
@@ -642,36 +648,146 @@
   }
   .fullscreen-viewer__details {
     position: absolute;
-    top: 1.5rem;
-    right: 1.5rem;
-    bottom: 1.5rem;
+    inset-block: var(--ui-overlay-gutter);
+    inset-inline-start: auto;
+    inset-inline-end: var(--ui-overlay-gutter);
     z-index: 30;
     display: flex;
-    width: 20rem;
+    box-sizing: border-box;
+    width: min(20rem, calc(100% - 2 * var(--ui-overlay-gutter)));
+    max-width: 100%;
+    max-height: none;
     flex-direction: column;
     justify-content: flex-start;
-    overflow: auto;
+    overflow: hidden;
     min-width: 0;
     border: 1px solid var(--viewer-border);
     border-radius: 1rem;
-    padding: 1.25rem;
+    padding: 0;
     background: var(--viewer-surface-raised);
     color: var(--viewer-text);
     backdrop-filter: blur(20px);
     overscroll-behavior: contain;
+    touch-action: auto;
   }
 
-  .fullscreen-viewer__details > div:first-child {
+  .fullscreen-viewer__details-scroll {
+    display: flex;
+    box-sizing: border-box;
     min-width: 0;
+    min-height: 0;
+    flex: 1 1 auto;
+    flex-direction: column;
+    overflow-x: hidden;
+    overflow-y: auto;
+    padding-block: 0 1rem;
+    padding-inline: 1rem;
+    overscroll-behavior: contain;
+    scrollbar-color: var(--viewer-scrollbar-thumb) transparent;
+    scrollbar-width: thin;
+  }
+
+  .fullscreen-viewer__details-scroll::-webkit-scrollbar {
+    width: 0.625rem;
+  }
+
+  .fullscreen-viewer__details-scroll::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .fullscreen-viewer__details-scroll::-webkit-scrollbar-thumb {
+    border: 0;
+    border-radius: 0;
+    background: var(--viewer-scrollbar-thumb);
+  }
+
+  .fullscreen-viewer__details-scroll::-webkit-scrollbar-thumb:hover {
+    background: var(--viewer-scrollbar-thumb-hover);
   }
 
   .fullscreen-viewer__details-header {
     display: flex;
-    align-items: flex-start;
+    box-sizing: border-box;
+    flex: 0 0 auto;
+    flex-wrap: nowrap;
+    align-items: center;
     justify-content: space-between;
     gap: 0.75rem;
     min-width: 0;
-    margin-block-end: 0.75rem;
+    padding-block: 12px;
+    padding-inline: 1rem;
+  }
+
+  .fullscreen-viewer__details-header > h4 {
+    flex: 1 1 auto;
+  }
+
+  .fullscreen-viewer__details-folder-actions {
+    display: grid;
+    min-width: 0;
+    gap: 0.625rem;
+    margin-block-end: 1.5rem;
+    border-block-end: 1px solid var(--viewer-border);
+    padding-block-end: 1.25rem;
+  }
+
+  .fullscreen-viewer__details-folder-open {
+    flex: 0 0 auto;
+    width: 100%;
+  }
+
+  .fullscreen-viewer__details-folder-path-row {
+    display: flex;
+    min-width: 0;
+    align-items: flex-start;
+    gap: 0.5rem;
+    margin: 0;
+    color: var(--viewer-text-muted);
+    font-size: var(--ui-font-min);
+    line-height: 1.45;
+  }
+
+  .fullscreen-viewer__details-folder-path {
+    min-width: 0;
+    flex: 1 1 auto;
+    overflow-wrap: anywhere;
+  }
+
+  .fullscreen-viewer__details-folder-path-row .fullscreen-viewer__details-label {
+    flex: 0 0 auto;
+  }
+
+  .fullscreen-viewer__details-folder-copy {
+    flex: 0 0 auto;
+    margin-block-start: -0.25rem;
+  }
+
+  .fullscreen-viewer__details-items {
+    display: grid;
+    gap: 0;
+    min-width: 0;
+  }
+
+  .fullscreen-viewer__details-item {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+  }
+
+  .fullscreen-viewer__details-item + .fullscreen-viewer__details-item {
+    margin-block-start: 1.5rem;
+    border-block-start: 1px solid var(--viewer-border);
+    padding-block-start: 1.5rem;
+  }
+
+  .fullscreen-viewer__details-item-title {
+    min-width: 0;
+    margin: 0 0 0.75rem;
+    color: var(--viewer-text);
+    font-size: 1rem;
+    font-weight: 700;
+    line-height: 1.25;
+    overflow-wrap: anywhere;
   }
 
   .fullscreen-viewer__details h4 {
@@ -743,12 +859,6 @@
     margin-block-start: -0.25rem;
   }
 
-  .fullscreen-viewer__copy-feedback {
-    color: var(--viewer-accent);
-    font-size: var(--ui-font-caption);
-    font-weight: 650;
-  }
-
   .fullscreen-viewer__details-warning {
     color: oklch(0.72 0.16 80);
   }
@@ -818,19 +928,17 @@
 
   .viewer-file-actions {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 0.5rem;
+    gap: 0.625rem;
   }
 
-  .viewer-copy-folder-action {
-    grid-column: 1 / -1;
+  .viewer-media-action {
+    width: 100%;
   }
 
   .viewer-details-actions {
     display: grid;
     gap: 0.625rem;
-    margin-top: auto;
-    padding-top: 1.25rem;
+    margin-block-start: 1.25rem;
   }
 
   .viewer-secondary-action {
@@ -930,26 +1038,41 @@
   .fullscreen-viewer__thumbnail,
   .webtoon-thumbnails__item {
     position: relative;
-    width: 3.5rem;
-    height: 3.5rem;
     flex-shrink: 0;
     overflow: hidden;
     border: 2px solid var(--viewer-hud-border);
-    border-radius: 0.75rem;
-    background: var(--viewer-hud-surface);
     cursor: pointer;
     opacity: 0.68;
-    transition: border-color 150ms ease, opacity 150ms ease, transform 150ms ease;
+    transition: border-color 150ms ease, opacity 150ms ease;
   }
 
-  .fullscreen-viewer__thumbnail {
+  .fullscreen-viewer .ui-button.fullscreen-viewer__thumbnail {
     position: absolute;
     inset-block-start: 0;
+    display: flex;
+    width: 3.5rem;
+    height: 3.5rem;
+    align-items: stretch;
+    justify-content: stretch;
+    border: 2px solid var(--viewer-hud-border);
+    border-radius: 0.75rem;
+    background: var(--viewer-hud-surface);
+    color: var(--viewer-hud-text);
+    /* The frame itself supplies an equal inset on all four sides. */
+    padding: 0;
+    transform: none;
   }
 
-  .fullscreen-viewer__thumbnail:hover,
+  .webtoon-thumbnails__item {
+    width: 3.5rem;
+    height: 3.5rem;
+    border-radius: 0.75rem;
+  }
+
+  .fullscreen-viewer .ui-button.fullscreen-viewer__thumbnail:hover:not(:disabled),
   .webtoon-thumbnails__item:hover {
     border-color: var(--viewer-hud-text);
+    background: var(--viewer-hud-surface);
     opacity: 1;
   }
 
@@ -957,20 +1080,57 @@
   .webtoon-thumbnails__item.is-active {
     border-color: var(--viewer-primary);
     opacity: 1;
+  }
+
+  .fullscreen-viewer .ui-button.fullscreen-viewer__thumbnail.is-active {
+    border-color: var(--viewer-primary);
+    background: var(--viewer-hud-surface);
+    color: var(--viewer-hud-text);
+    transform: none;
+  }
+
+  .webtoon-thumbnails__item.is-active {
     transform: scale(1.05);
   }
 
   .fullscreen-viewer__thumbnail-image {
     width: 100%;
     height: 100%;
+    min-height: 0;
+    min-width: 0;
+    flex: 1 1 auto;
+    border-radius: 0.5rem;
+    background: transparent;
     object-fit: cover;
   }
 
-  .fullscreen-viewer__thumbnail-slot,
+  .fullscreen-viewer__thumbnail-slot {
+    display: block;
+    width: 100%;
+    height: 100%;
+    min-width: 0;
+    min-height: 0;
+    flex: 1 1 auto;
+    overflow: hidden;
+    border-radius: 0.5rem;
+    background: var(--viewer-surface-muted);
+  }
+
   .fullscreen-viewer__thumbnail-placeholder {
     display: block;
     width: 100%;
     height: 100%;
+    min-width: 0;
+    min-height: 0;
+    flex: 1 1 auto;
+  }
+
+  /* The shared Button primitive provides a press scale for ordinary actions.
+     A filmstrip selection must remain geometrically fixed so pointer and
+     touch selection feels immediate instead of jumping toward the rail. */
+  .fullscreen-viewer .fullscreen-viewer__thumbnail:active:not(:disabled) {
+    background: var(--viewer-hud-surface);
+    transform: none;
   }
 
   .fullscreen-viewer__thumbnail-placeholder {
@@ -979,8 +1139,10 @@
 
   .fullscreen-viewer__thumbnail-index {
     position: absolute;
-    right: 0.125rem;
-    bottom: 0.125rem;
+    z-index: 1;
+    inset-inline-end: 0.125rem;
+    inset-block-end: 0.125rem;
+    overflow: hidden;
     border-radius: 0.25rem;
     padding: 0.125rem 0.25rem;
     background: var(--viewer-hud-surface-strong);
@@ -988,6 +1150,8 @@
     font-size: var(--ui-font-caption);
     font-weight: 700;
     line-height: 0.875rem;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .fullscreen-viewer__shortcut-help {
@@ -1003,7 +1167,6 @@
     overscroll-behavior: contain;
     scrollbar-color: var(--viewer-scrollbar-thumb) transparent;
     scrollbar-width: thin;
-    scrollbar-gutter: stable;
     border: 1px solid var(--viewer-hud-border);
     border-radius: 0.875rem;
     clip-path: inset(0 round 0.875rem);
@@ -1109,6 +1272,30 @@
   }
 
   @media (max-width: 40rem) {
+    .fullscreen-viewer__details {
+      inset-block: 0.75rem;
+      inset-inline: 0.75rem;
+      width: auto;
+      max-width: none;
+      max-height: none;
+      padding: 0;
+    }
+
+    .fullscreen-viewer__details-scroll {
+      padding-block: 0 1rem;
+      padding-inline: 1rem;
+    }
+
+    .fullscreen-viewer__details-header {
+      gap: 0.5rem;
+      padding-block: 12px;
+      padding-inline: 1rem;
+    }
+
+    .fullscreen-viewer__details-items {
+      grid-template-columns: 1fr;
+    }
+
     .fullscreen-viewer__topbar {
       grid-template-columns: minmax(0, 1fr) auto auto auto;
     }
@@ -1181,9 +1368,9 @@
     .fullscreen-viewer__topbar-actions.is-mobile-open .fullscreen-viewer__toolbar-group {
       display: grid;
       width: max-content;
-      max-width: 100%;
+      max-width: none;
       align-items: center;
-      grid-template-columns: repeat(6, var(--ui-icon-button-size));
+      grid-template-columns: repeat(6, max-content);
       justify-content: start;
       gap: 0.5rem;
       border: 0;
@@ -1195,42 +1382,48 @@
 
     .fullscreen-viewer__topbar-actions.is-mobile-open .fullscreen-viewer__toolbar-navigation {
       display: grid;
-      width: 100%;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
+      width: max-content;
+      grid-template-columns: repeat(2, max-content);
     }
 
     .fullscreen-viewer__topbar-actions.is-mobile-open .fullscreen-viewer__mode-switcher {
-      width: 100%;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
+      width: max-content;
+      grid-template-columns: repeat(2, max-content);
+    }
+
+    .fullscreen-viewer__topbar-actions.is-mobile-open .fullscreen-viewer__layout-switcher,
+    .fullscreen-viewer__topbar-actions.is-mobile-open .fullscreen-viewer__direction-switcher {
+      width: max-content;
+      grid-template-columns: repeat(2, max-content);
     }
 
     .fullscreen-viewer__topbar-actions.is-mobile-open .fullscreen-viewer__zoom-controls {
-      grid-template-columns: repeat(3, var(--ui-icon-button-size)) max-content;
+      grid-template-columns: repeat(3, max-content) max-content;
     }
 
     .fullscreen-viewer__topbar-actions.is-mobile-open.is-simple .fullscreen-viewer__zoom-controls {
-      grid-template-columns: repeat(3, var(--ui-icon-button-size)) max-content var(--ui-icon-button-size);
+      grid-template-columns: repeat(3, max-content) max-content max-content;
     }
 
     .fullscreen-viewer__topbar-actions.is-mobile-open .fullscreen-viewer__zoom-modes {
-      grid-template-columns: repeat(6, var(--ui-icon-button-size));
+      grid-template-columns: repeat(6, max-content);
     }
 
     .fullscreen-viewer__topbar-actions.is-mobile-open .fullscreen-viewer__toolbar-group--transform {
-      grid-template-columns: repeat(4, var(--ui-icon-button-size));
+      grid-template-columns: repeat(4, max-content);
     }
 
     .fullscreen-viewer__topbar-actions.is-mobile-open .fullscreen-viewer__toolbar-group--display {
-      grid-template-columns: repeat(4, var(--ui-icon-button-size));
+      grid-template-columns: repeat(4, max-content);
     }
 
     .fullscreen-viewer__topbar-actions.is-mobile-open .fullscreen-viewer__toolbar-group--visibility {
-      grid-template-columns: repeat(2, var(--ui-icon-button-size));
+      grid-template-columns: repeat(2, max-content);
     }
 
     .fullscreen-viewer__topbar-actions.is-mobile-open .fullscreen-viewer__toolbar-group--content {
-      width: 100%;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
+      width: max-content;
+      grid-template-columns: repeat(3, max-content);
     }
 
     /* The mobile top bar already keeps the information action visible. Avoid
@@ -1241,21 +1434,22 @@
     }
 
     .fullscreen-viewer__topbar-actions.is-mobile-open .fullscreen-viewer__toolbar-settings {
-      width: 100%;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
+      width: max-content;
+      grid-template-columns: repeat(2, max-content);
     }
 
     .fullscreen-viewer__topbar-actions.is-mobile-open .fullscreen-viewer__toolbar-danger {
-      width: 100%;
-      grid-template-columns: minmax(0, 1fr);
+      width: max-content;
+      grid-template-columns: max-content;
     }
 
     .fullscreen-viewer__topbar-actions.is-mobile-open .ui-button[data-mobile-label] {
-      width: 100%;
-      min-width: 0;
+      width: max-content;
+      min-width: var(--ui-icon-button-size);
+      max-width: none;
       height: var(--ui-icon-button-size);
       min-height: var(--ui-icon-button-size);
-      justify-self: stretch;
+      justify-self: start;
       gap: 0.375rem;
       border-radius: var(--ui-control-radius);
       padding-inline: 0.75rem;
@@ -1322,7 +1516,7 @@
 
     @media (max-width: 22rem) {
       .fullscreen-viewer__topbar-actions.is-mobile-open .fullscreen-viewer__zoom-modes {
-        grid-template-columns: repeat(4, var(--ui-icon-button-size));
+        grid-template-columns: repeat(4, max-content);
       }
     }
 

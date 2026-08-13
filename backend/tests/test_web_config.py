@@ -57,6 +57,36 @@ class WebConfigContractTests(unittest.TestCase):
         self.assertEqual(normalized["pixivConfigPath"], "")
         self.assertEqual(normalized["mediaRootPath"], "")
 
+    def test_reader_and_locale_preferences_migrate_safely(self):
+        normalized = main.normalize_web_config_file({
+            "onboardingCompleted": False,
+            "uiLanguage": "fr",
+            "fullscreenPageLayout": "booklet",
+            "fullscreenReadingDirection": "vertical",
+            "fullscreenSpreadPairing": "alternating",
+        })
+
+        self.assertEqual(normalized["uiLanguage"], "zh-TW")
+        self.assertEqual(normalized["fullscreenPageLayout"], "single")
+        self.assertEqual(normalized["fullscreenReadingDirection"], "ltr")
+        self.assertEqual(normalized["fullscreenSpreadPairing"], "cover-single")
+
+        valid = main.normalize_web_config_file({
+            "onboardingCompleted": False,
+            "uiLanguage": "en",
+            "fullscreenPageLayout": "spread",
+            "fullscreenReadingDirection": "rtl",
+            "fullscreenSpreadPairing": "first-page",
+        })
+        self.assertEqual(valid["uiLanguage"], "en")
+        self.assertEqual(valid["fullscreenSpreadPairing"], "first-page")
+
+        simplified_chinese = main.normalize_web_config_file({
+            "onboardingCompleted": False,
+            "uiLanguage": "zh-CN",
+        })
+        self.assertEqual(simplified_chinese["uiLanguage"], "zh-CN")
+
     def test_fullscreen_visual_and_video_preferences_are_normalized(self):
         normalized = main.normalize_web_config_file({
             "onboardingCompleted": False,

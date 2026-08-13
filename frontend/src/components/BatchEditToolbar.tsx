@@ -2,6 +2,7 @@ import React from 'react';
 import { CheckSquare, Download, LoaderCircle, Square, Trash2, X } from 'lucide-react';
 import { Button, IconButton } from './ui/Button';
 import { Badge } from './ui/Badge';
+import { useI18n } from '../i18n';
 
 interface BatchEditToolbarProps {
   selectedCount: number;
@@ -26,10 +27,11 @@ export const BatchEditToolbar: React.FC<BatchEditToolbarProps> = ({
   onDeleteSelected,
   onCancel,
 }) => {
+  const { t, formatNumber } = useI18n();
   const allSelected = totalCount > 0 && selectedCount === totalCount;
 
   return (
-    <section className="batch-edit-toolbar" aria-label="批次編輯工具">
+    <section className="batch-edit-toolbar" aria-label={t('common.batchEditTools')}>
       <Badge
         variant="hud"
         size="md"
@@ -37,11 +39,11 @@ export const BatchEditToolbar: React.FC<BatchEditToolbarProps> = ({
         role="status"
         aria-live="polite"
       >
-        <span className="batch-edit-toolbar__summary-label">已選取</span>
-        <strong>{selectedCount}</strong>
+        <span className="batch-edit-toolbar__summary-label">{t('common.selected')}</span>
+        <strong>{formatNumber(selectedCount)}</strong>
         <span aria-hidden="true">/</span>
-        <span>{totalCount}</span>
-        <span className="batch-edit-toolbar__summary-label">項</span>
+        <span>{formatNumber(totalCount)}</span>
+        <span className="batch-edit-toolbar__summary-label">{t('common.items')}</span>
       </Badge>
 
       <div className="batch-edit-toolbar__actions">
@@ -53,7 +55,7 @@ export const BatchEditToolbar: React.FC<BatchEditToolbarProps> = ({
           aria-pressed={allSelected}
         >
           {allSelected ? <CheckSquare aria-hidden="true" /> : <Square aria-hidden="true" />}
-          <span>{allSelected ? '取消全選' : '全選'}</span>
+          <span>{t(allSelected ? 'common.deselectAll' : 'common.selectAll')}</span>
         </Button>
 
         <Button
@@ -64,7 +66,7 @@ export const BatchEditToolbar: React.FC<BatchEditToolbarProps> = ({
           className="batch-edit-toolbar__button batch-edit-toolbar__button--primary"
         >
           {isDownloading ? <LoaderCircle className="batch-edit-toolbar__spinner" aria-hidden="true" /> : <Download aria-hidden="true" />}
-          <span>{isDownloading ? '準備 ZIP…' : '下載 ZIP'}</span>
+          <span>{t(isDownloading ? 'common.prepareZip' : 'common.downloadZip')}</span>
         </Button>
 
         <Button
@@ -75,7 +77,7 @@ export const BatchEditToolbar: React.FC<BatchEditToolbarProps> = ({
           className="batch-edit-toolbar__button batch-edit-toolbar__button--danger"
         >
           <Trash2 aria-hidden="true" />
-          <span>移至回收區 ({selectedCount})</span>
+          <span>{t('common.moveSelectedToRecycleBin', { count: formatNumber(selectedCount) })}</span>
         </Button>
 
         <IconButton
@@ -83,8 +85,8 @@ export const BatchEditToolbar: React.FC<BatchEditToolbarProps> = ({
           onClick={onCancel}
           variant="ghost"
           className="batch-edit-toolbar__close"
-          aria-label="取消編輯模式"
-          title="取消編輯模式"
+          aria-label={t('common.cancelEditMode')}
+          title={t('common.cancelEditMode')}
         >
           <X aria-hidden="true" />
         </IconButton>

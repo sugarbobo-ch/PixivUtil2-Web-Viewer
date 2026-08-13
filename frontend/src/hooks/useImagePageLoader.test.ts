@@ -43,6 +43,21 @@ afterEach(() => {
 });
 
 describe('useImagePageLoader request lifecycle', () => {
+  it('does not start a current-page request when the legacy fallback is disabled', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(responseFor([createImage(1)]));
+    vi.stubGlobal('fetch', fetchMock);
+    const { result } = renderHook(() => useImagePageLoader({
+      ...createOptions(),
+      enabled: false,
+    }));
+
+    act(() => result.current.fetchImages());
+    await Promise.resolve();
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(result.current.images).toEqual([]);
+  });
+
   it('deduplicates the same request and reuses its cache result', async () => {
     const fetchMock = vi.fn().mockResolvedValue(responseFor([createImage(1)]));
     vi.stubGlobal('fetch', fetchMock);

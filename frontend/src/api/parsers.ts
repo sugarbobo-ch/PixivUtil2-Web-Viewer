@@ -29,6 +29,9 @@ export interface ImagePageResponse {
   images: ImageItem[];
   total: number;
   monthIndexItems: MonthIndexItem[];
+  revision?: string;
+  offset?: number;
+  limit?: number;
 }
 
 export interface LibrarySourceInspection {
@@ -461,31 +464,52 @@ const parseImageItem = (value: unknown, index: number): ImageItem => {
     member_id: requireInteger(record.member_id, `$.images[${index}].member_id`),
     title: requireString(record.title, `$.images[${index}].title`),
     save_name: requireString(record.save_name, `$.images[${index}].save_name`),
+    file_size: (() => {
+      if (record.file_size === undefined) return undefined;
+      const value = requireNullableInteger(record.file_size, `$.images[${index}].file_size`);
+      if (value !== null && value < 0) {
+        throw new ApiValidationError('expected a non-negative file size', `$.images[${index}].file_size`);
+      }
+      return value;
+    })(),
     created_date: requireString(record.created_date, `$.images[${index}].created_date`),
     last_update_date: requireString(record.last_update_date, `$.images[${index}].last_update_date`),
     artist_name: optionalString(record.artist_name, `$.images[${index}].artist_name`),
     dominant_color: optionalString(record.dominant_color, `$.images[${index}].dominant_color`),
     group_page_index: optionalInteger(record.group_page_index, `$.images[${index}].group_page_index`),
     group_page_total: optionalInteger(record.group_page_total, `$.images[${index}].group_page_total`),
+    group_card_index: optionalInteger(record.group_card_index, `$.images[${index}].group_card_index`),
+    group_card_total: optionalInteger(record.group_card_total, `$.images[${index}].group_card_total`),
     media_status: mediaStatus === null ? undefined : mediaStatus,
     media_error: optionalString(record.media_error, `$.images[${index}].media_error`),
   };
 };
 
-const parseMonthIndexItems = (value: unknown): MonthIndexItem[] => {
-  if (!Array.isArray(value)) throw new ApiValidationError('expected an array', '$.months');
+const parseMonthIndexItems = (value: unknown, path = '$.months'): MonthIndexItem[] => {
+  if (!Array.isArray(value)) throw new ApiValidationError('expected an array', path);
 
   return value.map((item, index) => {
-    const record = requireRecord(item, `$.months[${index}]`);
-    const key = requireString(record.month, `$.months[${index}].month`);
-    const count = requireNumber(record.count, `$.months[${index}].count`);
-    if (count < 0) throw new ApiValidationError('expected a non-negative count', `$.months[${index}].count`);
+    const itemPath = `${path}[${index}]`;
+    const record = requireRecord(item, itemPath);
+    const key = record.key === undefined
+      ? requireString(record.month, `${itemPath}.month`)
+      : requireString(record.key, `${itemPath}.key`);
+    const countField = record.image_count === undefined ? 'count' : 'image_count';
+    const count = requireNumber(record[countField], `${itemPath}.${countField}`);
+    if (count < 0) throw new ApiValidationError('expected a non-negative count', `${itemPath}.${countField}`);
 
     const offset = record.offset === undefined || record.offset === null
       ? undefined
-      : requireInteger(record.offset, `$.months[${index}].offset`);
+      : requireInteger(record.offset, `${itemPath}.offset`);
     if (offset !== undefined && offset < 0) {
-      throw new ApiValidationError('expected a non-negative offset', `$.months[${index}].offset`);
+      throw new ApiValidationError('expected a non-negative offset', `${itemPath}.offset`);
+    }
+
+    const cardCount = record.card_count === undefined || record.card_count === null
+      ? undefined
+      : requireInteger(record.card_count, `${itemPath}.card_count`);
+    if (cardCount !== undefined && cardCount < 0) {
+      throw new ApiValidationError('expected a non-negative card count', `${itemPath}.card_count`);
     }
 
     return {
@@ -493,6 +517,8 @@ const parseMonthIndexItems = (value: unknown): MonthIndexItem[] => {
       label: monthLabel(key),
       count,
       ...(offset === undefined ? {} : { offset }),
+      ...(record.image_count === undefined ? {} : { imageCount: count }),
+      ...(cardCount === undefined ? {} : { cardCount }),
     };
   });
 };
@@ -516,12 +542,25 @@ export const parseImagePageResponse = (value: unknown): ImagePageResponse => {
     : requireInteger(record.total, '$.total');
   if (total < 0) throw new ApiValidationError('expected a non-negative total', '$.total');
 
+  const revision = optionalString(record.revision, '$.revision');
+  const offset = optionalInteger(record.offset, '$.offset');
+  const limit = optionalInteger(record.limit, '$.limit');
+  if (offset !== undefined && offset < 0) throw new ApiValidationError('expected a non-negative offset', '$.offset');
+  if (limit !== undefined && limit < 0) throw new ApiValidationError('expected a non-negative limit', '$.limit');
+  const monthIndexValue = record.month_index === undefined ? record.months : record.month_index;
+
   return {
     images,
     total,
-    monthIndexItems: record.months === undefined
+    monthIndexItems: monthIndexValue === undefined
       ? deriveMonthIndexItems(images)
-      : parseMonthIndexItems(record.months),
+      : parseMonthIndexItems(
+        monthIndexValue,
+        record.month_index === undefined ? '$.months' : '$.month_index',
+      ),
+    ...(revision === undefined ? {} : { revision }),
+    ...(offset === undefined ? {} : { offset }),
+    ...(limit === undefined ? {} : { limit }),
   };
 };
 

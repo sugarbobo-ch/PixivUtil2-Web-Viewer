@@ -1,3 +1,9 @@
+import type { UiLanguage } from './types';
+import configEn from './i18n/config-locales/en.json';
+import configJa from './i18n/config-locales/ja.json';
+import configZhCN from './i18n/config-locales/zh-CN.json';
+import configZhTW from './i18n/config-locales/zh-TW.json';
+
 export type PixivFieldKind = 'text' | 'textarea' | 'number' | 'boolean';
 export type PixivPathMode = 'folder' | 'existing-file' | 'save-file';
 
@@ -284,8 +290,153 @@ export function getSectionMetadata(sectionName: string): PixivConfigSectionMetad
   return matchingKey ? pixivConfigMetadata[matchingKey] : undefined;
 }
 
+const getCanonicalSectionName = (sectionName: string): string | undefined => {
+  if (pixivConfigMetadata[sectionName]) return sectionName;
+  const normalized = sectionName.toLowerCase();
+  return Object.keys(pixivConfigMetadata).find(key => key.toLowerCase() === normalized);
+};
+
 export function getFieldMetadata(sectionName: string, optionName: string): PixivConfigFieldMetadata {
   const sectionMetadata = getSectionMetadata(sectionName);
   const fieldMetadata = sectionMetadata?.fields[optionName.toLowerCase()];
   return fieldMetadata ?? textField(optionName, '此欄位未被目前版本的 PixivUtil2 文件列出，請保留原始設定格式。');
+}
+
+interface LocalizedConfigCopy {
+  label: string;
+  description: string;
+}
+
+interface ConfigLocaleDictionary {
+  sections: Record<string, LocalizedConfigCopy>;
+  fields: Record<string, LocalizedConfigCopy>;
+}
+
+const configLocaleDictionaries: Record<UiLanguage, ConfigLocaleDictionary> = {
+  'zh-TW': configZhTW,
+  'zh-CN': configZhCN,
+  en: configEn,
+  ja: configJa,
+};
+
+const unknownFieldDescriptions: Record<UiLanguage, string> = {
+  'zh-TW': '此欄位未被目前版本的 PixivUtil2 文件列出，請保留原始設定格式。',
+  'zh-CN': '当前版本的 PixivUtil2 文档未列出此字段，请保留原始设置格式。',
+  en: 'This field is not documented by the current PixivUtil2 version. Preserve its original format.',
+  ja: 'この項目は現在の PixivUtil2 ドキュメントにありません。元の設定形式を維持してください。',
+};
+
+const optionWords = [
+  'download', 'directory', 'filename', 'number', 'page', 'of', 'process', 'database', 'db', 'proxy',
+  'address', 'useragent', 'user', 'agent', 'robots', 'timeout', 'retry', 'wait',
+  'delay', 'check', 'new', 'version', 'notify', 'beta', 'open', 'enable', 'disable',
+  'verification', 'verify', 'ssl', 'log', 'level', 'dump', 'skip', 'filter', 'medium',
+  'tag', 'search', 'debug', 'http', 'screen', 'clear', 'irfanview', 'irfan', 'view',
+  'start', 'slide', 'create', 'list', 'settings', 'use', 'from', 'root', 'avatar',
+  'suppress', 'limit', 'write', 'image', 'raw', 'json', 'include', 'series', 'xmp',
+  'per', 'url', 'strip', 'html', 'caption', 'local', 'timezone', 'default', 'sketch',
+  'option', 'file', 'manga', 'novel', 'background', 'separator', 'translated',
+  'translation', 'locale', 'custom', 'bad', 'chars', 'cleanup', 'username', 'password',
+  'cookie', 'fanbox', 'temp', 'clearance', 'bm', 'r18', 'mode', 'type', 'date', 'auto',
+  'add', 'display', 'fewer', 'cover', 'content', 'info', 'min', 'text', 'length',
+  'article', 'absolute', 'paths', 'restricted', 'history', 'path', 'ffmpeg', 'codec',
+  'ext', 'param', 'webm', 'mkv', 'webp', 'gif', 'apng', 'avif', 'ugoira', 'frame',
+  'delete', 'zip', 'control', 'size', 'last', 'modified', 'always', 'overwrite',
+  'backup', 'old', 'day', 'updated', 'infinite', 'loop', 'member', 'resized', 'unknown',
+  'post', 'processing', 'cmd', 'extension', 'buffer', 'archive', 'compression',
+  'extract', 'pixiv', 'series', 'fanbox',
+].sort((left, right) => right.length - left.length);
+
+const optionDisplayWords: Record<string, string> = {
+  agent: 'agent',
+  apng: 'APNG',
+  avif: 'AVIF',
+  bm: 'BM',
+  cmd: 'command',
+  db: 'DB',
+  ext: 'extension',
+  fanbox: 'FANBOX',
+  ffmpeg: 'FFmpeg',
+  gif: 'GIF',
+  html: 'HTML',
+  http: 'HTTP',
+  id: 'ID',
+  irfanview: 'IrfanView',
+  json: 'JSON',
+  manga: 'manga',
+  mkv: 'MKV',
+  pixiv: 'Pixiv',
+  r18: 'R-18',
+  ssl: 'SSL',
+  url: 'URL',
+  webm: 'WebM',
+  webp: 'WebP',
+  xmp: 'XMP',
+  zip: 'ZIP',
+};
+
+const humanizeOptionName = (optionName: string): string => {
+  let remaining = optionName.toLowerCase().replace(/_/g, '');
+  const words: string[] = [];
+  while (remaining.length > 0) {
+    const match = optionWords.find(word => remaining.startsWith(word));
+    if (!match) {
+      words.push(remaining.slice(0, 1));
+      remaining = remaining.slice(1);
+      continue;
+    }
+    words.push(optionDisplayWords[match] || match);
+    remaining = remaining.slice(match.length);
+  }
+  const label = words.join(' ').replace(/\s+/g, ' ').trim();
+  return label ? `${label.slice(0, 1).toUpperCase()}${label.slice(1)}` : optionName;
+};
+
+export function getLocalizedFieldMetadata(
+  sectionName: string,
+  optionName: string,
+  language: UiLanguage,
+): PixivConfigFieldMetadata {
+  const metadata = getFieldMetadata(sectionName, optionName);
+  const canonicalSectionName = getCanonicalSectionName(sectionName);
+  const localized = canonicalSectionName
+    ? configLocaleDictionaries[language].fields[`${canonicalSectionName}.${optionName.toLowerCase()}`]
+    : undefined;
+  if (localized) {
+    return {
+      ...metadata,
+      ...localized,
+    };
+  }
+
+  const label = language === 'zh-TW' ? metadata.label : humanizeOptionName(optionName);
+  return {
+    ...metadata,
+    label,
+    description: unknownFieldDescriptions[language],
+  };
+}
+
+export function getLocalizedSectionMetadata(
+  sectionName: string,
+  language: UiLanguage,
+): PixivConfigSectionMetadata | undefined {
+  const metadata = getSectionMetadata(sectionName);
+  if (!metadata) return undefined;
+  const canonicalSectionName = getCanonicalSectionName(sectionName);
+  const localized = canonicalSectionName
+    ? configLocaleDictionaries[language].sections[canonicalSectionName]
+    : undefined;
+  const label = localized?.label ?? metadata.zh_category;
+  return {
+    ...metadata,
+    zh_category: label,
+    description: localized?.description ?? metadata.description,
+    fields: Object.fromEntries(
+      Object.keys(metadata.fields).map(optionName => [
+        optionName,
+        getLocalizedFieldMetadata(sectionName, optionName, language),
+      ]),
+    ),
+  };
 }

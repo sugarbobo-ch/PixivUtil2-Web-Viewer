@@ -30,6 +30,8 @@ class ArtistVisibilityRequest(BaseModel):
 
 class FolderIdentityRequest(BaseModel):
     status: Literal["verified", "rejected", "inferred", "unknown"]
+    member_id: Optional[int] = None
+    fanbox_id: Optional[str] = None
 
 
 def _ambiguous_artist_error(error: db.AmbiguousArtistIdentifier) -> HTTPException:
@@ -152,7 +154,7 @@ def unhide_artist(artist_id: str, request: Request):
 
 @router.put("/api/folders/{folder_id}/identity")
 def update_folder_identity(folder_id: str, req: FolderIdentityRequest):
-    folder = db.set_managed_folder_identity(folder_id, req.status)
+    folder = db.set_managed_folder_identity(folder_id, req.status, req.member_id, req.fanbox_id)
     if folder is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Managed folder not found.")
     return folder
@@ -174,19 +176,34 @@ def read_artist_source_link(
         folder = db.get_managed_folder(folder_id)
         if folder is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Managed folder not found.")
-        if folder.get("identity_status") != "verified":
+        if folder.get("identity_status") == "rejected":
             return None
         member_id = int(folder.get("member_id") or 0)
-        return source_resolver.resolve_artist_source(member_id)
+        if member_id <= 0:
+            explicit_id = source_resolver._get_explicit_member_id(
+                folder.get("current_path") or folder.get("folder_name") or ""
+            )
+            if explicit_id:
+                member_id = explicit_id
+        if member_id > 0:
+            return source_resolver.resolve_artist_source(member_id, folder_id)
+        return None
     if artist_id is None:
         raise HTTPException(status_code=UNPROCESSABLE_STATUS, detail="folder_id is required.")
     try:
         folder = db.get_managed_folder(artist_id)
     except db.AmbiguousArtistIdentifier as error:
         raise _ambiguous_artist_error(error) from error
-    if folder is not None and folder.get("identity_status") != "verified":
+    if folder and folder.get("identity_status") == "rejected":
         return None
-    return source_resolver.resolve_artist_source(artist_id)
+    target_member_id = artist_id
+    target_folder_id = folder.get("folder_id") if folder else None
+    if folder and folder.get("member_id"):
+        try:
+            target_member_id = int(folder["member_id"])
+        except (TypeError, ValueError):
+            pass
+    return source_resolver.resolve_artist_source(target_member_id, target_folder_id)
 
 
 @router.get("/api/months")

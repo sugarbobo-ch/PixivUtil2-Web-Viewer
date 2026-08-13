@@ -1,22 +1,35 @@
-# PixivUtil2 Web Viewer
+<p align="center">
+  <a href="https://github.com/sugarbobo-ch/PixivUtil2-Web-Viewer/actions/workflows/ci-cd.yml"><img src="https://github.com/sugarbobo-ch/PixivUtil2-Web-Viewer/actions/workflows/ci-cd.yml/badge.svg" alt="Build and release status"></a>
+</p>
 
-**English** | [繁體中文](README.zh-TW.md)
+<p align="center">
+  <strong>English</strong> · <a href="README.zh-TW.md">繁體中文</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.ja.md">日本語</a>
+</p>
 
-[![CI and release](https://github.com/sugarbobo-ch/PixivUtil2-Web-Viewer/actions/workflows/ci-cd.yml/badge.svg)](https://github.com/sugarbobo-ch/PixivUtil2-Web-Viewer/actions/workflows/ci-cd.yml)
+<h1 align="center">PixivUtil2 Web Viewer</h1>
 
-A Windows-first local web viewer for a PixivUtil2 library or a compatible local media folder. The React/Vite frontend provides gallery, fullscreen, and webtoon reading modes, while the FastAPI backend reads PixivUtil2 metadata when available and manages viewer-side indexes and thumbnail caches.
+PixivUtil2 Web Viewer is a Windows-friendly local library for managing and quickly browsing downloaded images, videos, and manga. Your media stays on your computer and does not need to be uploaded anywhere.
 
-## Highlights
+## Why use this project?
 
-- Scrub the time scale or select a year or month to jump directly across the library, with target thumbnails prefetched as you navigate.
-- Keep even large libraries fluid with thumbnail-first rendering, bounded image loading, and virtualized month grids that mount only the rows around the viewport.
-- Refine the current view with artist and date filters, search, sorting, and pagination controls.
-- Switch between the grid, a focused fullscreen viewer, and continuous vertical webtoon reading without losing your place.
-- Group related pages into manga packs, preview every page, then play the pack in fullscreen or webtoon mode.
-- Use YouTube-like fullscreen video gestures: Space or a click on the video body to play/pause, double-click either half to seek the configured number of seconds (5 by default), and hold a side for temporary 2× playback (configurable).
-- Keep sensitive media covered with the blur toggle while retaining page counts, grouping, and navigation.
-- Refresh the viewer index and optional dominant-color metadata in the background without writing to the PixivUtil2 source database.
-- Organize thumbnail caches through a recoverable workflow instead of permanently deleting generated files.
+Large download folders quickly become difficult to browse: opening folders one by one is slow, manga pages are separated, and finding works from a particular month takes time. This viewer turns those folders into one searchable gallery and provides reading modes designed for images and manga.
+
+- Use it with a PixivUtil2 library or any compatible local media folder.
+- Browse locally without installing a cloud service or uploading private media.
+- Start through the Windows setup files; no programming knowledge is required.
+
+## Features
+
+- Manage and quickly browse downloaded images, videos, and multi-page manga in one gallery.
+- Open images in a distraction-free fullscreen reader, or read long manga continuously in vertical webtoon mode.
+- Choose single-page view for one image at a time or two-page spread view for book-like reading. Reading direction can be left-to-right or right-to-left.
+- Drag the time scale or choose a year and month to jump directly to older works instead of scrolling through the entire library.
+- Keep large libraries responsive by showing thumbnails first and loading only the images near the screen. When you jump to another month, nearby thumbnails are prepared before you arrive.
+- Filter by artist and date, search titles, change sorting, and group related manga pages into one work.
+- Play videos in fullscreen or webtoon mode, with click, double-click seek, and press-and-hold speed controls.
+- Cover sensitive media with the blur option while keeping titles, page counts, and navigation usable.
+- Update the viewer index in the background without writing to the PixivUtil2 source database.
+- Switch between Traditional Chinese, Simplified Chinese, English, and Japanese without restarting.
 
 ## PixivUtil2 and folder-only use
 
@@ -173,6 +186,8 @@ Set-Location .\frontend
 ..\.runtime\pnpm\pnpm.cmd dev
 ```
 
+Interface translations are editable JSON text files under `frontend/src/i18n/locales/`. The labels and full descriptions for every documented `config.ini` field are separately editable under `frontend/src/i18n/config-locales/`. Traditional Chinese (`zh-TW`) is the source of meaning and fallback; keep the same keys and placeholders in the other locale files when editing translations.
+
 Checks:
 
 ```powershell
@@ -186,8 +201,11 @@ GitHub Actions runs the backend tests and frontend build on pushes and pull requ
 ## Project map
 
 - [AI agent project map](docs/ai-agent-project-map.md)
+- [i18n maintenance guide](docs/i18n-maintenance-guide.md)
+- [Global Gallery and month-navigation contract](docs/global-gallery-navigation-contract.md)
+- [Fullscreen spread-reader specification](docs/fullscreen-spread-reader-spec.md)
 - [Backend and native picker notes](backend/README.md)
-- [Artist indexing, cache, and gallery-grid design](docs/artist-list-indexing-cache-grid-design.md)
+- [Artist indexing and Viewer snapshot design](docs/artist-list-indexing-cache-grid-design.md)
 - [Historical media-library implementation plan](docs/media-library-implementation-todo.md)
 - [Pixiv UI adjustment report](docs/pixiv-ui-style-adjustment-report.md)
 - [Project rules for coding agents](agents.md)

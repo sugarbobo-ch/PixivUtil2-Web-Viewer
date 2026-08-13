@@ -12,7 +12,7 @@ import {
   X,
 } from 'lucide-react';
 import { Artist, MonthItem } from '../types';
-import { getTimeFilterLabel } from '../utils/timeFilterLabels';
+import { useI18n } from '../i18n';
 import { getArtistScopeKey } from '../utils/artistIdentity';
 import {
   getYearFromTimeFilter,
@@ -44,6 +44,7 @@ interface SidebarProps {
   setSelectedMonths: React.Dispatch<React.SetStateAction<string[]>>;
   selectedArtist: string | null;
   setSelectedArtist: (artistKey: string | null) => void;
+  onPrefetchArtist?: (artistKey: string | null) => void;
   searchQuery?: string;
   setSearchQuery?: (query: string) => void;
   onResetAllFilters?: () => void;
@@ -63,11 +64,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
   setSelectedMonths,
   selectedArtist,
   setSelectedArtist,
+  onPrefetchArtist,
   searchQuery = '',
   setSearchQuery,
   onResetAllFilters,
   isLoading = false,
 }) => {
+  const { t } = useI18n();
   const [artistFilter, setArtistFilter] = useState('');
   const [isMonthSectionOpen, setIsMonthSectionOpen] = useState(true);
   const [expandedYears, setExpandedYears] = useState<Record<string, boolean>>({});
@@ -267,13 +270,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
       <div className="app-sidebar__header flex items-center justify-between">
         <div className="app-sidebar__heading flex items-center gap-2">
           <Filter className="app-sidebar__section-icon w-4 h-4" />
-          <h2 className="app-sidebar__title text-sm font-semibold">篩選條件</h2>
+          <h2 className="app-sidebar__title text-sm font-semibold">{t('filters.title')}</h2>
         </div>
         <IconButton
           type="button"
           onClick={onClose}
           className="app-sidebar__close"
-          aria-label="關閉篩選側欄"
+          aria-label={t('filters.closeSidebar')}
         >
           <X className="h-5 w-5" aria-hidden="true" />
         </IconButton>
@@ -289,13 +292,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
         >
           <SidebarSectionHeader
             className="app-sidebar__section-header--active-filters"
-            title="目前篩選"
+            title={t('filters.active')}
             count={(
               <Badge
                 variant="neutral"
                 size="xs"
                 className="app-sidebar__section-header-count-badge"
-                aria-label={`目前有 ${activeFilterCount} 項篩選`}
+                aria-label={`${t('filters.active')}: ${activeFilterCount}`}
               >
                 {activeFilterCount}
               </Badge>
@@ -308,7 +311,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 onClick={handleResetFilters}
                 className="app-sidebar__auxiliary-action"
               >
-                <RotateCcw className="w-3 h-3" /> 重設所有
+                <RotateCcw className="w-3 h-3" /> {t('filters.reset')}
               </Button>
             )}
           />
@@ -323,7 +326,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               aria-expanded={isActiveFiltersExpanded}
               onClick={() => setIsActiveFiltersExpanded(previous => !previous)}
             >
-              <span>{isActiveFiltersExpanded ? '收合條件' : '查看全部條件'}</span>
+              <span>{isActiveFiltersExpanded ? t('filters.collapse') : t('filters.showAll')}</span>
               <ChevronDown aria-hidden="true" />
             </Button>
           )}
@@ -331,19 +334,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <div
             id="sidebar-active-filter-chips"
             className="app-sidebar__active-filters-chips"
-            aria-label="已套用的篩選條件"
+            aria-label={t('filters.applied')}
           >
             {searchQuery && setSearchQuery && (
               <span className="app-sidebar__filter-chip">
-                <span className="app-sidebar__filter-chip-label" title={`關鍵字: "${searchQuery}"`}>
-                  關鍵字: "{searchQuery}"
+                <span className="app-sidebar__filter-chip-label" title={`${t('filters.keyword')}: "${searchQuery}"`}>
+                  {t('common.searchTitleArtist')}: "{searchQuery}"
                 </span>
                 <IconButton
                   type="button"
                   variant="ghost"
                   size="xs"
                   className="app-sidebar__filter-chip-remove"
-                  aria-label="移除搜尋條件"
+                  aria-label={t('filters.removeSearch')}
                   onClick={() => setSearchQuery('')}
                 >
                   <X aria-hidden="true" />
@@ -352,16 +355,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
             )}
             {selectedArtist !== null && (
               <span className="app-sidebar__filter-chip">
-                <span className="app-sidebar__filter-chip-label" title={`繪師: ${activeArtistObj?.name || selectedArtist}`}>
-                  繪師: {activeArtistObj?.name || selectedArtist}
+                <span className="app-sidebar__filter-chip-label" title={`${t('filters.artistLabel')}: ${activeArtistObj?.name || selectedArtist}`}>
+                  {t('filters.artistList')}: {activeArtistObj?.name || selectedArtist}
                 </span>
                 <IconButton
                   type="button"
                   variant="ghost"
                   size="xs"
                   className="app-sidebar__filter-chip-remove"
-                  aria-label="移除繪師條件"
+                  aria-label={t('filters.removeArtist')}
                   onClick={() => setSelectedArtist(null)}
+                  onPointerEnter={() => onPrefetchArtist?.(null)}
+                  onPointerDown={() => onPrefetchArtist?.(null)}
+                  onFocus={() => onPrefetchArtist?.(null)}
                 >
                   <X aria-hidden="true" />
                 </IconButton>
@@ -370,13 +376,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
             {selectedMonths.map(mStr => (
               <span key={mStr} className="app-sidebar__filter-chip">
-                <span className="app-sidebar__filter-chip-label">{getTimeFilterLabel(mStr)}: {mStr}</span>
+                <span className="app-sidebar__filter-chip-label">{/^\d{4}$/.test(mStr.trim()) ? t('filters.year') : t('filters.month')}: {mStr}</span>
                 <IconButton
                   type="button"
                   variant="ghost"
                   size="xs"
                   className="app-sidebar__filter-chip-remove"
-                  aria-label="移除月份條件"
+                  aria-label={t('filters.removeMonth')}
                   onClick={() => toggleTimeFilterSelection(mStr)}
                 >
                   <X aria-hidden="true" />
@@ -393,7 +399,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         <div className="app-sidebar__section app-sidebar__section--artists flex-1 flex flex-col min-h-0">
           <SidebarSectionHeader
             icon={<User className="app-sidebar__section-icon w-4 h-4" />}
-            title="繪師列表"
+            title={t('filters.artistList')}
             count={`(${artists.length})`}
             actions={selectedArtist !== null ? (
               <Button
@@ -403,7 +409,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 onClick={() => setSelectedArtist(null)}
                 className="app-sidebar__auxiliary-action"
               >
-                取消選擇
+                {t('filters.cancelSelection')}
               </Button>
             ) : undefined}
           />
@@ -413,7 +419,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             type="text"
             value={artistFilter}
             onChange={(e) => setArtistFilter(e.target.value)}
-            placeholder="搜尋繪師名稱..."
+            placeholder={t('filters.searchArtist')}
             className="app-sidebar__search w-full mb-2 px-2.5 py-1.5 text-xs rounded-lg"
           />
 
@@ -421,20 +427,23 @@ export const Sidebar: React.FC<SidebarProps> = ({
             {isLoading ? (
               <div className="app-sidebar__loading" role="status" aria-live="polite" aria-busy="true">
                 <span className="app-sidebar__loading-dot" aria-hidden="true" />
-                <span>正在讀取繪師列表…</span>
+                <span>{t('filters.loadingArtists')}</span>
               </div>
             ) : (
               <>
                 <Button
                   type="button"
                   onClick={() => setSelectedArtist(null)}
+                  onPointerEnter={() => onPrefetchArtist?.(null)}
+                  onPointerDown={() => onPrefetchArtist?.(null)}
+                  onFocus={() => onPrefetchArtist?.(null)}
                   variant={selectedArtist === null ? 'primary' : 'ghost'}
                   fullWidth
-                  className={`app-sidebar__artist-option w-full flex items-center justify-between px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                  className={`app-sidebar__artist-option ${
                     selectedArtist === null ? 'is-selected' : ''
                   }`}
                 >
-                  <span>全部繪師</span>
+                  <span>{t('filters.allArtists')}</span>
                   {selectedArtist === null && <Check className="w-3.5 h-3.5" />}
                 </Button>
 
@@ -445,14 +454,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     key={artistKey}
                     type="button"
                     onClick={() => setSelectedArtist(artistKey === selectedArtist ? null : artistKey)}
+                    onPointerEnter={() => onPrefetchArtist?.(artistKey)}
+                    onPointerDown={() => onPrefetchArtist?.(artistKey)}
+                    onFocus={() => onPrefetchArtist?.(artistKey)}
                     variant={selectedArtist === artistKey ? 'primary' : 'ghost'}
                     fullWidth
-                    className={`app-sidebar__artist-option w-full flex items-center justify-between px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                    className={`app-sidebar__artist-option ${
                       selectedArtist === artistKey ? 'is-selected' : ''
                     }`}
                   >
-                    <span className="truncate max-w-[140px] text-left">{a.name || `ID: ${a.member_id}`}</span>
-                    <span className="text-[11px] opacity-70">({a.artwork_count})</span>
+                    <span className="app-sidebar__artist-name">{a.name || `ID: ${a.member_id}`}</span>
+                    <span className="app-sidebar__artist-count">({a.artwork_count})</span>
                   </Button>
                   );
                 })}
@@ -468,13 +480,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
               selectedMonths.length > 0 ? 'app-sidebar__section-heading--has-selection' : ''
             }`}
             icon={<Calendar className="app-sidebar__section-icon w-4 h-4" />}
-            title="時間複選"
+            title={t('filters.timeMultiSelect')}
             count={selectedMonths.length > 0 ? (
               <Badge
                 variant="neutral"
                 size="xs"
                 className="app-sidebar__section-header-count-badge"
-                aria-label={`已選 ${selectedMonths.length} 項時間`}
+                aria-label={`${t('filters.timeMultiSelect')}: ${selectedMonths.length}`}
               >
                 {selectedMonths.length}
               </Badge>
@@ -495,8 +507,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   variant="ghost"
                   size="sm"
                   className="app-sidebar__sort-toggle"
-                  aria-label={monthSortAsc ? '目前排序：由舊到新，切換為由新到舊' : '目前排序：由新到舊，切換為由舊到新'}
-                  title={monthSortAsc ? '目前排序：由舊到新，點擊切換為由新到舊' : '目前排序：由新到舊，點擊切換為由舊到新'}
+                  aria-label={monthSortAsc ? t('filters.sortOldToNew') : t('filters.sortNewToOld')}
+                  title={monthSortAsc ? t('filters.sortOldToNew') : t('filters.sortNewToOld')}
                   aria-pressed={monthSortAsc}
                 >
                   {monthSortAsc
@@ -509,7 +521,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   variant="ghost"
                   size="md"
                   className="app-sidebar__section-toggle-button"
-                  aria-label={isMonthSectionOpen ? '收合時間篩選' : '展開時間篩選'}
+                  aria-label={isMonthSectionOpen ? t('filters.collapseTime') : t('filters.expandTime')}
                 >
                   {isMonthSectionOpen ? <ChevronDown className="h-5 w-5" /> : <ChevronRight className="h-5 w-5" />}
                 </IconButton>
@@ -528,7 +540,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   selectedMonths.length === 0 ? 'is-selected' : ''
                 }`}
               >
-                <span>不限時間 (全部)</span>
+                <span>{t('filters.unlimitedTime')}</span>
                 {selectedMonths.length === 0 && <Check className="w-3.5 h-3.5" />}
               </Button>
 
@@ -557,7 +569,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       >
                         {isExpanded ? <ChevronDown className="app-sidebar__year-expander-icon w-3.5 h-3.5" /> : <ChevronRight className="app-sidebar__year-expander-icon w-3.5 h-3.5" />}
                         <span className="app-sidebar__year-label">
-                          <span className="app-sidebar__year-label-year">{year} 年</span>
+                          <span className="app-sidebar__year-label-year">{t('filters.yearValue', { year })}</span>
                           <span className="app-sidebar__year-count text-[11px] font-normal">({group.totalCount})</span>
                         </span>
                       </Button>
@@ -570,9 +582,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
                         className={`app-sidebar__year-toggle text-[11px] px-2 py-0.5 transition-colors ${
                           isYearSelected ? 'is-selected' : ''
                         }`}
-                        title={`複選/取消複選 ${year} 全年作品`}
+                        title={`${t('filters.selectAllYear')} ${year}`}
                       >
-                        {isYearSelected ? '已選全年' : '複選全年'}
+                        {isYearSelected ? t('filters.selectedAllYear') : t('filters.selectAllYear')}
                       </Button>
                     </div>
 
@@ -595,7 +607,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                                 isMonthSelected ? 'is-selected' : ''
                               }`}
                             >
-                              <span>{monthNum} 月</span>
+                              <span>{t('filters.monthValue', { month: monthNum })}</span>
                               <span className="opacity-70 text-[10px]">({m.count})</span>
                             </Button>
                           );
@@ -615,12 +627,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
         role="separator"
         tabIndex={0}
         aria-orientation="vertical"
-        aria-label="調整側邊欄寬度"
+        aria-label={t('filters.resizeSidebar')}
         aria-valuemin={SIDEBAR_MIN_WIDTH}
         aria-valuemax={maxSidebarWidth}
         aria-valuenow={sidebarWidth}
-        aria-valuetext={sidebarWidth === SIDEBAR_DEFAULT_WIDTH ? '目前寬度，預設值' : '目前寬度'}
-        title="拖曳調整側邊欄寬度；雙擊可回復預設"
+        aria-valuetext={sidebarWidth === SIDEBAR_DEFAULT_WIDTH ? t('filters.sidebarDefaultWidth') : t('filters.sidebarCurrentWidth')}
+        title={t('filters.resizeSidebarHint')}
         onPointerDown={handleResizePointerDown}
         onPointerMove={handleResizePointerMove}
         onPointerUp={handleResizePointerUp}

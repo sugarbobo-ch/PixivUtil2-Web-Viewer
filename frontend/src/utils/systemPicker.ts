@@ -1,3 +1,6 @@
+import { ApiError } from '../api/client';
+import { LocalizedOperationError } from './operationError';
+
 export type SystemPickerMode = 'folder' | 'existing-file' | 'save-file';
 
 export interface SystemPickerOptions {
@@ -21,10 +24,17 @@ const getSessionToken = async (): Promise<string> => {
   if (!sessionTokenPromise) {
     sessionTokenPromise = fetch('/api/system/session')
       .then(async response => {
-        if (!response.ok) throw new Error(await readError(response));
+        if (!response.ok) {
+          throw new ApiError(
+            await readError(response),
+            response.status,
+            undefined,
+            'http',
+          );
+        }
         const data = await response.json() as { token?: unknown };
         if (typeof data.token !== 'string' || data.token.length < 16) {
-          throw new Error('無法建立本機選擇器工作階段。');
+          throw new LocalizedOperationError('common.pathPickerError');
         }
         return data.token;
       })
@@ -46,6 +56,13 @@ export const openSystemPicker = async ({ mode, purpose }: SystemPickerOptions): 
     },
     body: JSON.stringify({ mode, purpose }),
   });
-  if (!response.ok) throw new Error(await readError(response));
+  if (!response.ok) {
+    throw new ApiError(
+      await readError(response),
+      response.status,
+      undefined,
+      'http',
+    );
+  }
   return response.json() as Promise<SystemPickerResponse>;
 };

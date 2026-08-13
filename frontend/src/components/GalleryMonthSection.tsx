@@ -14,6 +14,7 @@ import {
 } from '../utils/galleryLayout';
 import { ImagePriority } from '../utils/imageLoadScheduler';
 import { getImageSelectionKey, getWorkSelectionKey } from '../utils/gallerySelection';
+import { useI18n } from '../i18n';
 import { GalleryThumbnail } from './GalleryThumbnail';
 import { MediaIssuePlaceholder } from './MediaIssuePlaceholder';
 import { Badge, Button } from './ui';
@@ -32,6 +33,7 @@ interface GalleryMonthSectionProps {
   selectedIds: Set<number>;
   onSetSelection: (imageIds: number[], selected: boolean) => void;
   onOpenFullscreen: (index: number) => void;
+  onPrefetchReader?: () => void;
   onOpenWorkGroup?: (group: WorkGroup) => void;
   beginPointerGesture: (event: React.PointerEvent<HTMLElement>, cardKey: string, cardIds: number[]) => void;
   handleCardClick: (event: React.MouseEvent<HTMLElement>, cardIds: number[], openCard: () => void) => void;
@@ -78,6 +80,7 @@ export const GalleryMonthSection: React.FC<GalleryMonthSectionProps> = ({
   selectedIds,
   onSetSelection,
   onOpenFullscreen,
+  onPrefetchReader,
   onOpenWorkGroup,
   beginPointerGesture,
   handleCardClick,
@@ -91,6 +94,7 @@ export const GalleryMonthSection: React.FC<GalleryMonthSectionProps> = ({
   destinationGlobalIndex = null,
   restoreGlobalIndex = null,
 }) => {
+  const { t, formatNumber } = useI18n();
   const sectionRef = React.useRef<HTMLDivElement | null>(null);
   const gridShellRef = React.useRef<HTMLDivElement | null>(null);
   const gridRef = React.useRef<HTMLDivElement | null>(null);
@@ -277,11 +281,13 @@ export const GalleryMonthSection: React.FC<GalleryMonthSectionProps> = ({
         role={isEditMode ? 'checkbox' : undefined}
         tabIndex={0}
         aria-checked={isEditMode ? isSelected : undefined}
-        aria-label={card.item.title || '作品'}
+        aria-label={card.item.title || t('gallery.work')}
         onPointerDown={event => beginPointerGesture(event, card.key, card.ids)}
+        onPointerEnter={onPrefetchReader}
+        onFocus={onPrefetchReader}
         onClick={event => handleCardClick(event, card.ids, openCard)}
         onKeyDown={event => handleCardKeyDown(event, card.ids, openCard)}
-        className={`gallery-card group relative aspect-square overflow-hidden rounded-lg cursor-pointer select-none ${
+        className={`gallery-card group relative aspect-square overflow-hidden cursor-pointer select-none ${
           isSelected ? 'gallery-card--selected' : ''
         }${isEditMode ? ' gallery-card--editable' : ''}`}
       >
@@ -330,11 +336,11 @@ export const GalleryMonthSection: React.FC<GalleryMonthSectionProps> = ({
           className="gallery-card__caption pointer-events-none absolute inset-inline-0 inset-block-end-0"
           aria-hidden="true"
         >
-          <p className="gallery-card__title" title={card.item.title || '無題'}>
-            {card.item.title || '無題'}
+          <p className="gallery-card__title" title={card.item.title || t('gallery.noTitle')}>
+            {card.item.title || t('gallery.noTitle')}
           </p>
-          <p className="gallery-card__artist" title={card.item.artist_name || `繪師 ID: ${card.item.member_id}`}>
-            {card.item.artist_name || `繪師 ID: ${card.item.member_id}`}
+          <p className="gallery-card__artist" title={card.item.artist_name || t('gallery.artistId', { id: card.item.member_id })}>
+            {card.item.artist_name || t('gallery.artistId', { id: card.item.member_id })}
           </p>
         </div>
       </button>
@@ -348,7 +354,7 @@ export const GalleryMonthSection: React.FC<GalleryMonthSectionProps> = ({
   return (
     <div ref={sectionRef} id={`month-section-${group.key}`} className="gallery-month-section space-y-3">
       <div
-        className="gallery-month-header sticky z-10 flex items-center justify-between rounded-lg"
+        className="gallery-month-header sticky z-10 flex items-center justify-between"
         style={{ top: 'calc(-1 * var(--gallery-grid-edge, 1rem))' }}
       >
         <div className="gallery-month-header__title flex items-center gap-2 text-xs font-bold">
@@ -357,10 +363,10 @@ export const GalleryMonthSection: React.FC<GalleryMonthSectionProps> = ({
         </div>
         <div className="gallery-month-header__actions">
           <span className="gallery-month-header__count gallery-month-header__count--full">
-            此月份共有 {group.items.length} 張作品
+            {t('gallery.monthWorks', { count: formatNumber(group.items.length) })}
           </span>
           <span className="gallery-month-header__count gallery-month-header__count--compact" aria-hidden="true">
-            {group.items.length} 張
+            {t('gallery.monthCount', { count: formatNumber(group.items.length) })}
           </span>
           {isEditMode && (
             <Button
@@ -370,10 +376,10 @@ export const GalleryMonthSection: React.FC<GalleryMonthSectionProps> = ({
               size="sm"
               className={`gallery-month-select${isMonthSelected ? ' is-selected' : ''}`}
               aria-pressed={isMonthSelected}
-              title={`${isMonthSelected ? '取消' : '選取'}目前頁面中的${group.label}作品`}
+              title={t(isMonthSelected ? 'gallery.deselectMonthTitle' : 'gallery.selectMonthTitle', { month: group.label })}
             >
               {isMonthSelected ? <CheckSquare aria-hidden="true" /> : <Square aria-hidden="true" />}
-              <span>{isMonthSelected ? '取消本月' : '選取本月'}</span>
+              <span>{t(isMonthSelected ? 'gallery.deselectMonth' : 'gallery.selectMonth')}</span>
             </Button>
           )}
         </div>

@@ -1,10 +1,10 @@
-# Web Viewer Refactor TODO
+# Web Viewer Refactor 歷史紀錄
 
-> 這是目前有效的 refactor 進度與執行順序。每完成一批實作，必須同步更新狀態、日期、實際檔案、驗證結果與未驗證項目。
+> 狀態：歷史 refactor 紀錄。本文中的行數、working tree 數量、測試數量與「下一個入口」只代表當日快照，不是目前實作契約。
 >
-> `docs/media-library-implementation-todo.md` 是歷史功能規格與驗收背景，不取代本文件的即時進度。
+> 現況先讀 `docs/ai-agent-project-map.md`；i18n／雙頁重構後續讀 `docs/frontend-refactor-i18n-spread-reader-plan.md`；Gallery 全域載入讀 `docs/global-gallery-navigation-contract.md`。歷史媒體資料庫背景仍保留在 `docs/media-library-implementation-todo.md`。
 
-最後更新：2026-08-10
+最後一筆歷史更新：2026-08-11
 
 ## 審查結論
 

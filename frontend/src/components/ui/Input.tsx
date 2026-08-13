@@ -1,6 +1,7 @@
 import React, { forwardRef, useImperativeHandle, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 import { IconButton } from './Button';
+import { useI18n } from '../../i18n';
 
 export type ControlSize = 'xs' | 'sm' | 'md' | 'lg';
 
@@ -40,7 +41,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
     wrapperClassName,
     clearable = false,
     onClear,
-    clearButtonLabel = '清除內容',
+    clearButtonLabel,
     onChange,
     value,
     defaultValue,
@@ -49,6 +50,8 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
   },
   ref,
 ) {
+  const { t } = useI18n();
+  const resolvedClearButtonLabel = clearButtonLabel ?? t('common.clearContent');
   const inputRef = useRef<HTMLInputElement>(null);
   const isControlled = value !== undefined;
   const [uncontrolledValue, setUncontrolledValue] = useState(() => getInputValue(defaultValue));
@@ -108,8 +111,8 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
           size="xs"
           variant="ghost"
           className="ui-input__clear-button"
-          aria-label={clearButtonLabel}
-          title={clearButtonLabel}
+          aria-label={resolvedClearButtonLabel}
+          title={resolvedClearButtonLabel}
           disabled={disabled}
           onMouseDown={event => event.preventDefault()}
           onClick={handleClear}

@@ -26,22 +26,47 @@ def read_images(
     request: Request,
     month: Optional[str] = None,
     artist_id: Optional[str] = None,
+    folder_id: Optional[str] = None,
     search: Optional[str] = None,
     only_db: Optional[bool] = None,
     sort_mode: str = "newest",
     limit: int = 200,
     offset: int = 0,
+    grouping: str = "ungrouped",
 ):
-    try:
-        images, total_count, available_months = _gallery_service(request).images(
+    service = _gallery_service(request)
+
+    # Keep the legacy triple-returning service seam usable for old callers and
+    # tests while production routes opt into the richer sparse-range contract.
+    # Looking up the method on the concrete type avoids treating unittest
+    # mocks' dynamic attributes as an implementation of the new seam.
+    range_method = getattr(type(service), "media_range", None)
+    if callable(range_method):
+        return service.media_range(
             month=month,
             artist_id=artist_id,
+            folder_id=folder_id,
             search=search,
             limit=limit,
             offset=offset,
             only_db=bool(only_db),
             sort_mode=sort_mode,
+            grouping=grouping,
         )
+
+    try:
+        kwargs = {
+            "month": month,
+            "artist_id": artist_id,
+            "search": search,
+            "limit": limit,
+            "offset": offset,
+            "only_db": bool(only_db),
+            "sort_mode": sort_mode,
+        }
+        if folder_id is not None:
+            kwargs["folder_id"] = folder_id
+        images, total_count, available_months = service.images(**kwargs)
     except db.AmbiguousArtistIdentifier as error:
         raise HTTPException(
             status_code=409,

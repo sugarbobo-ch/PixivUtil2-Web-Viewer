@@ -525,13 +525,36 @@
 .app-sidebar__month-list > button {
   min-height: 2.25rem;
   border: 1px solid transparent;
-  border-radius: 0.625rem;
+}
+
+.app-sidebar__artist-list > button {
+  border-radius: var(--ui-control-radius);
 }
 
 .app-sidebar__artist-option {
   background: transparent;
   color: var(--sidebar-text-secondary);
+  justify-content: space-between;
   text-align: start;
+}
+
+.app-sidebar__artist-name {
+  min-width: 0;
+  max-width: 140px;
+  overflow: hidden;
+  text-align: start;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-sidebar__artist-count {
+  flex: 0 0 auto;
+  color: currentColor;
+  font-size: var(--ui-font-caption);
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+  line-height: 1.25;
+  opacity: 0.7;
 }
 
 .app-sidebar__artist-option:hover {

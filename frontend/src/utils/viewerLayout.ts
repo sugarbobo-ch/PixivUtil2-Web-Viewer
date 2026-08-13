@@ -44,13 +44,14 @@ export const buildFilmstripLayout = (
 
   images.forEach((item, index) => {
     if (index > 0) {
-      offset += options.gap;
       const previousItem = images[index - 1];
       const isWorkBoundary = getItemGroupKey(item) !== getItemGroupKey(previousItem);
       if (isWorkBoundary) {
-        boundaryOffsets[index] = offset + options.boundaryMargin;
-        offset += options.boundaryWidth + options.boundaryMargin * 2;
+        offset += options.boundaryMargin;
+        boundaryOffsets[index] = offset;
+        offset += options.boundaryWidth + options.boundaryMargin;
       } else {
+        offset += options.gap;
         boundaryOffsets[index] = null;
       }
     } else {
@@ -74,6 +75,51 @@ export interface WebtoonMetrics {
   totalHeight: number;
   estimatedHeight: number;
 }
+
+interface GlobalHeightIndexLike {
+  getHeight(index: number): number;
+  getOffset(index: number): number;
+}
+
+export const buildWebtoonMetricsFromHeightIndex = ({
+  globalHeightIndex,
+  rangeStart,
+  imageCount,
+  imageGap,
+  minItemHeight,
+}: {
+  globalHeightIndex: GlobalHeightIndexLike;
+  rangeStart: number;
+  imageCount: number;
+  imageGap: number;
+  minItemHeight: number;
+}): WebtoonMetrics => {
+  const safeStart = Math.max(0, Math.floor(rangeStart));
+  const count = Math.max(0, Math.floor(imageCount));
+  const offsets = Array.from({ length: count }, (_, index) => (
+    globalHeightIndex.getOffset(safeStart + index)
+      - globalHeightIndex.getOffset(safeStart)
+      + index * Math.max(0, imageGap)
+  ));
+  const heights = Array.from({ length: count }, (_, index) => (
+    Math.max(minItemHeight, globalHeightIndex.getHeight(safeStart + index))
+  ));
+  const totalHeight = count === 0
+    ? 0
+    : Math.max(
+      0,
+      globalHeightIndex.getOffset(safeStart + count)
+        - globalHeightIndex.getOffset(safeStart)
+        + Math.max(0, count - 1) * Math.max(0, imageGap),
+    );
+
+  return {
+    offsets,
+    heights,
+    totalHeight,
+    estimatedHeight: heights[0] ?? minItemHeight,
+  };
+};
 
 export const buildWebtoonMetrics = ({
   imageCount,
@@ -154,12 +200,13 @@ export const buildWebtoonThumbnailLayout = ({
 
   for (let index = 0; index < images.length; index += 1) {
     if (index > 0) {
-      offset += gap;
       const isWorkBoundary = getItemGroupKey(images[index]) !== getItemGroupKey(images[index - 1]);
       if (isWorkBoundary) {
-        boundaryOffsets[index] = offset + boundaryMargin;
-        offset += boundaryWidth + boundaryMargin * 2;
+        offset += boundaryMargin;
+        boundaryOffsets[index] = offset;
+        offset += boundaryWidth + boundaryMargin;
       } else {
+        offset += gap;
         boundaryOffsets[index] = null;
       }
     } else {

@@ -2,7 +2,9 @@ import React, { useState } from 'react';
 import { FolderOpen, LoaderCircle } from 'lucide-react';
 import { PixivPathFieldMetadata } from '../pixivConfigMetadata';
 import { openSystemPicker } from '../utils/systemPicker';
+import { getOperationErrorMessage } from '../utils/operationError';
 import { Button, Input } from './ui';
+import { useI18n } from '../i18n';
 
 interface PathPickerFieldProps {
   id: string;
@@ -16,12 +18,6 @@ interface PathPickerFieldProps {
   clearLabel?: string;
 }
 
-const modeLabel: Record<PixivPathFieldMetadata['mode'], string> = {
-  folder: '選擇資料夾',
-  'existing-file': '選擇檔案',
-  'save-file': '選擇儲存位置',
-};
-
 export const PathPickerField: React.FC<PathPickerFieldProps> = ({
   id,
   label,
@@ -31,8 +27,15 @@ export const PathPickerField: React.FC<PathPickerFieldProps> = ({
   descriptionId,
   onChange,
   onClear,
-  clearLabel = '清除選擇',
+  clearLabel,
 }) => {
+  const { t } = useI18n();
+  const modeLabel: Record<PixivPathFieldMetadata['mode'], string> = {
+    folder: t('common.chooseFolder'),
+    'existing-file': t('common.chooseFile'),
+    'save-file': t('common.chooseSaveLocation'),
+  };
+  const resolvedClearLabel = clearLabel ?? t('common.clearSelection');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -43,7 +46,7 @@ export const PathPickerField: React.FC<PathPickerFieldProps> = ({
       const result = await openSystemPicker({ mode: metadata.mode, purpose: metadata.purpose });
       if (result.status === 'selected' && result.path) onChange(result.path);
     } catch (pickerError) {
-      setError(pickerError instanceof Error ? pickerError.message : '無法開啟路徑選擇器。');
+      setError(getOperationErrorMessage(pickerError, t, 'common.pathPickerError'));
     } finally {
       setLoading(false);
     }
@@ -77,7 +80,7 @@ export const PathPickerField: React.FC<PathPickerFieldProps> = ({
           className="shrink-0"
         >
           {loading ? <LoaderCircle className="settings-modal__picker-spinner h-4 w-4" aria-hidden="true" /> : <FolderOpen className="h-4 w-4" aria-hidden="true" />}
-          <span className="hidden sm:inline">{loading ? '開啟中…' : modeLabel[metadata.mode]}</span>
+          <span className="hidden sm:inline">{loading ? t('common.opening') : modeLabel[metadata.mode]}</span>
         </Button>
         {onClear && (
           <Button
@@ -90,7 +93,7 @@ export const PathPickerField: React.FC<PathPickerFieldProps> = ({
             variant="plain"
             className="shrink-0"
           >
-            {clearLabel}
+            {resolvedClearLabel}
           </Button>
         )}
       </div>

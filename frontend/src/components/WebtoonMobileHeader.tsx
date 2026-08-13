@@ -1,6 +1,7 @@
 import React from 'react';
 import { ArrowLeft, ArrowUp, Settings2 } from 'lucide-react';
 import { IconButton } from './ui';
+import { useI18n } from '../i18n';
 
 interface WebtoonMobileHeaderProps {
   isHidden: boolean;
@@ -17,6 +18,7 @@ export const WebtoonMobileHeader: React.FC<WebtoonMobileHeaderProps> = ({
   onScrollToTop,
   onToggleSettings,
 }) => {
+  const { t } = useI18n();
   return (
     <header className={`webtoon-mobile-header${isHidden ? ' is-hidden' : ''}`}>
       <div className="webtoon-mobile-header__bar">
@@ -26,8 +28,8 @@ export const WebtoonMobileHeader: React.FC<WebtoonMobileHeaderProps> = ({
           className="webtoon-mobile-header__back"
           onClick={onBack}
           tabIndex={isHidden ? -1 : undefined}
-          aria-label="返回網格檢視"
-          title="返回網格檢視"
+          aria-label={t('webtoon.backToGallery')}
+          title={t('webtoon.backToGallery')}
         >
           <ArrowLeft aria-hidden="true" />
         </IconButton>
@@ -43,8 +45,8 @@ export const WebtoonMobileHeader: React.FC<WebtoonMobileHeaderProps> = ({
               if (event.detail > 0) event.currentTarget.blur();
             }}
             tabIndex={isHidden ? -1 : undefined}
-            aria-label="回到條漫頂端"
-            title="回到條漫頂端"
+            aria-label={t('webtoon.scrollToTop')}
+            title={t('webtoon.scrollToTop')}
           >
             <ArrowUp aria-hidden="true" />
           </IconButton>
@@ -56,8 +58,8 @@ export const WebtoonMobileHeader: React.FC<WebtoonMobileHeaderProps> = ({
             tabIndex={isHidden ? -1 : undefined}
             aria-expanded={isSettingsOpen}
             aria-controls="webtoon-mobile-quick-settings"
-            aria-label={isSettingsOpen ? '關閉條漫設定' : '開啟條漫設定'}
-            title={isSettingsOpen ? '關閉條漫設定' : '開啟條漫設定'}
+            aria-label={t(isSettingsOpen ? 'webtoon.closeSettings' : 'webtoon.openSettings')}
+            title={t(isSettingsOpen ? 'webtoon.closeSettings' : 'webtoon.openSettings')}
           >
             <Settings2 aria-hidden="true" />
           </IconButton>

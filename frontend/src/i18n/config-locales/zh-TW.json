@@ -1,0 +1,606 @@
+{
+  "sections": {
+    "Network": {
+      "label": "網路設定",
+      "description": "控制 PixivUtil2 的連線、重試與版本檢查行為。"
+    },
+    "Debug": {
+      "label": "除錯與日誌",
+      "description": "控制除錯頁面、日誌輸出與主控台顯示。"
+    },
+    "IrfanView": {
+      "label": "IrfanView 整合",
+      "description": "控制下載完成後啟動 IrfanView 與建立下載清單。"
+    },
+    "Settings": {
+      "label": "一般設定",
+      "description": "控制下載根目錄、資料庫與圖片資訊輸出方式。"
+    },
+    "Filename": {
+      "label": "檔名與資料夾",
+      "description": "控制圖片、資訊檔、系列資料與標籤目錄的命名規則。"
+    },
+    "Authentication": {
+      "label": "登入與驗證",
+      "description": "儲存 Pixiv、Fanbox 與 Cloudflare 登入所需的認證資訊。"
+    },
+    "Pixiv": {
+      "label": "Pixiv 下載",
+      "description": "控制 Pixiv 作品範圍、R-18 過濾與資料庫自動補充資訊。"
+    },
+    "FANBOX": {
+      "label": "FANBOX 下載",
+      "description": "控制 Fanbox 封面、文章 HTML 與作品資訊的保存方式。"
+    },
+    "FFmpeg": {
+      "label": "FFmpeg 轉檔",
+      "description": "控制 Ugoira 轉換成影片或動畫圖片時使用的 FFmpeg 執行檔與參數。"
+    },
+    "Ugoira": {
+      "label": "Ugoira 動圖",
+      "description": "控制 Pixiv Ugoira 原始檔保存與各種輸出格式。"
+    },
+    "DownloadControl": {
+      "label": "下載控制",
+      "description": "控制檔案大小、更新判斷、黑名單、後處理與壓縮保存。"
+    }
+  },
+  "fields": {
+    "Network.useproxy": {
+      "label": "啟用代理伺服器",
+      "description": "設為 True 後，所有網路請求會使用 proxyAddress 指定的代理。"
+    },
+    "Network.proxyaddress": {
+      "label": "代理伺服器位址",
+      "description": "支援 http、socks4、socks5 格式，也可包含帳號、密碼與連接埠。"
+    },
+    "Network.useragent": {
+      "label": "瀏覽器 User-Agent",
+      "description": "送給 Pixiv 的瀏覽器識別字串；通常維持瀏覽器目前的 User-Agent。"
+    },
+    "Network.userobots": {
+      "label": "讀取 robots.txt",
+      "description": "是否下載並遵循 mechanize 使用的 robots.txt 規則。"
+    },
+    "Network.timeout": {
+      "label": "連線逾時秒數",
+      "description": "連線等待超過此秒數後視為失敗。"
+    },
+    "Network.retry": {
+      "label": "失敗重試次數",
+      "description": "網路請求失敗時的重試次數。"
+    },
+    "Network.retrywait": {
+      "label": "重試等待秒數",
+      "description": "每次重試前等待的秒數。"
+    },
+    "Network.downloaddelay": {
+      "label": "下載延遲上限",
+      "description": "每個作品下載前的隨機延遲上限；設為 0 可停用。"
+    },
+    "Network.checknewversion": {
+      "label": "檢查新版本",
+      "description": "是否檢查 GitHub 上的 PixivUtil2 新版本。"
+    },
+    "Network.notifybetaversion": {
+      "label": "通知 Beta 版本",
+      "description": "是否顯示 Beta 版本更新通知。"
+    },
+    "Network.opennewversion": {
+      "label": "開啟新版本頁面",
+      "description": "發現新版本時是否自動在瀏覽器開啟發行頁面。"
+    },
+    "Network.enablesslverification": {
+      "label": "驗證 SSL 憑證",
+      "description": "是否驗證 SSL 憑證；只有持續遇到 SSL 錯誤時才建議停用。"
+    },
+    "Debug.loglevel": {
+      "label": "日誌層級",
+      "description": "可用值為 CRITICAL、ERROR、WARNING、INFO、DEBUG、NOTSET。"
+    },
+    "Debug.enabledump": {
+      "label": "啟用 HTML Dump",
+      "description": "發生錯誤時是否保存 HTML 頁面供除錯。"
+    },
+    "Debug.skipdumpfilter": {
+      "label": "略過 Dump 的錯誤碼",
+      "description": "用正規表示式指定不保存 HTML Dump 的錯誤碼，例如 1.*|2.*。"
+    },
+    "Debug.dumpmediumpage": {
+      "label": "保存 Medium 頁面",
+      "description": "是否保存所有 medium 頁面供除錯。"
+    },
+    "Debug.dumptagsearchpage": {
+      "label": "保存標籤搜尋頁面",
+      "description": "是否保存標籤搜尋頁面供除錯。"
+    },
+    "Debug.debughttp": {
+      "label": "輸出 HTTP Header",
+      "description": "是否在主控台輸出 HTTP header，適合診斷連線問題。"
+    },
+    "Debug.disablelog": {
+      "label": "停用日誌檔",
+      "description": "是否停用 PixivUtil2 日誌檔案輸出。"
+    },
+    "Debug.disablescreenclear": {
+      "label": "停用清除主控台",
+      "description": "是否保留主控台畫面，不在流程中清除既有輸出。"
+    },
+    "IrfanView.irfanviewpath": {
+      "label": "IrfanView 安裝路徑",
+      "description": "IrfanView 的安裝目錄；啟動 IrfanView 功能時需要設定。"
+    },
+    "IrfanView.startirfanview": {
+      "label": "完成後啟動 IrfanView",
+      "description": "結束 PixivUtil2 時是否以下載圖片啟動 IrfanView。"
+    },
+    "IrfanView.startirfanslide": {
+      "label": "完成後啟動幻燈片",
+      "description": "結束 PixivUtil2 時是否啟動 IrfanView 幻燈片播放。"
+    },
+    "IrfanView.createdownloadlists": {
+      "label": "自動建立下載清單",
+      "description": "是否自動建立供 IrfanView 使用的下載清單。"
+    },
+    "Settings.downloadlistdirectory": {
+      "label": "下載清單目錄",
+      "description": "list.txt 與 IrfanView 下載清單的保存位置；留白時使用 PixivUtil2 目錄。"
+    },
+    "Settings.uselist": {
+      "label": "讀取 list.txt",
+      "description": "是否解析 list.txt，並用它更新 member_id 與自訂下載資料夾。"
+    },
+    "Settings.processfromdb": {
+      "label": "從資料庫讀取繪師資料夾",
+      "description": "是否使用資料庫中記錄的 member_id 與資料夾資訊。"
+    },
+    "Settings.rootdirectory": {
+      "label": "圖片根目錄",
+      "description": "下載圖片與作品資料夾的根目錄。"
+    },
+    "Settings.downloadavatar": {
+      "label": "下載繪師頭像",
+      "description": "是否將繪師頭像下載為各資料夾中的 folder.jpg。"
+    },
+    "Settings.usesuppresstags": {
+      "label": "排除被抑制的標籤",
+      "description": "是否從 %tags% 中移除 suppress_tags.txt 列出的標籤。"
+    },
+    "Settings.tagslimit": {
+      "label": "標籤數量上限",
+      "description": "檔名中的 %tags% 最多使用幾個標籤；設為 -1 代表使用全部標籤。"
+    },
+    "Settings.writeimagejson": {
+      "label": "輸出圖片 JSON",
+      "description": "是否輸出精簡的圖片資訊 JSON；檔名使用 filenameInfoFormat。"
+    },
+    "Settings.writeimageinfo": {
+      "label": "輸出圖片文字資訊",
+      "description": "是否輸出精簡的圖片資訊文字檔；檔名使用 filenameInfoFormat。"
+    },
+    "Settings.writerawjson": {
+      "label": "輸出原始 JSON",
+      "description": "是否保存來源端未修改的原始圖片 JSON。"
+    },
+    "Settings.rawjsonfilter": {
+      "label": "原始 JSON 欄位過濾",
+      "description": "用逗號分隔要從 writeRawJSON 移除的 JSON 欄位。"
+    },
+    "Settings.includeseriesjson": {
+      "label": "輸出系列 JSON",
+      "description": "是否輸出作品系列資訊 JSON；非系列作品不會有此資訊。"
+    },
+    "Settings.writeimagexmp": {
+      "label": "輸出 XMP 資訊檔",
+      "description": "是否輸出圖片資訊 XMP sidecar 檔，不會直接修改圖片標頭。"
+    },
+    "Settings.writeimagexmpperimage": {
+      "label": "每張圖片輸出 XMP",
+      "description": "是否為漫畫或每張編碼後的圖片各輸出一個 XMP；啟用後會優先於 writeImageXMP。"
+    },
+    "Settings.verifyimage": {
+      "label": "驗證下載檔案",
+      "description": "是否檢查下載檔案是否為有效圖片或 ZIP。"
+    },
+    "Settings.writeurlindescription": {
+      "label": "保存描述中的 URL",
+      "description": "是否把作品描述裡找到的 URL 輸出到根目錄的 URL 清單檔。"
+    },
+    "Settings.striphtmltagsfromcaption": {
+      "label": "移除描述中的 HTML",
+      "description": "輸出 metadata 時是否移除描述中的 HTML 標籤與其內容；連結文字也會被移除。"
+    },
+    "Settings.urlblacklistregex": {
+      "label": "URL 黑名單正規表示式",
+      "description": "用正規表示式過濾作品描述中的 URL。"
+    },
+    "Settings.dbpath": {
+      "label": "資料庫路徑",
+      "description": "指定要使用的 SQLite 資料庫；留白時使用預設資料庫。"
+    },
+    "Settings.setlastmodified": {
+      "label": "設定檔案修改時間",
+      "description": "是否依 Pixiv 作品上傳時間設定本機檔案的最後修改時間。"
+    },
+    "Settings.uselocaltimezone": {
+      "label": "使用本地時區",
+      "description": "輸出文字資訊與 XMP 時是否使用本機時區。"
+    },
+    "Settings.defaultsketchoption": {
+      "label": "Pixiv Sketch 預設選項",
+      "description": "略過下載 member_id 時的提示；填 y 一律包含、填 n 一律排除 Sketch。"
+    },
+    "Filename.filenameformat": {
+      "label": "一般作品檔名格式",
+      "description": "一般圖片使用的檔名模板；保留字元會被清理，完整路徑最長 250 個字元。"
+    },
+    "Filename.filenamemangaformat": {
+      "label": "漫畫頁檔名格式",
+      "description": "漫畫每一頁使用的檔名模板；可搭配 %page_index% 或 %page_number%。"
+    },
+    "Filename.filenameinfoformat": {
+      "label": "圖片資訊檔名格式",
+      "description": "圖片 JSON、文字資訊與 XMP 等資訊檔使用的檔名模板。"
+    },
+    "Filename.filenamemangainfoformat": {
+      "label": "漫畫資訊檔名格式",
+      "description": "漫畫資訊檔使用的檔名模板。"
+    },
+    "Filename.filenameseriesjson": {
+      "label": "系列 JSON 檔名格式",
+      "description": "系列資訊 JSON 使用的檔名模板，常用 %manga_series_id% 與 %manga_series_title%。"
+    },
+    "Filename.filenameformatsketch": {
+      "label": "Pixiv Sketch 檔名格式",
+      "description": "Pixiv Sketch 作品使用的檔名模板。"
+    },
+    "Filename.filenameformatnovel": {
+      "label": "小說檔名格式",
+      "description": "Pixiv 小說使用的檔名模板，常用系列 ID、順序與 URL 檔名。"
+    },
+    "Filename.avatarnameformat": {
+      "label": "頭像檔名格式",
+      "description": "繪師頭像使用的檔名模板；可用的替換變數比一般圖片少。"
+    },
+    "Filename.backgroundnameformat": {
+      "label": "背景圖檔名格式",
+      "description": "繪師背景圖使用的檔名模板；可用的替換變數比一般圖片少。"
+    },
+    "Filename.tagsseparator": {
+      "label": "標籤分隔字元",
+      "description": "檔名中多個標籤之間使用的分隔字元；可用 %space% 或 %ideo_space%。"
+    },
+    "Filename.createmangadir": {
+      "label": "建立漫畫資料夾",
+      "description": "漫畫模式下載時，是否依 image_id 的 _pxx 分段建立資料夾。"
+    },
+    "Filename.usetagsasdir": {
+      "label": "以搜尋標籤建立資料夾",
+      "description": "是否把 tagslist.txt 的查詢標籤附加到根目錄作為保存資料夾。"
+    },
+    "Filename.urldumpfilename": {
+      "label": "URL 清單檔名格式",
+      "description": "URL 清單檔名的 strftime 格式；預設為 url_list_%Y%m%d。"
+    },
+    "Filename.usetranslatedtag": {
+      "label": "使用翻譯後標籤",
+      "description": "檔名中的 %tags% 是否使用翻譯後的標籤。"
+    },
+    "Filename.tagtranslationlocale": {
+      "label": "標籤翻譯語系",
+      "description": "指定標籤翻譯使用的語系，例如 en。"
+    },
+    "Filename.custombadchars": {
+      "label": "自訂非法字元規則",
+      "description": "用正規表示式自訂檔名清理規則；會套用到檔名消毒流程。"
+    },
+    "Filename.customcleanupre": {
+      "label": "自訂檔名清理規則",
+      "description": "用正規表示式移除或清理檔名內容；語法需符合 PixivUtil2 清理規則。"
+    },
+    "Authentication.username": {
+      "label": "Pixiv 使用者名稱",
+      "description": "OAuth 登入用的 Pixiv 使用者名稱或電子郵件地址。"
+    },
+    "Authentication.password": {
+      "label": "Pixiv 密碼",
+      "description": "OAuth 登入用的密碼；PixivUtil2 會以明文讀取此設定，請妥善保護檔案。"
+    },
+    "Authentication.cookie": {
+      "label": "Pixiv Cookie",
+      "description": "Pixiv 登入 Cookie；成功登入後可能由 PixivUtil2 自動更新。"
+    },
+    "Authentication.cookiefanbox": {
+      "label": "Fanbox Cookie",
+      "description": "fanbox.cc 使用的 Cookie，通常不需要手動填寫。"
+    },
+    "Authentication.cookiefanboxtemp": {
+      "label": "Fanbox 暫存 Cookie",
+      "description": "Fanbox 登入流程使用的暫時 Cookie。"
+    },
+    "Authentication.refresh_token": {
+      "label": "OAuth Refresh Token",
+      "description": "OAuth 重新整理 token，可避免頻繁重新登入，通常由登入流程自動產生。"
+    },
+    "Authentication.cf_clearance": {
+      "label": "Cloudflare clearance",
+      "description": "Cloudflare clearance Cookie；只有遇到 Cloudflare 驗證時才需要。"
+    },
+    "Authentication.cf_bm": {
+      "label": "Cloudflare bot management",
+      "description": "Cloudflare bot management Cookie；只有需要時才填寫。"
+    },
+    "Pixiv.numberofpage": {
+      "label": "處理頁數上限",
+      "description": "要處理的頁數；設為 0 代表處理全部頁面。"
+    },
+    "Pixiv.r18mode": {
+      "label": "僅下載 R-18",
+      "description": "會員、書籤與標籤搜尋時，是否只列出標記為 R-18 的作品。"
+    },
+    "Pixiv.r18type": {
+      "label": "R-18 類型篩選",
+      "description": "0 代表 R-18 與 R-18G 都下載，1 只下載 R-18，2 只下載 R-18G。"
+    },
+    "Pixiv.dateformat": {
+      "label": "Pixiv 日期格式",
+      "description": "Pixiv 日期時間的 strftime 格式；留白使用預設 YYYY-MM-DD。"
+    },
+    "Pixiv.autoaddmember": {
+      "label": "自動加入繪師",
+      "description": "所有下載時是否自動把繪師 member_id 寫入資料庫。"
+    },
+    "Pixiv.autoaddtag": {
+      "label": "自動加入標籤",
+      "description": "所有下載時是否自動把作品標籤寫入資料庫。"
+    },
+    "Pixiv.autoaddcaption": {
+      "label": "自動加入描述",
+      "description": "所有下載時是否自動把作品描述寫入資料庫。"
+    },
+    "Pixiv.autoaddseries": {
+      "label": "自動加入系列",
+      "description": "所有下載時是否自動把系列資訊寫入資料庫。"
+    },
+    "Pixiv.aidisplayfewer": {
+      "label": "排除 AI 生成作品",
+      "description": "是否過濾 aiType 為 2 的 AI 生成作品。"
+    },
+    "FANBOX.filenameformatfanboxcover": {
+      "label": "Fanbox 封面檔名格式",
+      "description": "Fanbox 文章封面圖片使用的檔名模板。"
+    },
+    "FANBOX.filenameformatfanboxcontent": {
+      "label": "Fanbox 內容檔名格式",
+      "description": "Fanbox 文章內圖片使用的檔名模板。"
+    },
+    "FANBOX.filenameformatfanboxinfo": {
+      "label": "Fanbox 資訊檔名格式",
+      "description": "Fanbox 文章資訊與 HTML 使用的檔名模板。"
+    },
+    "FANBOX.writehtml": {
+      "label": "輸出 Fanbox HTML",
+      "description": "是否把 Fanbox 文章寫成 HTML；非文章會依文字長度與圖片數判斷。"
+    },
+    "FANBOX.mintextlengthfornonarticle": {
+      "label": "非文章最少文字長度",
+      "description": "writeHtml 啟用時，非文章至少要有多少文字才輸出 HTML。"
+    },
+    "FANBOX.minimagecountfornonarticle": {
+      "label": "非文章最少圖片數",
+      "description": "writeHtml 啟用時，非文章至少要有多少張圖片才輸出 HTML。"
+    },
+    "FANBOX.useabsolutepathsinhtml": {
+      "label": "HTML 使用絕對路徑",
+      "description": "Fanbox HTML 是否使用絕對檔案路徑；False 則使用相對路徑。"
+    },
+    "FANBOX.downloadcoverwhenrestricted": {
+      "label": "下載受限文章封面",
+      "description": "是否在 Fanbox 文章受限時仍下載文章封面。"
+    },
+    "FANBOX.downloadcover": {
+      "label": "下載 Fanbox 封面",
+      "description": "是否下載 Fanbox 文章的封面圖片。"
+    },
+    "FANBOX.checkdbprocesshistory": {
+      "label": "檢查 Fanbox 處理歷史",
+      "description": "是否依資料庫中的 updated_date 跳過尚未變更的 Fanbox 文章。"
+    },
+    "FANBOX.listpathfanbox": {
+      "label": "Fanbox 清單檔案",
+      "description": "Fanbox creator 清單檔案；每行一個 creator，原生設定不支援自訂路徑。"
+    },
+    "FFmpeg.ffmpeg": {
+      "label": "FFmpeg 執行檔",
+      "description": "FFmpeg 可執行檔路徑；可填完整路徑或系統 PATH 中可找到的檔名。"
+    },
+    "FFmpeg.ffmpegcodec": {
+      "label": "WebM 編碼器",
+      "description": "建立 WebM 時使用的 FFmpeg codec，例如 libvpx-vp9。"
+    },
+    "FFmpeg.ffmpegext": {
+      "label": "WebM 副檔名",
+      "description": "建立 WebM 時使用的容器副檔名。"
+    },
+    "FFmpeg.ffmpegparam": {
+      "label": "WebM FFmpeg 參數",
+      "description": "建立 WebM 時傳給 FFmpeg 的完整參數。"
+    },
+    "FFmpeg.mkvcodec": {
+      "label": "MKV 編碼器",
+      "description": "建立 MKV 時使用的 codec；copy 代表不重新編碼。"
+    },
+    "FFmpeg.mkvparam": {
+      "label": "MKV FFmpeg 參數",
+      "description": "建立 MKV 時傳給 FFmpeg 的參數。"
+    },
+    "FFmpeg.webpcodec": {
+      "label": "WebP 編碼器",
+      "description": "建立 WebP 動畫時使用的 codec，例如 libwebp。"
+    },
+    "FFmpeg.webpparam": {
+      "label": "WebP FFmpeg 參數",
+      "description": "建立 WebP 動畫時傳給 FFmpeg 的完整參數。"
+    },
+    "FFmpeg.gifparam": {
+      "label": "GIF FFmpeg 參數",
+      "description": "建立 GIF 時傳給 FFmpeg 的完整參數，通常包含 palettegen/paletteuse。"
+    },
+    "FFmpeg.apngparam": {
+      "label": "APNG FFmpeg 參數",
+      "description": "建立 APNG 時傳給 FFmpeg 的完整參數。"
+    },
+    "FFmpeg.avifcodec": {
+      "label": "AVIF 編碼器",
+      "description": "建立 AVIF 動畫時使用的 codec，例如 libaom-av1。"
+    },
+    "FFmpeg.avifparam": {
+      "label": "AVIF FFmpeg 參數",
+      "description": "建立 AVIF 動畫時傳給 FFmpeg 的完整參數。"
+    },
+    "FFmpeg.verboseoutput": {
+      "label": "顯示 FFmpeg 詳細輸出",
+      "description": "是否顯示 FFmpeg 的詳細命令與輸出內容。"
+    },
+    "Ugoira.writeugoirainfo": {
+      "label": "輸出 Ugoira frame 資訊",
+      "description": "是否把 Ugoira 每幀資訊寫入資訊 ZIP；writeImageJSON 也會包含這些資訊。"
+    },
+    "Ugoira.createugoira": {
+      "label": "建立 Ugoira 檔案",
+      "description": "是否建立 Pixiv 原生的 .ugoira 動畫檔。"
+    },
+    "Ugoira.createmkv": {
+      "label": "建立 MKV",
+      "description": "是否把 Ugoira 轉成 MKV；需要 FFmpeg，預設通常不重新編碼。"
+    },
+    "Ugoira.createwebm": {
+      "label": "建立 WebM",
+      "description": "是否把 Ugoira 轉成 WebM；需要 FFmpeg。"
+    },
+    "Ugoira.createwebp": {
+      "label": "建立 WebP",
+      "description": "是否把 Ugoira 轉成動畫 WebP；需要 FFmpeg。"
+    },
+    "Ugoira.creategif": {
+      "label": "建立 GIF",
+      "description": "是否把 Ugoira 轉成 GIF；需要 FFmpeg。"
+    },
+    "Ugoira.createapng": {
+      "label": "建立 APNG",
+      "description": "是否把 Ugoira 轉成動畫 PNG；需要 FFmpeg。"
+    },
+    "Ugoira.createavif": {
+      "label": "建立 AVIF",
+      "description": "是否把 Ugoira 轉成動畫 AVIF；需要 FFmpeg。"
+    },
+    "Ugoira.deleteugoira": {
+      "label": "轉檔後刪除 Ugoira",
+      "description": "轉檔完成後是否刪除產生的 .ugoira 檔案。"
+    },
+    "Ugoira.deletezipfile": {
+      "label": "轉檔後刪除 ZIP",
+      "description": "Ugoira 轉檔完成後是否刪除原始 ZIP 圖片檔。"
+    },
+    "DownloadControl.minfilesize": {
+      "label": "最小檔案大小",
+      "description": "檔案小於此大小時跳過；設為 0 停用此限制。"
+    },
+    "DownloadControl.maxfilesize": {
+      "label": "最大檔案大小",
+      "description": "檔案大於此大小時跳過；設為 0 停用此限制。"
+    },
+    "DownloadControl.checklastmodified": {
+      "label": "檢查檔案修改時間",
+      "description": "本機檔案修改時間與作品上傳時間相同時跳過；需要 setLastModified 啟用。"
+    },
+    "DownloadControl.alwayscheckfilesize": {
+      "label": "總是檢查檔案大小",
+      "description": "即使資料庫已有紀錄，也重新取得遠端大小確認檔案狀態。"
+    },
+    "DownloadControl.overwrite": {
+      "label": "覆寫不同大小的檔案",
+      "description": "檔案大小不同時是否刪除舊檔並重新下載；backupOldFile 可先保存舊檔。"
+    },
+    "DownloadControl.backupoldfile": {
+      "label": "備份舊檔案",
+      "description": "重新下載前是否將舊檔重新命名為帶有 Unix time 的備份檔。"
+    },
+    "DownloadControl.daylastupdated": {
+      "label": "繪師更新間隔天數",
+      "description": "只處理距離上次檢查至少經過這麼多天的 member_id。"
+    },
+    "DownloadControl.checkupdatedlimit": {
+      "label": "已下載作品檢查上限",
+      "description": "看到指定數量的既有作品後跳到下一個 member_id；需關閉 alwaysCheckFileSize。"
+    },
+    "DownloadControl.useblacklisttags": {
+      "label": "啟用標籤黑名單",
+      "description": "含有 blacklist_tags.txt 標籤的作品會被跳過。"
+    },
+    "DownloadControl.useblacklisttitles": {
+      "label": "啟用標題黑名單",
+      "description": "標題含有 blacklist_titles.txt 字串的作品會被跳過。"
+    },
+    "DownloadControl.useblacklisttitlesregex": {
+      "label": "以正規表示式比對標題",
+      "description": "是否把標題黑名單中的每一行當作正規表示式。"
+    },
+    "DownloadControl.datediff": {
+      "label": "作品日期差距",
+      "description": "只處理指定日期差距內的新作品；設為 0 停用。"
+    },
+    "DownloadControl.enableinfiniteloop": {
+      "label": "啟用標籤下載無限迴圈",
+      "description": "標籤下載以最新到最舊順序執行時，是否持續輪詢新作品。"
+    },
+    "DownloadControl.useblacklistmembers": {
+      "label": "啟用繪師黑名單",
+      "description": "依應用程式目錄的 blacklist_members.txt 跳過指定 member_id。"
+    },
+    "DownloadControl.downloadresized": {
+      "label": "下載中尺寸圖片",
+      "description": "是否下載 medium 尺寸，而不是原始尺寸圖片。"
+    },
+    "DownloadControl.skipunknownsize": {
+      "label": "略過未知大小檔案",
+      "description": "alwaysCheckFileSize 啟用但遠端大小未知時，是否跳過下載。"
+    },
+    "DownloadControl.enablepostprocessing": {
+      "label": "啟用下載後處理",
+      "description": "每個檔案下載完成後是否執行 postProcessingCmd。"
+    },
+    "DownloadControl.postprocessingcmd": {
+      "label": "下載後處理命令",
+      "description": "每次下載完成後執行的命令；使用 %filename% 代入檔案名稱，命令錯誤不會被處理。"
+    },
+    "DownloadControl.extensionfilter": {
+      "label": "副檔名過濾器",
+      "description": "以 | 分隔可接受的副檔名，例如 jpg|png|gif|ugoira。"
+    },
+    "DownloadControl.downloadbuffer": {
+      "label": "下載緩衝區 KB",
+      "description": "寫入磁碟前使用的下載緩衝區大小（KB）；通常維持預設 512 即可。"
+    },
+    "DownloadControl.createpixivarchive": {
+      "label": "建立 Pixiv 壓縮檔",
+      "description": "是否把作品下載成 ZIP archive，而不是建立資料夾。"
+    },
+    "DownloadControl.createpixivarchivecompressiontype": {
+      "label": "壓縮演算法",
+      "description": "ZIP_STORED、ZIP_DEFLATED、ZIP_BZIP2 或 ZIP_LZMA；預設 ZIP_STORED 不壓縮。"
+    },
+    "DownloadControl.createpixivarchivecompressionlevel": {
+      "label": "壓縮等級",
+      "description": "ZIP_DEFLATED 或 ZIP_BZIP2 使用的壓縮等級；有效範圍為 0 到 9。"
+    },
+    "DownloadControl.autoextractzip": {
+      "label": "自動解壓縮 ZIP",
+      "description": "下載 ZIP 後是否自動解壓縮並整理內容。"
+    },
+    "DownloadControl.deletezipafterextract": {
+      "label": "解壓後刪除 ZIP",
+      "description": "自動解壓縮完成後是否刪除原始 ZIP 檔。"
+    }
+  }
+}

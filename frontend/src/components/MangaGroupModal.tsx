@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import '../styles/settings.css';
 import { SourceLink, WorkGroup } from '../types';
 import { isVideoItem } from '../utils/media';
 import { buildThumbnailUrl } from '../utils/webConfig';
@@ -8,6 +9,7 @@ import { Badge, Button, IconButton } from './ui';
 import { DemoMediaBlock } from './DemoMediaBlock';
 import { useModalFocusTrap } from '../utils/useModalFocusTrap';
 import { X, Play, Images, Film, ExternalLink } from 'lucide-react';
+import { useI18n } from '../i18n';
 
 interface MangaGroupModalProps {
   workGroup: WorkGroup | null;
@@ -28,6 +30,7 @@ export const MangaGroupModal: React.FC<MangaGroupModalProps> = ({
   blurEnabled = false,
   demoMode = false,
 }) => {
+  const { t, formatNumber } = useI18n();
   const [sourceLink, setSourceLink] = useState<SourceLink | null>(null);
   const [isSourceLoading, setIsSourceLoading] = useState(false);
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -102,21 +105,21 @@ export const MangaGroupModal: React.FC<MangaGroupModalProps> = ({
                 <h3
                   id="manga-group-modal-title"
                   className="manga-group-modal__title font-bold text-base truncate"
-                  title={workGroup.title || '無題作品'}
+                  title={workGroup.title || t('manga.untitled')}
                 >
-                  {workGroup.title || '無題作品'}
+                  {workGroup.title || t('manga.untitled')}
                 </h3>
                 <Badge variant="surface" size="sm" className="manga-group-modal__count shrink-0">
-                  {workGroup.items.length} 頁圖包
+                  {t('manga.pageCount', { count: formatNumber(workGroup.items.length) })}
                 </Badge>
               </div>
               <p className="manga-group-modal__meta mt-0.5">
-                繪師: <span className="manga-group-modal__meta-primary">{workGroup.artist_name || workGroup.member_id}</span>
-                {workGroup.created_date && <span className="manga-group-modal__meta-secondary ms-3">‧ {workGroup.created_date}</span>}
+                {t('manga.artist')}: <span className="manga-group-modal__meta-primary">{workGroup.artist_name || workGroup.member_id}</span>
+                {workGroup.created_date && <span className="manga-group-modal__meta-secondary ms-3">{t('manga.created', { date: workGroup.created_date })}</span>}
               </p>
               <div className="manga-group-source" aria-live="polite">
                 {isSourceLoading ? (
-                  <span className="manga-group-source__pending">正在確認來源…</span>
+                  <span className="manga-group-source__pending">{t('manga.checkingSource')}</span>
                 ) : sourceLink ? (
                   <a
                     href={sourceLink.url}
@@ -124,7 +127,7 @@ export const MangaGroupModal: React.FC<MangaGroupModalProps> = ({
                     rel="noreferrer noopener"
                     className="manga-group-source__link"
                   >
-                    {sourceLink.platform === 'fanbox' ? '在 FANBOX 查看此圖包' : '在 Pixiv 查看此作品'}
+                    {sourceLink.platform === 'fanbox' ? t('manga.fanboxSource') : t('manga.pixivSource')}
                     <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
                   </a>
                 ) : null}
@@ -138,13 +141,13 @@ export const MangaGroupModal: React.FC<MangaGroupModalProps> = ({
               onClick={() => onSelectImage(0)}
               variant="primary"
               className="manga-group-modal__play-button"
-              aria-label="從第 1 頁開始播放圖包"
-              title="從第 1 頁開始播放圖包"
+              aria-label={t('manga.startPage', { page: formatNumber(1) })}
+              title={t('manga.startPage', { page: formatNumber(1) })}
             >
               <span className="manga-group-modal__play-icon" aria-hidden="true">
                 <Play className="h-5 w-5 fill-current" />
               </span>
-              <span className="manga-group-modal__play-label">播放圖包</span>
+              <span className="manga-group-modal__play-label">{t('manga.playGroup')}</span>
             </Button>
             <IconButton
               ref={closeButtonRef}
@@ -152,8 +155,8 @@ export const MangaGroupModal: React.FC<MangaGroupModalProps> = ({
               onClick={onClose}
               variant="ghost"
               className="manga-group-modal__close-button"
-              aria-label="關閉圖包預覽"
-              title="關閉圖包預覽 (Esc)"
+              aria-label={t('manga.closePreview')}
+              title={`${t('manga.closePreview')} (Esc)`}
             >
               <X className="h-5 w-5" aria-hidden="true" />
             </IconButton>
@@ -170,7 +173,7 @@ export const MangaGroupModal: React.FC<MangaGroupModalProps> = ({
                   type="button"
                   key={item.image_id}
                   onClick={() => onSelectImage(idx)}
-                  aria-label={`開啟第 ${idx + 1} 頁`}
+                  aria-label={t('manga.openPage', { page: formatNumber(idx + 1) })}
                   className="manga-group-card group relative block aspect-square w-full overflow-hidden rounded-lg p-0 text-left"
                 >
                   {item.media_status ? (
@@ -181,7 +184,7 @@ export const MangaGroupModal: React.FC<MangaGroupModalProps> = ({
                     ) : (
                       <img
                         src={buildThumbnailUrl(item, thumbnailSize)}
-                        alt={item.title || `P${idx + 1}`}
+                        alt={item.title || t('manga.pageAlt', { page: formatNumber(idx + 1) })}
                         loading="lazy"
                         className={`w-full h-full object-cover ${blurEnabled ? 'blur-media blur-media--thumbnail' : 'transition-transform duration-300 group-hover:scale-105'}`}
                       />
@@ -190,20 +193,22 @@ export const MangaGroupModal: React.FC<MangaGroupModalProps> = ({
 
                   {/* Page Badge */}
                   <Badge variant="surface" size="sm" className="manga-group-card__page-badge">
-                    P{idx + 1}
+                    {t('manga.pageBadge', { page: formatNumber(idx + 1) })}
                   </Badge>
 
                   {/* Video Badge */}
                   {isVideo && (
                     <Badge variant="surface" size="sm" iconOnly className="manga-group-card__video-badge">
-                      <Film className="w-3 h-3" aria-hidden="true" />
+                      <span role="img" aria-label={t('manga.video')}>
+                        <Film className="w-3 h-3" aria-hidden="true" />
+                      </span>
                     </Badge>
                   )}
 
                   {/* Hover Overlay */}
                   <div className="manga-group-card__hover-overlay pointer-events-none absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                     <span className="manga-group-card__hover-label text-xs font-semibold">
-                      點擊看大圖
+                      {t('manga.clickToView')}
                     </span>
                   </div>
                 </button>

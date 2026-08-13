@@ -10,6 +10,7 @@
     "lint": "tsc --noEmit",
     "preview": "vite preview",
     "test": "vitest run",
+    "test:gallery-contract": "vitest run src/media-window/GlobalMediaWindow.test.ts src/media-window/globalLayoutIndex.test.ts src/media-window/useGlobalReaderRange.test.ts src/components/GalleryGlobalTrack.test.tsx src/components/MonthQuickNav.test.tsx src/utils/navigationTransaction.test.ts src/utils/smoothScroll.test.ts",
     "test:watch": "vitest"
   },
   "dependencies": {

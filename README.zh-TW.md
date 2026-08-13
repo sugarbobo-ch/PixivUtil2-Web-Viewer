@@ -1,22 +1,35 @@
-# PixivUtil2 Web Viewer
+<p align="center">
+  <a href="https://github.com/sugarbobo-ch/PixivUtil2-Web-Viewer/actions/workflows/ci-cd.yml"><img src="https://github.com/sugarbobo-ch/PixivUtil2-Web-Viewer/actions/workflows/ci-cd.yml/badge.svg" alt="編譯與版本發布狀態"></a>
+</p>
 
-[English](README.md) | **繁體中文**
+<p align="center">
+  <a href="README.md">English</a> · <strong>繁體中文</strong> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.ja.md">日本語</a>
+</p>
 
-[![CI 與版本發布](https://github.com/sugarbobo-ch/PixivUtil2-Web-Viewer/actions/workflows/ci-cd.yml/badge.svg)](https://github.com/sugarbobo-ch/PixivUtil2-Web-Viewer/actions/workflows/ci-cd.yml)
+<h1 align="center">PixivUtil2 Web Viewer</h1>
 
-這是 PixivUtil2 的 Windows 本機圖片瀏覽器。圖片由本機後端讀取，不需要上傳到外部服務；React/Vite 前端提供 Grid、全螢幕與條漫閱讀，FastAPI 後端負責 Viewer 索引與縮圖快取。
+PixivUtil2 Web Viewer 是為 Windows 設計的本機媒體圖庫，用來管理與快速瀏覽已下載的圖片、影片與漫畫。所有媒體都保留在你的電腦，不需要上傳到外部服務。
+
+## 為什麼使用這個專案？
+
+下載內容變多後，逐層打開資料夾會愈來愈慢；漫畫頁面散落在不同檔案中，也很難快速找到某個月份的作品。這個 Viewer 會把下載資料夾整理成一個可搜尋的圖庫，並提供適合圖片與漫畫的閱讀方式。
+
+- 可搭配 PixivUtil2 圖庫，也可直接讀取一般本機媒體資料夾。
+- 不需要雲端服務，不必上傳私人圖片或影片。
+- 使用 Windows 安裝與啟動檔即可開始，不需要程式設計知識。
 
 ## 功能特色
 
-- 拖曳時間刻度，或選取年份與月份，即可直接跳轉到圖庫中的目標時間；導覽時會預先載入目標縮圖。
-- 透過縮圖優先顯示、受控圖片載入與月份 Grid 虛擬滾動，只渲染視窗附近的內容，讓大型圖庫依然流暢。
-- 使用繪師、日期、搜尋、排序與分頁快速縮小目前的瀏覽範圍。
-- 在 Grid、專注的全螢幕閱讀器與連續直向條漫間切換，返回時保留原本瀏覽位置。
-- 將相關頁面合併成圖包，先預覽所有頁面，再用全螢幕或條漫模式播放。
-- 全螢幕影片播放器支援 Space／點擊影片本體播放暫停、左右半部雙擊跳轉（預設前後 5 秒），以及按住側邊暫時 2 倍速（可調整）。
-- 開啟模糊遮罩後仍保留頁數、圖包與導覽資訊，適合分享畫面或擷取操作截圖。
-- 在背景更新 Viewer 索引與選用的主色分析，不寫入 PixivUtil2 原始資料庫。
-- 透過可復原流程整理縮圖快取，不直接永久刪除產生的檔案。
+- 在同一個圖庫中管理與快速瀏覽已下載的圖片、影片和多頁漫畫。
+- 使用全螢幕模式快速、專心地閱讀圖片，或使用條漫模式連續向下閱讀長篇漫畫。
+- 支援一次顯示一張圖片的單頁模式，以及像書本攤開閱讀的雙頁模式；也能選擇由左至右或由右至左翻頁。
+- 拖曳時間刻度，或直接選擇年份與月份，就能跳到舊作品，不必從頭一路捲動整個圖庫。
+- 大型圖庫會先顯示縮圖，只載入畫面附近的圖片；跳到其他月份時，也會提前準備附近的縮圖，減少等待時間。
+- 依繪師與日期篩選、搜尋標題、變更排序，並將相關漫畫頁面合併成一個作品。
+- 在全螢幕與條漫模式播放影片，支援點擊播放、雙擊快轉／倒轉，以及按住暫時加速。
+- 使用模糊遮罩保護敏感內容，同時保留標題、頁數與導覽功能。
+- 在背景更新 Viewer 索引，不會寫入 PixivUtil2 原始資料庫。
+- 不需重新啟動，即可切換繁體中文、簡體中文、英文與日文。
 
 ## PixivUtil2 與僅讀取資料夾
 
@@ -173,6 +186,8 @@ Set-Location .\frontend
 
 Vite 會把 `/api` 代理到 `http://127.0.0.1:8000`。
 
+介面翻譯是 `frontend/src/i18n/locales/` 下可直接編輯的 JSON 文字檔；所有已知 `config.ini` 欄位的名稱與完整說明則分開存放在 `frontend/src/i18n/config-locales/`。`zh-TW.json` 是語意基準與 fallback；修改其他語系時，請保留相同的 key 與插值 placeholder。
+
 ## 驗證開發環境
 
 後端測試：
@@ -217,8 +232,11 @@ git diff --check
 ## 開發文件
 
 - [AI Agent 專案地圖](docs/ai-agent-project-map.md)
+- [i18n 多語系維護指南](docs/i18n-maintenance-guide.md)
+- [全域 Gallery 與月份導覽契約](docs/global-gallery-navigation-contract.md)
+- [全螢幕雙頁閱讀器規格](docs/fullscreen-spread-reader-spec.md)
 - [Backend 工作與 Native Picker](backend/README.md)
-- [媒體資料庫、快取與 Grid 設計](docs/artist-list-indexing-cache-grid-design.md)
+- [繪師索引與 Viewer snapshot 設計](docs/artist-list-indexing-cache-grid-design.md)
 - [媒體資料庫歷史實作規格](docs/media-library-implementation-todo.md)
 - [Pixiv UI 樣式調整報告](docs/pixiv-ui-style-adjustment-report.md)
 - [Agent UI 強制規範](agents.md)

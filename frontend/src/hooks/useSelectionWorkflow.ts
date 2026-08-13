@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ImageItem } from '../types';
 import { apiClient } from '../api/client';
+import { useI18n } from '../i18n';
+import { getOperationErrorMessage } from '../utils/operationError';
 
 interface UseSelectionWorkflowOptions {
   images: ImageItem[];
@@ -15,6 +17,7 @@ export const useSelectionWorkflow = ({
   onFullscreenSelectionDeleted,
   refreshImages,
 }: UseSelectionWorkflowOptions) => {
+  const { t } = useI18n();
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [showConfirmModal, setShowConfirmModal] = useState(false);
   const [deleteTargets, setDeleteTargets] = useState<number[]>([]);
@@ -81,7 +84,7 @@ export const useSelectionWorkflow = ({
       downloadLink.remove();
       window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'ZIP 下載失敗';
+      const message = getOperationErrorMessage(error, t);
       console.error('Failed to download selected images:', error);
       setDownloadSelectionError(message);
     } finally {
@@ -139,7 +142,7 @@ export const useSelectionWorkflow = ({
       setDeleteTargets([]);
       setDownloadSelectionError(null);
     } catch (error) {
-      const message = error instanceof Error ? error.message : '無法將作品移至回收區';
+      const message = getOperationErrorMessage(error, t);
       console.error('Failed to move selected works to recycle bin:', error);
       setDownloadSelectionError(message);
     }

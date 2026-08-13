@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 
 export type ImagePriority = 0 | 1 | 2 | 3;
 export type ImageKind = 'thumbnail' | 'original';
-export type ImageOwner = 'grid' | 'month-navigation' | 'filmstrip' | 'fullscreen' | 'webtoon';
+export type ImageOwner = 'grid' | 'month-navigation' | 'filmstrip' | 'fullscreen' | 'spread' | 'webtoon';
 
 interface ImageLoadTask {
   url: string;

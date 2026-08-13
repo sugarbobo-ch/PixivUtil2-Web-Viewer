@@ -1,5 +1,15 @@
-import { DEFAULT_WEB_CONFIG, FullscreenZoomMode, ImageItem, WebConfig } from '../types';
+import {
+  DEFAULT_WEB_CONFIG,
+  FullscreenPageLayout,
+  FullscreenReadingDirection,
+  FullscreenSpreadPairing,
+  FullscreenZoomMode,
+  ImageItem,
+  UiLanguage,
+  WebConfig,
+} from '../types';
 import { SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH } from './sidebarLayout';
+import { normalizeUiLanguage } from '../i18n';
 
 type WebConfigInput = Record<string, unknown>;
 
@@ -44,6 +54,16 @@ export const normalizeWebConfig = (value: unknown): WebConfig => {
     && fullscreenZoomModes.includes(source.fullscreenZoomMode as FullscreenZoomMode)
     ? source.fullscreenZoomMode as FullscreenZoomMode
     : DEFAULT_WEB_CONFIG.fullscreenZoomMode;
+  const uiLanguage: UiLanguage = normalizeUiLanguage(source.uiLanguage);
+  const fullscreenPageLayout: FullscreenPageLayout = source.fullscreenPageLayout === 'spread'
+    ? 'spread'
+    : DEFAULT_WEB_CONFIG.fullscreenPageLayout;
+  const fullscreenReadingDirection: FullscreenReadingDirection = source.fullscreenReadingDirection === 'rtl'
+    ? 'rtl'
+    : DEFAULT_WEB_CONFIG.fullscreenReadingDirection;
+  const fullscreenSpreadPairing: FullscreenSpreadPairing = source.fullscreenSpreadPairing === 'first-page'
+    ? 'first-page'
+    : DEFAULT_WEB_CONFIG.fullscreenSpreadPairing;
 
   const normalizedVideoVolume = clampNumber(
     source.videoVolume,
@@ -57,6 +77,7 @@ export const normalizeWebConfig = (value: unknown): WebConfig => {
 
   const normalizedConfig: WebConfig = {
     webTheme: source.webTheme === 'light' ? 'light' : DEFAULT_WEB_CONFIG.webTheme,
+    uiLanguage,
     defaultViewMode: source.defaultViewMode === 'webtoon' ? 'webtoon' : 'fullscreen',
     thumbnailSize: clampInteger(source.thumbnailSize ?? legacyThumbnailSize, DEFAULT_WEB_CONFIG.thumbnailSize, 16, 4096),
     itemsPerPage: clampInteger(source.itemsPerPage, DEFAULT_WEB_CONFIG.itemsPerPage, 1, 5000),
@@ -90,6 +111,9 @@ export const normalizeWebConfig = (value: unknown): WebConfig => {
       source.fullscreenShowCheckerboard,
       DEFAULT_WEB_CONFIG.fullscreenShowCheckerboard,
     ),
+    fullscreenPageLayout,
+    fullscreenReadingDirection,
+    fullscreenSpreadPairing,
     fullscreenZoomMode,
     fullscreenVideoSeekSeconds: clampInteger(
       source.fullscreenVideoSeekSeconds,

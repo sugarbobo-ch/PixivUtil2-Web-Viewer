@@ -1,11 +1,13 @@
 import React, { useEffect, useRef, useState } from 'react';
+import '../styles/settings.css';
 import { Eye, Settings2, Trash2, X } from 'lucide-react';
 import { Artist } from '../types';
 import { ConfirmModal } from './ConfirmModal';
-import { Button, IconButton } from './ui/Button';
+import { Button, IconButton, Input } from './ui';
 import { useModalFocusTrap } from '../utils/useModalFocusTrap';
 import { apiClient } from '../api/client';
 import { getArtistScopeKey } from '../utils/artistIdentity';
+import { useI18n } from '../i18n';
 
 interface ArtistSettingsModalProps {
   isOpen: boolean;
@@ -17,10 +19,6 @@ interface ArtistSettingsModalProps {
 
 type ArtistAction = 'hide' | 'trash';
 
-const getErrorMessage = (error: unknown) => (
-  error instanceof Error ? error.message : '發生未知錯誤，請稍後再試。'
-);
-
 export const ArtistSettingsModal: React.FC<ArtistSettingsModalProps> = ({
   isOpen,
   artist,
@@ -28,13 +26,18 @@ export const ArtistSettingsModal: React.FC<ArtistSettingsModalProps> = ({
   onArtistChanged,
   onArtistMetadataChanged,
 }) => {
+  const { t, formatNumber } = useI18n();
   const [action, setAction] = useState<ArtistAction | null>(null);
   const [loading, setLoading] = useState(false);
   const [identityLoading, setIdentityLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [currentStatus, setCurrentStatus] = useState<'verified' | 'rejected' | 'inferred' | 'unknown'>(artist?.identity_status ?? 'unknown');
+  const [customMemberId, setCustomMemberId] = useState<string>(artist?.member_id && artist.member_id > 0 ? String(artist.member_id) : '');
+  const [customFanboxId, setCustomFanboxId] = useState<string>(artist?.fanbox_id || '');
   const dialogRef = useRef<HTMLElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const getArtistName = (entry: Artist) => entry.name || t('common.artistId', { id: entry.member_id });
 
   useModalFocusTrap({
     isOpen: isOpen && !!artist,
@@ -44,14 +47,18 @@ export const ArtistSettingsModal: React.FC<ArtistSettingsModalProps> = ({
   });
 
   useEffect(() => {
-    if (!isOpen) {
+    if (!isOpen || !artist) {
       setAction(null);
       setLoading(false);
       setIdentityLoading(false);
       setMessage(null);
       setError(null);
+    } else {
+      setCurrentStatus(artist.identity_status ?? 'unknown');
+      setCustomMemberId(artist.member_id && artist.member_id > 0 ? String(artist.member_id) : '');
+      setCustomFanboxId(artist.fanbox_id || '');
     }
-  }, [isOpen]);
+  }, [artist, isOpen]);
 
   useEffect(() => {
     if (!isOpen) return undefined;
@@ -73,38 +80,60 @@ export const ArtistSettingsModal: React.FC<ArtistSettingsModalProps> = ({
         ? await apiClient.artists.hide(artistKey, artist.folder_name || artist.name || '')
         : await apiClient.artists.trash(artistKey);
 
-      const artistName = artist.name || `繪師 ${artist.member_id}`;
+      const artistName = getArtistName(artist);
       setMessage(action === 'hide'
-        ? `已隱藏「${artistName}」；原始檔案沒有被移動。`
-        : `已將「${artistName}」的 ${typeof data.moved_files === 'number'
-          ? data.moved_files
-          : typeof data.trashed_items === 'number' ? data.trashed_items : 0} 個作品移到回收區。`);
+        ? t('settings.artistHideSuccess', { name: artistName })
+        : t('settings.artistTrashSuccess', {
+          name: artistName,
+          count: typeof data.moved_files === 'number'
+            ? formatNumber(data.moved_files)
+            : typeof data.trashed_items === 'number' ? formatNumber(data.trashed_items) : formatNumber(0),
+        }));
       setAction(null);
       onArtistChanged?.();
       onClose();
     } catch (actionError) {
-      setError(getErrorMessage(actionError));
+      setError(actionError instanceof Error ? actionError.message : t('errors.unknown'));
       setAction(null);
     } finally {
       setLoading(false);
     }
   };
 
-  const handleIdentityStatus = async (status: 'verified' | 'rejected' | 'inferred') => {
+  const handleIdentityStatus = async (
+    status: 'verified' | 'rejected' | 'inferred',
+    overrideMemberId?: number | null,
+    overrideFanboxId?: string | null,
+  ) => {
     if (!artist?.folder_id || identityLoading) return;
     setIdentityLoading(true);
     setMessage(null);
     setError(null);
     try {
-      await apiClient.artists.updateIdentity(artist.folder_id, status);
+      let targetMemberId: number | null = null;
+      if (overrideMemberId !== undefined) {
+        targetMemberId = overrideMemberId;
+      } else {
+        const raw = customMemberId.trim();
+        const match = raw.match(/pixiv\.net\/users\/(\d+)/i) || raw.match(/(\d+)/);
+        targetMemberId = match ? parseInt(match[1], 10) : artist.member_id;
+      }
+      if (typeof targetMemberId === 'number' && (isNaN(targetMemberId) || targetMemberId <= 0)) {
+        targetMemberId = null;
+      }
+
+      const targetFanboxId = overrideFanboxId !== undefined ? overrideFanboxId : customFanboxId.trim();
+
+      await apiClient.artists.updateIdentity(artist.folder_id, status, targetMemberId, targetFanboxId);
+      setCurrentStatus(status);
       setMessage(status === 'verified'
-        ? `已確認此資料夾對應 member ID ${artist.member_id}。`
+        ? t('settings.identityVerifiedMessage', { id: targetMemberId ?? artist.member_id })
         : status === 'rejected'
-          ? '已將此資料夾標記為未知創作者，不會顯示創作者來源連結。'
-          : '已撤銷確認，創作者身份需要重新確認。');
+          ? t('settings.identityRejectedMessage')
+          : t('settings.identityInferredMessage'));
       onArtistMetadataChanged?.();
     } catch (identityError) {
-      setError(getErrorMessage(identityError));
+      setError(identityError instanceof Error ? identityError.message : t('errors.unknown'));
     } finally {
       setIdentityLoading(false);
     }
@@ -112,7 +141,7 @@ export const ArtistSettingsModal: React.FC<ArtistSettingsModalProps> = ({
 
   if (!isOpen || !artist) return null;
 
-  const artistName = artist.name || `繪師 ${artist.member_id}`;
+  const artistName = getArtistName(artist);
 
   return (
     <>
@@ -136,10 +165,10 @@ export const ArtistSettingsModal: React.FC<ArtistSettingsModalProps> = ({
                 <Settings2 className="h-5 w-5" aria-hidden="true" />
               </span>
               <h2 id="artist-settings-title" className="settings-modal__title truncate text-lg font-bold">
-                繪師設定：{artistName}
+                {t('settings.artistTitle', { name: artistName })}
               </h2>
             </div>
-            <IconButton ref={closeButtonRef} type="button" onClick={onClose} variant="ghost" className="settings-modal__close" aria-label="關閉繪師設定" title="關閉繪師設定">
+            <IconButton ref={closeButtonRef} type="button" onClick={onClose} variant="ghost" className="settings-modal__close" aria-label={t('settings.closeArtistSettings')} title={t('settings.closeArtistSettings')}>
               <X className="h-5 w-5" aria-hidden="true" />
             </IconButton>
           </header>
@@ -152,53 +181,92 @@ export const ArtistSettingsModal: React.FC<ArtistSettingsModalProps> = ({
               <div>
                 <p className="settings-modal__label truncate text-sm font-semibold">{artistName}</p>
                 <p className="settings-modal__description mt-1 text-xs leading-5">
-                  目前有 {artist.artwork_count.toLocaleString()} 個作品。以下動作只會套用到這位繪師。
+                  {t('settings.artistWorkCount', { count: formatNumber(artist.artwork_count) })}
                 </p>
               </div>
               <div className="settings-modal__description rounded-lg border border-[var(--settings-border-soft)] px-3 py-2 text-xs leading-5">
-                移入回收區不會直接刪除原始檔案；下一次掃描也會略過應用程式回收區。
+                {t('settings.recycleSafety')}
               </div>
-              {artist.folder_id && artist.member_id > 0 && (
+              {artist.folder_id && (
                 <div className="space-y-3 border-t border-[var(--settings-border-soft)] pt-3">
                   <div>
-                    <p className="settings-modal__label text-sm font-semibold">創作者身份</p>
+                    <p className="settings-modal__label text-sm font-semibold">{t('settings.identity')}</p>
                     <p className="settings-modal__description mt-1 text-xs leading-5">
-                      {artist.identity_status === 'verified'
-                        ? `已確認為 member ID ${artist.member_id}，可以顯示 Pixiv／FANBOX 來源連結。`
-                        : artist.identity_status === 'rejected'
-                          ? '目前標記為未知創作者，不會根據資料夾名稱推定來源連結。'
-                          : `資料夾名稱包含 member ID ${artist.member_id}，但尚未確認是否為真正的創作者。`}
+                      {currentStatus === 'verified'
+                        ? t('settings.identityVerified', { id: customMemberId || artist.member_id })
+                        : currentStatus === 'rejected'
+                          ? t('settings.identityRejected')
+                          : t('settings.identityInferred', { id: customMemberId || artist.member_id })}
                     </p>
                   </div>
-                  <div className="flex flex-wrap gap-2">
-                    {artist.identity_status !== 'verified' && (
+                  <div className="space-y-2">
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-xs font-medium opacity-80">Pixiv 繪師網址 / Member ID</label>
+                      <Input
+                        type="text"
+                        controlSize="sm"
+                        value={customMemberId}
+                        onChange={e => setCustomMemberId(e.target.value)}
+                        placeholder="例如 12345 或 https://www.pixiv.net/users/12345"
+                        className="w-full"
+                      />
+                    </div>
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-xs font-medium opacity-80">FANBOX 創作者網址 / ID</label>
+                      <Input
+                        type="text"
+                        controlSize="sm"
+                        value={customFanboxId}
+                        onChange={e => setCustomFanboxId(e.target.value)}
+                        placeholder="例如 https://www.pixiv.net/fanbox/creator/12345 或 xxx.fanbox.cc"
+                        className="w-full"
+                      />
+                    </div>
+                    <div className="pt-1">
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        disabled={identityLoading || loading}
+                        onClick={() => {
+                          const rawMember = customMemberId.trim();
+                          const match = rawMember.match(/pixiv\.net\/users\/(\d+)/i) || rawMember.match(/(\d+)/);
+                          const parsedMember = match ? parseInt(match[1], 10) : null;
+                          void handleIdentityStatus('verified', parsedMember, customFanboxId.trim());
+                        }}
+                      >
+                        儲存自主設定
+                      </Button>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-2 pt-2 border-t border-[var(--settings-border-soft)]">
+                    {currentStatus !== 'verified' && (
                       <Button
                         type="button"
                         variant="secondary"
                         disabled={identityLoading || loading}
                         onClick={() => void handleIdentityStatus('verified')}
                       >
-                        確認此 member ID
+                        {t('settings.confirmMember')}
                       </Button>
                     )}
-                    {artist.identity_status !== 'rejected' && (
+                    {currentStatus !== 'rejected' && (
                       <Button
                         type="button"
                         variant="plain"
                         disabled={identityLoading || loading}
                         onClick={() => void handleIdentityStatus('rejected')}
                       >
-                        標記為未知
+                        {t('settings.markUnknown')}
                       </Button>
                     )}
-                    {artist.identity_status === 'verified' && (
+                    {(currentStatus === 'verified' || currentStatus === 'rejected') && (
                       <Button
                         type="button"
                         variant="plain"
                         disabled={identityLoading || loading}
                         onClick={() => void handleIdentityStatus('inferred')}
                       >
-                        撤銷確認
+                        {t('settings.revokeConfirmation')}
                       </Button>
                     )}
                   </div>
@@ -214,7 +282,7 @@ export const ArtistSettingsModal: React.FC<ArtistSettingsModalProps> = ({
                 variant="secondary"
               >
                 <Eye className="h-4 w-4" aria-hidden="true" />
-                隱藏此繪師
+                {t('settings.hideArtist')}
               </Button>
               <Button
                 type="button"
@@ -223,14 +291,14 @@ export const ArtistSettingsModal: React.FC<ArtistSettingsModalProps> = ({
                 variant="danger"
               >
                 <Trash2 className="h-4 w-4" aria-hidden="true" />
-                刪除全部作品（移到回收區）
+                {t('settings.trashArtistWorks')}
               </Button>
             </div>
           </div>
 
           <footer className="settings-modal__footer flex justify-end px-6 py-4">
             <Button type="button" onClick={onClose} variant="plain">
-              關閉
+              {t('common.close')}
             </Button>
           </footer>
         </section>
@@ -238,12 +306,12 @@ export const ArtistSettingsModal: React.FC<ArtistSettingsModalProps> = ({
 
       <ConfirmModal
         isOpen={action !== null}
-        title={action === 'hide' ? '隱藏這位繪師？' : '將這位繪師的作品移到回收區？'}
+        title={action === 'hide' ? t('settings.hideArtistTitle') : t('settings.trashArtistTitle')}
         message={action === 'hide'
-          ? `隱藏「${artistName}」後，Web Viewer 會在列表與掃描結果中略過它；原始檔案不會被移動。`
-          : `確定要將「${artistName}」的全部作品移到回收區嗎？檔案仍可在回收區移至 Windows 資源回收筒，不會直接刪除。`}
-        confirmLabel={action === 'hide' ? '隱藏繪師' : '移到回收區'}
-        cancelLabel="取消"
+          ? t('settings.hideArtistMessage', { name: artistName })
+          : t('settings.trashArtistMessage', { name: artistName })}
+        confirmLabel={action === 'hide' ? t('settings.hideArtistConfirm') : t('settings.moveArtistToRecycleBin')}
+        cancelLabel={t('common.cancel')}
         onConfirm={() => void handleAction()}
         onCancel={() => {
           if (!loading) setAction(null);

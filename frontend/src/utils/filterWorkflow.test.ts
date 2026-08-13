@@ -20,10 +20,20 @@ describe('filter and month workflow helpers', () => {
     expect(window.location.search).toBe('?month=2024-02&artist_id=42&search=blue+sky');
   });
 
-  it('accepts permanent managed-folder ids in shared URLs', () => {
-    const folderId = 'folder:550e8400-e29b-41d4-a716-446655440000';
+  it('accepts permanent managed-folder ids in shared URLs via folder_id or legacy artist_id', () => {
+    const rawUuid = '550e8400-e29b-41d4-a716-446655440000';
+    const folderId = `folder:${rawUuid}`;
+    expect(parseFilterUrl(`http://localhost/?folder_id=${encodeURIComponent(rawUuid)}`).selectedArtist)
+      .toBe(folderId);
     expect(parseFilterUrl(`http://localhost/?artist_id=${encodeURIComponent(folderId)}`).selectedArtist)
       .toBe(folderId);
+  });
+
+  it('writes folder_id for folder selection state', () => {
+    window.history.replaceState({}, '', '/gallery');
+    const folderId = 'folder:550e8400-e29b-41d4-a716-446655440000';
+    syncFilterUrl({ selectedMonths: [], selectedArtist: folderId, searchQuery: '' });
+    expect(window.location.search).toBe('?folder_id=550e8400-e29b-41d4-a716-446655440000');
   });
 
   it('sorts month index consistently with gallery sort mode', () => {

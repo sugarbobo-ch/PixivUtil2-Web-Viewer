@@ -1,6 +1,7 @@
 import React from 'react';
 import { imageLoadScheduler, ImagePriority, useImageLoadPermission } from '../utils/imageLoadScheduler';
 import { DemoMediaBlock } from './DemoMediaBlock';
+import { useI18n } from '../i18n';
 
 interface GalleryThumbnailProps {
   src: string;
@@ -21,6 +22,7 @@ export const GalleryThumbnail: React.FC<GalleryThumbnailProps> = ({
   demoMode,
   dominantColor,
 }) => {
+  const { t } = useI18n();
   const [retryToken, setRetryToken] = React.useState(0);
   const requestSrc = retryToken > 0
     ? `${src}${src.includes('?') ? '&' : '?'}thumbnail_retry=${retryToken}`
@@ -59,7 +61,7 @@ export const GalleryThumbnail: React.FC<GalleryThumbnailProps> = ({
         <DemoMediaBlock dominantColor={dominantColor} className="gallery-thumbnail__demo-block" />
       ) : (
         <>
-          {loadState !== 'loaded' && (
+          {loadState !== 'loaded' && !validatedDominantColor && (
             <div className="gallery-thumbnail__skeleton" aria-hidden="true" />
           )}
           {shouldRenderImage && (
@@ -92,7 +94,7 @@ export const GalleryThumbnail: React.FC<GalleryThumbnailProps> = ({
             />
           )}
           {loadState === 'error' && (
-            <span className="gallery-thumbnail__error" aria-hidden="true">縮圖載入失敗</span>
+            <span className="gallery-thumbnail__error" aria-hidden="true">{t('common.thumbnailLoadFailed')}</span>
           )}
         </>
       )}

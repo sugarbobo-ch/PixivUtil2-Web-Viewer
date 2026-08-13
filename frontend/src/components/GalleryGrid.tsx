@@ -1,5 +1,6 @@
 import React from 'react';
 import { Artist, ImageItem, SortMode, WorkGroup } from '../types';
+import { useI18n } from '../i18n';
 import { getItemGroupKey } from '../utils/grouping';
 import { ArtistStickyNav } from './ArtistStickyNav';
 import { CustomSelect } from './CustomSelect';
@@ -15,6 +16,8 @@ import {
   replaceSelectionForRange,
 } from '../utils/gallerySelection';
 import { Badge, Button, IconButton, Input } from './ui';
+import { GalleryGlobalTrack } from './GalleryGlobalTrack';
+import type { GalleryLayoutIndex, MediaWindowController, MediaWindowSnapshot } from '../media-window';
 
 export interface GalleryPageChangeOptions {
   preserveScroll?: boolean;
@@ -39,6 +42,7 @@ interface GalleryGridProps {
   onSetSelection: (imageIds: number[], selected: boolean) => void;
   onReplaceSelection: (imageIds: number[]) => void;
   onOpenFullscreen: (index: number) => void;
+  onPrefetchReader?: () => void;
   searchQuery?: string;
   selectedArtist?: string | null;
   onClearArtist?: () => void;
@@ -66,6 +70,9 @@ interface GalleryGridProps {
   onOpenArtistSettings?: () => void;
   blurEnabled?: boolean;
   demoMode?: boolean;
+  globalMediaWindow?: MediaWindowController;
+  globalMediaSnapshot?: MediaWindowSnapshot;
+  globalLayout?: GalleryLayoutIndex;
 }
 
 interface SelectionGesture {
@@ -92,32 +99,33 @@ interface SelectionGesture {
 
 const SELECTION_AUTO_SCROLL_EDGE = 72;
 const SELECTION_MAX_SCROLL_SPEED = 24;
+const UNSPECIFIED_MONTH_KEY = '__unspecified-month__';
 
 const getMonthKeyForLayout = (dateStr?: string) => {
-  if (!dateStr) return '未指定月份';
+  if (!dateStr) return UNSPECIFIED_MONTH_KEY;
   const value = dateStr.trim();
   const hyphenMatch = value.match(/^(\d{4})[\-/](\d{1,2})/);
   if (hyphenMatch) return `${hyphenMatch[1]}-${hyphenMatch[2].padStart(2, '0')}`;
   const compactMatch = value.match(/^(\d{4})(\d{2})/);
   if (compactMatch) return `${compactMatch[1]}-${compactMatch[2]}`;
-  return '未指定月份';
+  return UNSPECIFIED_MONTH_KEY;
 };
 
 const sortOptions = [
-  { value: 'newest_month', label: '圖片新到舊', description: '月份：新 → 舊｜圖片時間：新 → 舊' },
-  { value: 'newest_works_pages_ascending', label: '作品新到舊・頁碼正序', description: '月份：新 → 舊｜作品：新 → 舊｜作品內：p1 → p2 → p3' },
-  { value: 'newest_month_oldest_works', label: '圖片舊到新', description: '月份：新 → 舊｜圖片時間：舊 → 新' },
-  { value: 'oldest_month', label: '月份舊到新・作品新到舊', description: '月份：舊 → 新｜作品：新 → 舊｜作品內：自然正序' },
-  { value: 'oldest', label: '全部舊到新', description: '圖片時間：舊 → 新｜同時間：檔名自然正序' },
-  { value: 'natural_name', label: '檔名自然正序', description: '數字：1-1 → 1-2 → 1-10｜字母：a → b → c' },
+  { value: 'newest_month' },
+  { value: 'newest_works_pages_ascending' },
+  { value: 'newest_month_oldest_works' },
+  { value: 'oldest_month' },
+  { value: 'oldest' },
+  { value: 'natural_name' },
 ] as const;
 
 const itemsPerPageOptions = [
-  { value: 100, label: '100 張' },
-  { value: 200, label: '200 張' },
-  { value: 500, label: '500 張' },
-  { value: 1000, label: '1000 張' },
-  { value: 5000, label: '全部 (5000)' },
+  { value: 100 },
+  { value: 200 },
+  { value: 500 },
+  { value: 1000 },
+  { value: 5000 },
 ] as const;
 
 export const GalleryGrid: React.FC<GalleryGridProps> = ({
@@ -138,6 +146,7 @@ export const GalleryGrid: React.FC<GalleryGridProps> = ({
   onSetSelection,
   onReplaceSelection,
   onOpenFullscreen,
+  onPrefetchReader,
   searchQuery = '',
   selectedArtist = null,
   onClearArtist,
@@ -165,7 +174,11 @@ export const GalleryGrid: React.FC<GalleryGridProps> = ({
   onOpenArtistSettings,
   blurEnabled = false,
   demoMode = false,
+  globalMediaWindow,
+  globalMediaSnapshot,
+  globalLayout,
 }) => {
+  const { t, formatNumber } = useI18n();
   const galleryRootRef = React.useRef<HTMLDivElement | null>(null);
   const filterChromeRef = React.useRef<HTMLDivElement | null>(null);
   const selectionGestureRef = React.useRef<SelectionGesture | null>(null);
@@ -176,7 +189,40 @@ export const GalleryGrid: React.FC<GalleryGridProps> = ({
   const [pageInput, setPageInput] = React.useState(String(currentPage));
   const [scrollTick, setScrollTick] = React.useState(0);
   const pageOffset = Math.max(0, (currentPage - 1) * itemsPerPage);
+  const isGlobalMode = Boolean(globalMediaWindow && globalMediaSnapshot && globalLayout);
+  const globalActiveMonthKey = React.useMemo(() => {
+    if (!isGlobalMode || !globalLayout) return undefined;
+    const scrollTop = scrollContainerRef.current?.scrollTop ?? 0;
+    return globalLayout.getMonthAtOffset(scrollTop + 96)?.key
+      ?? globalLayout.months[0]?.key
+      ?? null;
+  }, [globalLayout, isGlobalMode, scrollTick]);
   const totalPages = Math.max(1, Math.ceil(totalImages / Math.max(1, itemsPerPage)));
+  const localizedSortOptions = React.useMemo(() => sortOptions.map(option => ({
+    ...option,
+    label: t(({
+      newest_month: 'gallery.sortNewestMonth',
+      newest_works_pages_ascending: 'gallery.sortNewestWorks',
+      newest_month_oldest_works: 'gallery.sortOldestImages',
+      oldest_month: 'gallery.sortOldestMonth',
+      oldest: 'gallery.sortOldest',
+      natural_name: 'gallery.sortNatural',
+    } satisfies Record<SortMode, string>)[option.value]),
+    description: t(({
+      newest_month: 'gallery.sortNewestMonthDescription',
+      newest_works_pages_ascending: 'gallery.sortNewestWorksDescription',
+      newest_month_oldest_works: 'gallery.sortOldestImagesDescription',
+      oldest_month: 'gallery.sortOldestMonthDescription',
+      oldest: 'gallery.sortOldestDescription',
+      natural_name: 'gallery.sortNaturalDescription',
+    } satisfies Record<SortMode, string>)[option.value]),
+  })), [t]);
+  const localizedItemsPerPageOptions = React.useMemo(() => itemsPerPageOptions.map(option => ({
+    ...option,
+    label: option.value === 5000
+      ? t('gallery.allCount', { count: formatNumber(option.value) })
+      : t('gallery.countUnit', { count: formatNumber(option.value) }),
+  })), [formatNumber, t]);
 
   const selectionModel = React.useMemo<GallerySelectionCard[]>(() => {
     const monthKeys = Array.from(new Set(images.map(item => getMonthKeyForLayout(item.created_date))));
@@ -422,15 +468,17 @@ export const GalleryGrid: React.FC<GalleryGridProps> = ({
   React.useEffect(() => {
     const container = scrollContainerRef.current;
     if (!container) return undefined;
+    let frameId: number | null = null;
     const onScroll = () => {
-      // The month ruler uses auto scroll while the pointer is held down. Keep
-      // the virtual window in the same event turn as that scroll instead of
-      // waiting for the next animation frame, otherwise the new viewport can
-      // briefly contain only stale skeletons.
-      setScrollTick(tick => tick + 1);
+      if (frameId !== null) return;
+      frameId = window.requestAnimationFrame(() => {
+        frameId = null;
+        setScrollTick(tick => tick + 1);
+      });
     };
     container.addEventListener('scroll', onScroll, { passive: true });
     return () => {
+      if (frameId !== null) window.cancelAnimationFrame(frameId);
       container.removeEventListener('scroll', onScroll);
     };
   }, [images.length, groupMangaPosts]);
@@ -769,9 +817,9 @@ const selectedArtistObj = selectedArtist === null
 
   images.forEach((item, globalIndex) => {
     const monthKey = getMonthKeyForLayout(item.created_date);
-    const monthLabel = monthKey === '未指定月份'
-      ? monthKey
-      : `${monthKey.slice(0, 4)} 年 ${monthKey.slice(5)} 月`;
+    const monthLabel = monthKey === UNSPECIFIED_MONTH_KEY
+      ? t('gallery.unspecifiedMonth')
+      : t('gallery.monthLabel', { year: monthKey.slice(0, 4), month: monthKey.slice(5) });
     if (!groupedByMonth[monthKey]) {
       groupedByMonth[monthKey] = { label: monthLabel, items: [] };
     }
@@ -822,19 +870,28 @@ const selectedArtistObj = selectedArtist === null
     goToPageFromInput();
   };
 
-  const monthNavigationItems = monthIndexItems ?? monthKeys.map(mKey => ({
+  const monthNavigationItems = globalLayout
+    ? globalLayout.months.map(month => ({
+      key: month.key,
+      label: month.label,
+      count: month.imageCount,
+      offset: month.offset,
+    }))
+    : monthIndexItems ?? monthKeys.map(mKey => ({
     key: mKey,
     label: groupedByMonth[mKey].label,
     count: groupedByMonth[mKey].items.length,
   }));
-  const restoreMonthKey = restoreGlobalIndex !== null
-    ? getMonthKeyForLayout(images[restoreGlobalIndex]?.created_date)
-    : null;
+  const restoreMonthKey = globalLayout && restoreGlobalIndex !== null
+    ? globalLayout.getMonthForGlobalIndex(restoreGlobalIndex)?.key ?? null
+    : restoreGlobalIndex !== null
+      ? getMonthKeyForLayout(images[restoreGlobalIndex]?.created_date)
+      : null;
 
   return (
     <div
       ref={galleryRootRef}
-      className={`gallery-grid-root min-w-0${isDragSelecting ? ' is-drag-selecting' : ''}${images.length === 0 ? ' is-empty' : ''}`}
+      className={`gallery-grid-root min-w-0${isDragSelecting ? ' is-drag-selecting' : ''}${images.length === 0 && !isGlobalMode ? ' is-empty' : ''}`}
       style={filterChromeHeight === null
         ? undefined
         : { '--gallery-filter-chrome-height': `${filterChromeHeight}px` } as React.CSSProperties}
@@ -846,6 +903,7 @@ const selectedArtistObj = selectedArtist === null
         onJumpToMonth={onJumpToMonth}
         onPrefetchMonth={onPrefetchMonth}
         onNavigationChange={onNavigationChange}
+        activeMonthKey={globalActiveMonthKey}
         isLoading={isLoading}
       />
 
@@ -858,7 +916,7 @@ const selectedArtistObj = selectedArtist === null
       {hasActiveFilters && (
         <div className="filter-summary filter-summary__layout filter-summary--compact mx-4 mt-2">
           <span className="filter-summary__meta-copy" role="status" aria-live="polite">
-            找到 <strong className="filter-summary__meta-total">{totalImages}</strong> 筆相符作品
+            {t('gallery.found', { count: formatNumber(totalImages) })}
           </span>
           {onResetAllFilters && (
             <Button
@@ -869,7 +927,7 @@ const selectedArtistObj = selectedArtist === null
               className="filter-summary__reset"
             >
               <RotateCcw className="filter-summary__reset-icon" aria-hidden="true" />
-              重設所有條件
+              {t('gallery.resetAll')}
             </Button>
           )}
         </div>
@@ -888,11 +946,11 @@ const selectedArtistObj = selectedArtist === null
               size="md"
               className="gallery-filter-toolbar__filter-trigger"
               aria-label={activeFilterCount > 0
-                ? `開啟篩選條件，目前有 ${activeFilterCount} 項篩選`
-                : '開啟篩選條件'}
+                ? t('gallery.activeFilterCount', { count: formatNumber(activeFilterCount) })
+                : t('gallery.openFilters')}
               aria-expanded={isFilterSidebarOpen}
               aria-controls="gallery-filter-sidebar"
-              title="開啟篩選條件"
+              title={t('gallery.openFilters')}
             >
               <Filter className="h-5 w-5" aria-hidden="true" />
             </IconButton>
@@ -918,22 +976,22 @@ const selectedArtistObj = selectedArtist === null
           isEditMode={isEditMode}
           onToggleEditMode={onToggleEditMode}
           sortMode={sortMode}
-          sortOptions={sortOptions}
+          sortOptions={localizedSortOptions}
           onSortModeChange={onSortModeChange}
-          itemsPerPage={itemsPerPage}
-          itemsPerPageOptions={itemsPerPageOptions}
-          onItemsPerPageChange={onItemsPerPageChange}
+          itemsPerPage={isGlobalMode ? undefined : itemsPerPage}
+          itemsPerPageOptions={isGlobalMode ? undefined : localizedItemsPerPageOptions}
+          onItemsPerPageChange={isGlobalMode ? undefined : onItemsPerPageChange}
           onPageChange={onPageChange}
           boundaryRef={filterChromeRef}
         />
           <div className="gallery-filter-toolbar__actions">
             <div className="gallery-filter-toolbar__sort ml-auto flex min-h-9 shrink-0 items-center gap-2">
-            <span className="gallery-filter-toolbar__label text-xs font-medium">排序:</span>
+            <span className="gallery-filter-toolbar__label text-xs font-medium">{t('gallery.sortLabel')}</span>
             <CustomSelect
               value={sortMode}
-              options={sortOptions}
+              options={localizedSortOptions}
               onChange={onSortModeChange}
-              ariaLabel="排序方式"
+              ariaLabel={t('gallery.sortAria')}
               className="gallery-filter-toolbar__sort-select"
               leadingContent={<ArrowUpDown className="gallery-filter-toolbar__sort-icon h-5 w-5" />}
               buttonClassName="gallery-filter-toolbar__sort-control"
@@ -941,52 +999,52 @@ const selectedArtistObj = selectedArtist === null
               boundaryRef={filterChromeRef}
             />
           </div>
-          <div className="gallery-filter-toolbar__page-size">
-            <span className="gallery-filter-toolbar__label gallery-filter-toolbar__page-size-label text-xs font-medium">每頁:</span>
+          {!isGlobalMode && <div className="gallery-filter-toolbar__page-size">
+            <span className="gallery-filter-toolbar__label gallery-filter-toolbar__page-size-label text-xs font-medium">{t('gallery.pageSizeLabel')}</span>
             <CustomSelect
               value={itemsPerPage}
-              options={itemsPerPageOptions}
+              options={localizedItemsPerPageOptions}
               onChange={nextItemsPerPage => {
                 onItemsPerPageChange(nextItemsPerPage);
                 onPageChange(1);
               }}
-              ariaLabel="每頁顯示數量"
+              ariaLabel={t('gallery.pageSizeAria')}
               className="gallery-filter-toolbar__page-size-select"
               leadingContent={<List className="gallery-filter-toolbar__page-size-icon h-5 w-5" />}
               buttonClassName="gallery-filter-toolbar__page-size-control"
               menuPlacement="end"
               boundaryRef={filterChromeRef}
             />
-          </div>
+          </div>}
         </div>
       </div>
       </div>
 
       {/* Main Grid View - Grouped by Month Sections */}
       <div className="gallery-month-content p-4 space-y-6" data-gallery-scroll-container="true">
-        {isLoading && images.length === 0 ? (
+        {isLoading && images.length === 0 && !isGlobalMode ? (
           <div className="gallery-empty-state gallery-empty-state--loading" role="status" aria-live="polite" aria-busy="true">
             <div className="gallery-empty-state__icon" aria-hidden="true">
               <RotateCcw className="h-7 w-7 gallery-empty-state__spinner" />
             </div>
             <div className="gallery-empty-state__copy">
-              <p className="gallery-empty-state__title">正在載入作品</p>
-              <p className="gallery-empty-state__description">正在讀取圖片資料夾，第一次載入可能需要一點時間。</p>
+              <p className="gallery-empty-state__title">{t('gallery.loadingWorks')}</p>
+              <p className="gallery-empty-state__description">{t('gallery.loadingDescription')}</p>
             </div>
           </div>
-        ) : images.length === 0 ? (
+        ) : images.length === 0 && !isGlobalMode ? (
           <div className="gallery-empty-state" role="status" aria-live="polite">
             <div className="gallery-empty-state__icon" aria-hidden="true">
               <Search className="h-7 w-7" />
             </div>
             <div className="gallery-empty-state__copy">
-              <p className="gallery-empty-state__title">沒有相符的結果</p>
+              <p className="gallery-empty-state__title">{t('gallery.noResultsTitle')}</p>
               {searchQuery ? (
                 <p className="gallery-empty-state__description">
-                  找不到「<span className="gallery-empty-state__query">{searchQuery}</span>」相關作品
+                  {t('gallery.noResultsForQuery', { query: searchQuery })}
                 </p>
               ) : (
-                <p className="gallery-empty-state__description">請調整篩選條件或搜尋關鍵字</p>
+                <p className="gallery-empty-state__description">{t('gallery.adjustFilters')}</p>
               )}
             </div>
             {hasActiveFilters && onResetAllFilters && (
@@ -998,13 +1056,31 @@ const selectedArtistObj = selectedArtist === null
                 className="gallery-empty-state__reset"
               >
                 <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
-                清除條件
+                {t('gallery.clearFilters')}
               </Button>
             )}
           </div>
         ) : (
           <>
-            {monthKeys.map(mKey => (
+            {isGlobalMode && globalMediaWindow && globalMediaSnapshot && globalLayout ? (
+              <GalleryGlobalTrack
+                mediaWindow={globalMediaWindow}
+                snapshot={globalMediaSnapshot}
+                layout={globalLayout}
+                thumbnailSize={thumbnailSize}
+                groupMangaPosts={groupMangaPosts}
+                isEditMode={isEditMode}
+                selectedIds={selectedIds}
+                onSetSelection={onSetSelection}
+                onOpenFullscreen={onOpenFullscreen}
+                onPrefetchReader={onPrefetchReader}
+                onOpenWorkGroup={onOpenWorkGroup}
+                blurEnabled={blurEnabled}
+                demoMode={demoMode}
+                navigationMode={navigationMode}
+                scrollContainerRef={scrollContainerRef}
+              />
+            ) : monthKeys.map(mKey => (
               <GalleryMonthSection
                 key={mKey}
                 group={{ key: mKey, ...groupedByMonth[mKey] }}
@@ -1014,6 +1090,7 @@ const selectedArtistObj = selectedArtist === null
                 selectedIds={selectedIds}
                 onSetSelection={onSetSelection}
                 onOpenFullscreen={onOpenFullscreen}
+                onPrefetchReader={onPrefetchReader}
                 onOpenWorkGroup={onOpenWorkGroup}
                 beginPointerGesture={beginPointerGesture}
                 handleCardClick={handleCardClick}
@@ -1030,9 +1107,13 @@ const selectedArtistObj = selectedArtist === null
             ))}
 
             {/* Pagination Bar */}
-            <div className="gallery-pagination flex flex-col sm:flex-row items-center justify-between gap-3 pt-6 text-xs">
+            {!isGlobalMode && <div className="gallery-pagination flex flex-col sm:flex-row items-center justify-between gap-3 pt-6 text-xs">
           <div className="gallery-pagination__summary">
-            顯示第 <span className="font-semibold">{startOffset + 1}</span> - <span className="font-semibold">{endOffset}</span> 張，共 <span className="gallery-pagination__total font-semibold">{totalImages}</span> 張作品
+            {t('gallery.range', {
+              start: formatNumber(startOffset + 1),
+              end: formatNumber(endOffset),
+              total: formatNumber(totalImages),
+            })}
           </div>
 
           {/* Page Buttons */}
@@ -1041,10 +1122,10 @@ const selectedArtistObj = selectedArtist === null
               type="button"
               onClick={() => onPageChange(1)}
               variant="secondary"
-              aria-label="第一頁"
+              aria-label={t('gallery.firstPage')}
               disabled={currentPage === 1}
               className="gallery-pagination__button gallery-pagination__button--icon"
-              title="第一頁"
+              title={t('gallery.firstPage')}
             >
               <ChevronsLeft className="h-5 w-5" />
             </IconButton>
@@ -1055,7 +1136,7 @@ const selectedArtistObj = selectedArtist === null
               variant="secondary"
               className="gallery-pagination__button flex items-center gap-1 px-2.5"
             >
-              <ChevronLeft className="w-4 h-4" /> 上一頁
+              <ChevronLeft className="w-4 h-4" /> {t('gallery.previousPage')}
             </Button>
 
             {getPageNumbers().map((p, idx) => {
@@ -1083,23 +1164,23 @@ const selectedArtistObj = selectedArtist === null
               variant="secondary"
               className="gallery-pagination__button flex items-center gap-1 px-2.5"
             >
-              下一頁 <span aria-hidden="true">&gt;</span>
+              {t('gallery.nextPage')} <span aria-hidden="true">&gt;</span>
             </Button>
             <IconButton
               type="button"
               onClick={() => onPageChange(totalPages)}
               variant="secondary"
-              aria-label="最後一頁"
+              aria-label={t('gallery.lastPage')}
               disabled={currentPage === totalPages}
               className="gallery-pagination__button gallery-pagination__button--icon"
-              title="最後一頁"
+              title={t('gallery.lastPage')}
             >
               <ChevronsRight className="h-5 w-5" />
             </IconButton>
           </div>
 
           <form className="gallery-pagination__jump" onSubmit={handlePageInputSubmit}>
-            <label className="gallery-pagination__jump-label" htmlFor="gallery-page-input">前往頁面</label>
+            <label className="gallery-pagination__jump-label" htmlFor="gallery-page-input">{t('gallery.pageJump')}</label>
             <Input
               controlSize="sm"
               id="gallery-page-input"
@@ -1120,10 +1201,10 @@ const selectedArtistObj = selectedArtist === null
               aria-describedby="gallery-page-input-hint"
             />
             <span id="gallery-page-input-hint" className="gallery-pagination__jump-total">/ {totalPages}</span>
-            <Button type="submit" variant="secondary" className="gallery-pagination__button gallery-pagination__jump-submit">前往</Button>
+            <Button type="submit" variant="secondary" className="gallery-pagination__button gallery-pagination__jump-submit">{t('gallery.go')}</Button>
           </form>
 
-            </div>
+            </div>}
           </>
         )}
       </div>

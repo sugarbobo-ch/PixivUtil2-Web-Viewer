@@ -4,8 +4,10 @@ import { LibraryJob, WebConfig } from '../types';
 import { apiClient } from '../api/client';
 import { isLibraryJobActive, useLibraryJobStore } from '../hooks/useLibraryJobStore';
 import { useModalFocusTrap } from '../utils/useModalFocusTrap';
+import { getOperationErrorMessage } from '../utils/operationError';
 import { PathPickerField } from './PathPickerField';
 import { Button } from './ui';
+import { useI18n, type I18nContextValue } from '../i18n';
 
 type SourceMode = 'pixiv' | 'folder';
 type OnboardingStep = 'welcome' | 'source' | 'confirm' | 'scanning' | 'complete';
@@ -25,18 +27,19 @@ interface FirstUseOnboardingProps {
 
 const isFailed = (job: LibraryJob | null) => !!job && ['cancelled', 'failed', 'interrupted'].includes(job.status);
 
-const phaseCopy = (job: LibraryJob | null) => {
-  if (!job) return '準備掃描…';
-  if (job.status === 'queued') return '掃描工作已排入佇列…';
-  if (job.phase === 'discovering') return '正在尋找支援的圖片與影片…';
-  if (job.phase === 'indexing') return '正在建立 Viewer 索引…';
-  if (job.phase === 'analyzing_colors') return '正在建立瀏覽用色彩資料…';
-  if (job.phase === 'organizing_cache') return '正在整理縮圖快取…';
-  if (job.status === 'completed') return '媒體資料庫已準備完成。';
-  return '掃描未完成。';
+const phaseCopy = (job: LibraryJob | null, t: I18nContextValue['t']) => {
+  if (!job) return t('onboarding.prepareScan');
+  if (job.status === 'queued') return t('onboarding.scanQueued');
+  if (job.phase === 'discovering') return t('onboarding.discovering');
+  if (job.phase === 'indexing') return t('onboarding.indexing');
+  if (job.phase === 'analyzing_colors') return t('onboarding.analyzingColors');
+  if (job.phase === 'organizing_cache') return t('onboarding.organizingCache');
+  if (job.status === 'completed') return t('onboarding.databaseReady');
+  return t('onboarding.scanIncomplete');
 };
 
 export const FirstUseOnboarding: React.FC<FirstUseOnboardingProps> = ({ initialConfig, onComplete }) => {
+  const { t, formatNumber } = useI18n();
   const initialMode = initialConfig.librarySourceMode === 'folder' ? 'folder' : 'pixiv';
   const [step, setStep] = useState<OnboardingStep>('welcome');
   const [mode, setMode] = useState<SourceMode>(initialMode);
@@ -54,13 +57,13 @@ export const FirstUseOnboarding: React.FC<FirstUseOnboardingProps> = ({ initialC
   const handleJobFinished = useCallback((finishedJob: LibraryJob) => {
     if (finishedJob.status === 'completed') setStep('complete');
     if (isFailed(finishedJob)) {
-      setError(finishedJob.error_message || '媒體資料庫工作未完成，請確認來源後重新嘗試。');
+      setError(finishedJob.error_message || t('library.jobFailed'));
     }
-  }, []);
+  }, [t]);
 
   const handlePollingError = useCallback((pollError: unknown) => {
-    setError(pollError instanceof Error ? pollError.message : '無法讀取媒體資料庫工作狀態。');
-  }, []);
+    setError(getOperationErrorMessage(pollError, t));
+  }, [t]);
 
   const { job, startLibraryJob, updateLibraryJob } = useLibraryJobStore({
     onJobFinished: handleJobFinished,
@@ -79,11 +82,11 @@ export const FirstUseOnboarding: React.FC<FirstUseOnboardingProps> = ({ initialC
   }, [job]);
 
   const progressDetail = useMemo(() => {
-    if (!job) return '正在準備工作…';
-    if (job.phase === 'discovering') return `已找到 ${job.discovered.toLocaleString()} 個檔案`;
-    if (job.total) return `已處理 ${job.processed.toLocaleString()} / ${job.total.toLocaleString()} 個項目`;
-    return `已處理 ${job.processed.toLocaleString()} 個項目`;
-  }, [job]);
+    if (!job) return t('onboarding.progressPreparing');
+    if (job.phase === 'discovering') return t('onboarding.filesFound', { count: formatNumber(job.discovered) });
+    if (job.total) return t('onboarding.itemsProcessed', { processed: formatNumber(job.processed), total: formatNumber(job.total) });
+    return t('onboarding.itemsProcessedShort', { processed: formatNumber(job.processed) });
+  }, [formatNumber, job, t]);
 
   useEffect(() => {
     if (step === 'welcome') return undefined;
@@ -101,7 +104,7 @@ export const FirstUseOnboarding: React.FC<FirstUseOnboardingProps> = ({ initialC
       const sourceInspection = await apiClient.library.inspectSource(nextMode, nextPath);
       setInspection(sourceInspection as SourceInspection);
     } catch (inspectError) {
-      setError(inspectError instanceof Error ? inspectError.message : '無法讀取選取的來源。');
+      setError(getOperationErrorMessage(inspectError, t));
     } finally {
       setInspecting(false);
     }
@@ -131,11 +134,11 @@ export const FirstUseOnboarding: React.FC<FirstUseOnboardingProps> = ({ initialC
         directory: inspection.rootDirectory,
         analyze_colors: true,
       });
-      if (!data.job) throw new Error('無法開始掃描。');
+      if (!data.job) throw new Error(t('errors.unknown'));
       startLibraryJob(data.job);
       setStep('scanning');
     } catch (startError) {
-      setError(startError instanceof Error ? startError.message : '無法開始掃描。');
+      setError(getOperationErrorMessage(startError, t));
     } finally {
       setSaving(false);
     }
@@ -150,7 +153,7 @@ export const FirstUseOnboarding: React.FC<FirstUseOnboardingProps> = ({ initialC
       window.dispatchEvent(new Event('web-viewer-library-data-changed'));
       onComplete(data.webConfig);
     } catch (finishError) {
-      setError(finishError instanceof Error ? finishError.message : '無法完成首次設定。');
+      setError(getOperationErrorMessage(finishError, t));
       setSaving(false);
     }
   };
@@ -161,7 +164,7 @@ export const FirstUseOnboarding: React.FC<FirstUseOnboardingProps> = ({ initialC
     return () => window.clearTimeout(timer);
   }, [completed, saving, step]);
 
-  const sourceTitle = mode === 'pixiv' ? '選擇 PixivUtil2 config.ini' : '選擇媒體資料夾';
+  const sourceTitle = mode === 'pixiv' ? t('onboarding.choosePixivConfig') : t('onboarding.chooseMediaFolder');
 
   return (
     <main className="onboarding" aria-busy={busy}>
@@ -169,26 +172,26 @@ export const FirstUseOnboarding: React.FC<FirstUseOnboardingProps> = ({ initialC
         {step === 'welcome' && (
           <section className="onboarding__welcome" aria-labelledby="onboarding-title">
             <div className="onboarding__intro">
-              <p className="onboarding__eyebrow">歡迎使用</p>
-              <h1 id="onboarding-title">設定 PixivUtil2 Web Viewer</h1>
-              <p>選擇圖片來源。接下來會引導你選取檔案或資料夾，再建立瀏覽所需的 Viewer 索引。</p>
+              <p className="onboarding__eyebrow">{t('onboarding.welcome')}</p>
+              <h1 id="onboarding-title">{t('onboarding.setupTitle')}</h1>
+              <p>{t('onboarding.intro')}</p>
             </div>
-            <div className="onboarding__choices" role="group" aria-label="選擇圖片來源">
+            <div className="onboarding__choices" role="group" aria-label={t('onboarding.chooseSource')}>
               <Button ref={firstChoiceRef} shape="card" variant="secondary" className="onboarding__option-card" onClick={() => chooseMode('pixiv')}>
                 <span className="onboarding__option-icon"><Database aria-hidden="true" /></span>
                 <span className="onboarding__option-copy">
-                  <strong>使用 PixivUtil2 資料庫</strong>
-                  <span>選擇 config.ini，讀取 rootDirectory；若同位置有 db.sqlite，也會匯入 Pixiv 作品資訊。</span>
-                  <span className="onboarding__option-note">推薦給已使用 PixivUtil2 下載作品的人</span>
+                  <strong>{t('onboarding.pixivTitle')}</strong>
+                  <span>{t('onboarding.pixivDescription')}</span>
+                  <span className="onboarding__option-note">{t('onboarding.pixivNote')}</span>
                 </span>
                 <ChevronRight className="onboarding__option-arrow" aria-hidden="true" />
               </Button>
               <Button shape="card" variant="secondary" className="onboarding__option-card" onClick={() => chooseMode('folder')}>
                 <span className="onboarding__option-icon"><FolderOpen aria-hidden="true" /></span>
                 <span className="onboarding__option-copy">
-                  <strong>瀏覽本機資料夾</strong>
-                  <span>選擇一個資料夾，直接掃描支援的圖片與影片並建立 Viewer 索引。</span>
-                  <span className="onboarding__option-note">不需要安裝 PixivUtil2，也不需要 db.sqlite</span>
+                  <strong>{t('onboarding.folderTitle')}</strong>
+                  <span>{t('onboarding.folderDescription')}</span>
+                  <span className="onboarding__option-note">{t('onboarding.folderNote')}</span>
                 </span>
                 <ChevronRight className="onboarding__option-arrow" aria-hidden="true" />
               </Button>
@@ -198,16 +201,14 @@ export const FirstUseOnboarding: React.FC<FirstUseOnboardingProps> = ({ initialC
 
         {step === 'source' && (
           <section className="onboarding__source" aria-labelledby="onboarding-title">
-            <p className="onboarding__step">步驟 2 / 3</p>
+            <p className="onboarding__step">{t('onboarding.stepSource')}</p>
             <h1 ref={stepHeadingRef} id="onboarding-title" tabIndex={-1}>{sourceTitle}</h1>
-            <p>{mode === 'pixiv'
-              ? '請選擇 PixivUtil2 使用的 config.ini。Viewer 只會讀取設定與可用的 Pixiv metadata。'
-              : '請選擇要瀏覽的資料夾。Viewer 會包含其中子資料夾內的支援媒體。'}</p>
+            <p>{mode === 'pixiv' ? t('onboarding.pixivInstruction') : t('onboarding.folderInstruction')}</p>
             <PathPickerField
               id="onboarding-source-path"
               value={path}
-              label={mode === 'pixiv' ? 'PixivUtil2 config.ini' : '媒體資料夾'}
-              placeholder={mode === 'pixiv' ? '選擇 config.ini' : '選擇媒體資料夾'}
+              label={mode === 'pixiv' ? t('onboarding.pixivConfigLabel') : t('onboarding.mediaFolderLabel')}
+              placeholder={mode === 'pixiv' ? t('onboarding.chooseConfigPlaceholder') : t('onboarding.chooseFolderPlaceholder')}
               metadata={mode === 'pixiv'
                 ? { mode: 'existing-file', purpose: 'pixiv-config', extensions: ['.ini'], access: 'read' }
                 : { mode: 'folder', purpose: 'root-directory', access: 'read' }}
@@ -219,47 +220,47 @@ export const FirstUseOnboarding: React.FC<FirstUseOnboardingProps> = ({ initialC
                 <CheckCircle2 aria-hidden="true" />
                 <div>
                   <strong>{mode === 'pixiv'
-                    ? (inspection.databaseDetected ? '已偵測到 Pixiv 資料庫' : '已讀取 config.ini')
-                    : '已選擇媒體資料夾'}</strong>
+                    ? (inspection.databaseDetected ? t('onboarding.detectedPixivDatabase') : t('onboarding.readConfig'))
+                    : t('onboarding.selectedMediaFolder')}</strong>
                   <span>{inspection.rootDirectory}</span>
-                  {mode === 'pixiv' && !inspection.databaseDetected && <span>未找到 db.sqlite；仍可掃描資料夾中的媒體。</span>}
+                  {mode === 'pixiv' && !inspection.databaseDetected && <span>{t('onboarding.noPixivDatabase')}</span>}
                 </div>
               </div>
             )}
 
             <div className="onboarding__actions">
-              <Button variant="plain" onClick={() => { setStep('welcome'); setError(null); }} disabled={busy}>返回</Button>
-              <Button variant="primary" onClick={() => setStep('confirm')} disabled={!inspection || busy}>繼續</Button>
+              <Button variant="plain" onClick={() => { setStep('welcome'); setError(null); }} disabled={busy}>{t('onboarding.back')}</Button>
+              <Button variant="primary" onClick={() => setStep('confirm')} disabled={!inspection || busy}>{t('onboarding.continue')}</Button>
             </div>
           </section>
         )}
 
         {step === 'confirm' && inspection && (
           <section className="onboarding__confirm" aria-labelledby="onboarding-title">
-            <p className="onboarding__step">步驟 3 / 3</p>
-            <h1 ref={stepHeadingRef} id="onboarding-title" tabIndex={-1}>準備建立媒體資料庫</h1>
-            <p>開始後會暫時鎖定這個畫面，直到首次掃描完成。</p>
+            <p className="onboarding__step">{t('onboarding.stepConfirm')}</p>
+            <h1 ref={stepHeadingRef} id="onboarding-title" tabIndex={-1}>{t('onboarding.confirmTitle')}</h1>
+            <p>{t('onboarding.confirmDescription')}</p>
             <div className="onboarding__scan-plan">
               <ScanSearch aria-hidden="true" />
               <div>
-                <strong>Viewer 將進行以下作業</strong>
+                <strong>{t('onboarding.planTitle')}</strong>
                 <ul>
-                  <li>掃描資料夾中的支援圖片與影片</li>
-                  <li>建立 Viewer 索引與瀏覽所需的快取資料</li>
-                  {mode === 'pixiv' && <li>讀取可用的 PixivUtil2 metadata</li>}
+                  <li>{t('onboarding.scanMedia')}</li>
+                  <li>{t('onboarding.buildIndex')}</li>
+                  {mode === 'pixiv' && <li>{t('onboarding.readPixivMetadata')}</li>}
                 </ul>
               </div>
             </div>
             <dl className="onboarding__source-details">
-              <div><dt>媒體根目錄</dt><dd>{inspection.rootDirectory}</dd></div>
-              {mode === 'pixiv' && <div><dt>Pixiv 資料庫</dt><dd>{inspection.databaseDetected ? inspection.databasePath : '未偵測到'}</dd></div>}
+              <div><dt>{t('onboarding.mediaRoot')}</dt><dd>{inspection.rootDirectory}</dd></div>
+              {mode === 'pixiv' && <div><dt>{t('onboarding.pixivDatabase')}</dt><dd>{inspection.databaseDetected ? inspection.databasePath : t('onboarding.notDetected')}</dd></div>}
             </dl>
-            <p className="onboarding__safety-note">原始圖片不會被修改或刪除。資料量較大時，首次掃描可能需要一些時間。</p>
+            <p className="onboarding__safety-note">{t('onboarding.safety')}</p>
             <div className="onboarding__actions">
-              <Button variant="plain" onClick={() => { setStep('source'); setError(null); }} disabled={busy}>返回</Button>
+              <Button variant="plain" onClick={() => { setStep('source'); setError(null); }} disabled={busy}>{t('onboarding.back')}</Button>
               <Button variant="primary" onClick={() => void startScan()} disabled={busy}>
                 {saving && <LoaderCircle className="onboarding__spinner" aria-hidden="true" />}
-                {saving ? '正在開始…' : '開始掃描'}
+                {saving ? t('onboarding.starting') : t('onboarding.startScan')}
               </Button>
             </div>
           </section>
@@ -268,18 +269,18 @@ export const FirstUseOnboarding: React.FC<FirstUseOnboardingProps> = ({ initialC
         {(step === 'scanning' || step === 'complete') && (
           <section className="onboarding__progress" aria-labelledby="onboarding-title">
             {completed ? <CheckCircle2 className="onboarding__complete-icon" aria-hidden="true" /> : <LoaderCircle className="onboarding__spinner onboarding__progress-icon" aria-hidden="true" />}
-            <h1 ref={stepHeadingRef} id="onboarding-title" tabIndex={-1}>{completed ? '媒體資料庫已準備完成' : '正在建立媒體資料庫'}</h1>
-            <p aria-live="polite" aria-atomic="true">{phaseCopy(job)}</p>
+            <h1 ref={stepHeadingRef} id="onboarding-title" tabIndex={-1}>{completed ? t('onboarding.completeTitle') : t('onboarding.scanningTitle')}</h1>
+            <p aria-live="polite" aria-atomic="true">{phaseCopy(job, t)}</p>
             {!completed && !isFailed(job) && (
               <>
                 <div
                   className={`onboarding__progress-track${progress === null ? ' is-indeterminate' : ''}`}
                   role="progressbar"
-                  aria-label="媒體資料庫建立進度"
+                  aria-label={t('onboarding.progressLabel')}
                   aria-valuemin={0}
                   aria-valuemax={100}
                   aria-valuenow={progress ?? undefined}
-                  aria-valuetext={progress === null ? phaseCopy(job) : undefined}
+                  aria-valuetext={progress === null ? phaseCopy(job, t) : undefined}
                 >
                   <span className="onboarding__progress-bar" style={progress === null ? undefined : { width: `${progress}%` }} />
                 </div>
@@ -287,21 +288,21 @@ export const FirstUseOnboarding: React.FC<FirstUseOnboardingProps> = ({ initialC
               </>
             )}
             {completed && job && (
-              <div className="onboarding__completion-summary" aria-label="掃描結果">
-                <div><strong>{job.discovered.toLocaleString()}</strong><span>已掃描</span></div>
-                <div><strong>{job.added.toLocaleString()}</strong><span>新增</span></div>
-                <div><strong>{job.updated.toLocaleString()}</strong><span>更新</span></div>
+              <div className="onboarding__completion-summary" aria-label={t('onboarding.scanResult')}>
+                <div><strong>{formatNumber(job.discovered)}</strong><span>{t('onboarding.scanned')}</span></div>
+                <div><strong>{formatNumber(job.added)}</strong><span>{t('onboarding.added')}</span></div>
+                <div><strong>{formatNumber(job.updated)}</strong><span>{t('onboarding.updated')}</span></div>
               </div>
             )}
-            {completed && <Button variant="primary" onClick={() => void finish()} disabled={saving}>{saving ? '正在開啟…' : '立即開始瀏覽'}</Button>}
-            {isFailed(job) && <Button variant="secondary" onClick={() => { updateLibraryJob(null); setStep('confirm'); setError(null); }}>返回掃描確認</Button>}
+            {completed && <Button variant="primary" onClick={() => void finish()} disabled={saving}>{saving ? t('onboarding.opening') : t('onboarding.startBrowsing')}</Button>}
+            {isFailed(job) && <Button variant="secondary" onClick={() => { updateLibraryJob(null); setStep('confirm'); setError(null); }}>{t('onboarding.returnToConfirm')}</Button>}
           </section>
         )}
 
         <div className="onboarding__live-status" role="status" aria-live="polite" aria-atomic="true">
-          {inspecting ? '正在檢查選取的來源…' : ''}
+          {inspecting ? t('onboarding.inspecting') : ''}
         </div>
-        {inspecting && <p className="onboarding__status"><LoaderCircle className="onboarding__spinner" aria-hidden="true" />正在檢查選取的來源…</p>}
+        {inspecting && <p className="onboarding__status"><LoaderCircle className="onboarding__spinner" aria-hidden="true" />{t('onboarding.inspecting')}</p>}
         {error && <p className="onboarding__error" role="alert">{error}</p>}
       </div>
     </main>

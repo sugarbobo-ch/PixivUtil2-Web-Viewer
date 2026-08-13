@@ -3,6 +3,36 @@ import { DEFAULT_WEB_CONFIG } from '../types';
 import { normalizeWebConfig } from './webConfig';
 
 describe('web-config contract normalization', () => {
+  it('normalizes locale and fullscreen spread preferences with safe migration defaults', () => {
+    expect(normalizeWebConfig({
+      uiLanguage: 'ja-JP',
+      fullscreenPageLayout: 'spread',
+      fullscreenReadingDirection: 'rtl',
+      fullscreenSpreadPairing: 'first-page',
+    })).toMatchObject({
+      uiLanguage: 'ja',
+      fullscreenPageLayout: 'spread',
+      fullscreenReadingDirection: 'rtl',
+      fullscreenSpreadPairing: 'first-page',
+    });
+
+    expect(normalizeWebConfig({
+      uiLanguage: 'fr',
+      fullscreenPageLayout: 'booklet',
+      fullscreenReadingDirection: 'vertical',
+      fullscreenSpreadPairing: 'alternating',
+    })).toMatchObject({
+      uiLanguage: 'zh-TW',
+      fullscreenPageLayout: 'single',
+      fullscreenReadingDirection: 'ltr',
+      fullscreenSpreadPairing: 'cover-single',
+    });
+  });
+
+  it('preserves Simplified Chinese as a supported interface language', () => {
+    expect(normalizeWebConfig({ uiLanguage: 'zh-CN' }).uiLanguage).toBe('zh-CN');
+  });
+
   it('fills defaults for empty, null, and malformed roots', () => {
     expect(normalizeWebConfig(null)).toEqual(DEFAULT_WEB_CONFIG);
     expect(normalizeWebConfig([])).toEqual(DEFAULT_WEB_CONFIG);

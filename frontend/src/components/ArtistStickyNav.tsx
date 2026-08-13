@@ -11,6 +11,7 @@ import {
   type FloatingCustomProperties,
 } from '../utils/useAnchoredPopover';
 import { Button, IconButton } from './ui/Button';
+import { useI18n } from '../i18n';
 
 interface GallerySortOption {
   value: SortMode;
@@ -47,7 +48,7 @@ const removeMemberSuffix = (name: string, memberId: number) => {
   return name.replace(suffixPattern, '').trim();
 };
 
-const getArtistDisplayName = (artist: Artist) => {
+const getArtistDisplayName = (artist: Artist, fallbackName: string) => {
   const sourceName = artist.name?.trim() || '';
   const cleanedName = removeMemberSuffix(sourceName, artist.member_id)
     .replace(/^(?:Discord\s+)?FANBOX\s+Archive\s+/i, '')
@@ -55,7 +56,7 @@ const getArtistDisplayName = (artist: Artist) => {
     .replace(/\s*(?:\(|\[)?\d{3,}(?:\)|\])?\s*$/, '')
     .trim();
 
-  return cleanedName || `繪師 ${artist.member_id}`;
+  return cleanedName || fallbackName;
 };
 
 export const ArtistStickyNav: React.FC<ArtistStickyNavProps> = ({
@@ -76,6 +77,7 @@ export const ArtistStickyNav: React.FC<ArtistStickyNavProps> = ({
   onPageChange,
   boundaryRef,
 }) => {
+  const { t } = useI18n();
   const artistFolderKey = artist ? getArtistScopeKey(artist) : null;
   const [artistSources, setArtistSources] = useState<Awaited<ReturnType<typeof fetchArtistSourceLinks>>>(null);
   const [isOptionsOpen, setIsOptionsOpen] = useState(false);
@@ -95,16 +97,19 @@ export const ArtistStickyNav: React.FC<ArtistStickyNavProps> = ({
     let cancelled = false;
     setArtistSources(null);
 
-    if (!artist || artist.member_id <= 0 || artist.identity_status !== 'verified') return undefined;
+    if (!artist) return undefined;
 
-    fetchArtistSourceLinks(artistFolderKey || artist.member_id).then(sources => {
+    const requestKey = artistFolderKey || (artist.member_id > 0 ? artist.member_id : null);
+    if (!requestKey) return undefined;
+
+    fetchArtistSourceLinks(requestKey).then(sources => {
       if (!cancelled) setArtistSources(sources);
     });
 
     return () => {
       cancelled = true;
     };
-  }, [artist?.identity_status, artist?.member_id, artistFolderKey]);
+  }, [artist?.fanbox_id, artist?.identity_status, artist?.member_id, artistFolderKey]);
 
   useEffect(() => {
     setIsOptionsOpen(false);
@@ -151,14 +156,15 @@ export const ArtistStickyNav: React.FC<ArtistStickyNavProps> = ({
     };
   }, [isOptionsOpen]);
 
-  const hasArtist = Boolean(artist && artist.member_id > 0);
-  const displayName = artist && artist.member_id > 0
-    ? getArtistDisplayName(artist)
-    : '全部繪師';
-  const verifiedMemberId = artistSources?.verified_member_id;
-  const pixivUrl = artistSources?.pixiv?.url
-    ?? (verifiedMemberId ? `https://www.pixiv.net/users/${verifiedMemberId}` : null);
-  const fanboxUrl = artistSources?.fanbox?.url ?? null;
+  const hasArtist = Boolean(artist);
+  const memberId = artist?.member_id && artist.member_id > 0 ? artist.member_id : null;
+  const verifiedMemberId = artistSources?.verified_member_id ?? undefined;
+  const displayName = artist
+    ? getArtistDisplayName(artist, memberId ? t('common.artistId', { id: memberId }) : (artist.name || artist.display_name || artist.folder_name || ''))
+    : t('common.allArtists');
+  const isRejected = artist?.identity_status === 'rejected';
+  const pixivUrl = !isRejected ? (artistSources?.pixiv?.url ?? null) : null;
+  const fanboxUrl = !isRejected ? (artistSources?.fanbox?.url ?? null) : null;
   const hasSortOptions = Boolean(sortMode && sortOptions?.length && onSortModeChange);
   const hasPageSizeOptions = Boolean(itemsPerPage !== undefined && itemsPerPageOptions?.length && onItemsPerPageChange);
   const hasOptions = Boolean(onRequestUpdate || onOpenSettings || onToggleEditMode || onClearArtist || hasSortOptions || hasPageSizeOptions);
@@ -177,11 +183,11 @@ export const ArtistStickyNav: React.FC<ArtistStickyNavProps> = ({
   };
 
   return (
-    <nav className="artist-sticky-nav" aria-label="目前繪師">
+    <nav className="artist-sticky-nav" aria-label={t('common.currentArtist', { name: displayName })}>
       <div
         className="artist-sticky-nav__current"
         role="group"
-        aria-label={`目前繪師：${displayName}`}
+        aria-label={t('common.currentArtist', { name: displayName })}
       >
         {hasArtist && pixivUrl ? (
           <a
@@ -191,14 +197,14 @@ export const ArtistStickyNav: React.FC<ArtistStickyNavProps> = ({
             className="ui-button artist-sticky-nav__artist-link"
             data-variant="secondary"
             data-size="md"
-            aria-label={`在 Pixiv 開啟 ${displayName} @${verifiedMemberId}`}
-            title={`在 Pixiv 開啟 ${displayName}`}
+            aria-label={t('common.openPixivArtist', { name: displayName, id: verifiedMemberId ?? '' })}
+            title={t('common.openPixivArtistTitle', { name: displayName })}
           >
             <span className="artist-sticky-nav__name">{displayName}</span>
-            <span className="artist-sticky-nav__id">@{verifiedMemberId}</span>
+            {verifiedMemberId && <span className="artist-sticky-nav__id">@{verifiedMemberId}</span>}
           </a>
         ) : (
-          <span className="artist-sticky-nav__artist-link is-static" aria-label={`目前繪師：${displayName}`}>
+          <span className="artist-sticky-nav__artist-link is-static" aria-label={t('common.currentArtist', { name: displayName })}>
             <span className="artist-sticky-nav__name">{displayName}</span>
             {verifiedMemberId && <span className="artist-sticky-nav__id">@{verifiedMemberId}</span>}
           </span>
@@ -211,8 +217,8 @@ export const ArtistStickyNav: React.FC<ArtistStickyNavProps> = ({
             className="ui-button artist-sticky-nav__platform-link"
             data-variant="secondary"
             data-size="md"
-            aria-label={`在 FANBOX 開啟 ${displayName}`}
-            title={`在 FANBOX 開啟 ${displayName}`}
+            aria-label={t('common.openFanboxArtist', { name: displayName })}
+            title={t('common.openFanboxArtist', { name: displayName })}
           >
             <span>FANBOX</span>
             <ExternalLink aria-hidden="true" />
@@ -221,7 +227,7 @@ export const ArtistStickyNav: React.FC<ArtistStickyNavProps> = ({
         {hasArtist && (isLoading || isUpdating) && (
           <span className="artist-sticky-nav__status" role="status" aria-live="polite">
             <RefreshCw className={`h-3.5 w-3.5 ${isUpdating ? 'is-active' : ''}`} aria-hidden="true" />
-            {isUpdating ? '背景更新中…' : '載入作品中…'}
+            {isUpdating ? t('common.backgroundUpdating') : t('common.loadingWorks')}
           </span>
         )}
         {hasOptions && (
@@ -233,14 +239,14 @@ export const ArtistStickyNav: React.FC<ArtistStickyNavProps> = ({
               size="md"
               className="artist-sticky-nav__options-trigger"
               onClick={() => setIsOptionsOpen(open => !open)}
-              aria-label={hasArtist ? `開啟 ${displayName} 更多操作` : '開啟更多選項'}
+              aria-label={hasArtist ? t('common.openArtistMoreOptions', { name: displayName }) : t('common.openMoreOptions')}
               aria-haspopup="menu"
               aria-expanded={isOptionsOpen}
               aria-controls="artist-sticky-nav-options-menu"
-              title="開啟更多選項"
+              title={t('common.openMoreOptions')}
             >
               <MoreHorizontal className="h-5 w-5" aria-hidden="true" />
-              <span className="sr-only">開啟更多選項</span>
+              <span className="sr-only">{t('common.openMoreOptions')}</span>
             </IconButton>
             {isOptionsOpen && typeof document !== 'undefined' && createPortal(
               <div
@@ -252,7 +258,7 @@ export const ArtistStickyNav: React.FC<ArtistStickyNavProps> = ({
               >
                 {hasArtistActions && (
                   <div className="artist-sticky-nav__options-group" role="group" aria-labelledby="artist-sticky-nav-artist-group-label">
-                    <p id="artist-sticky-nav-artist-group-label" className="artist-sticky-nav__options-heading">繪師</p>
+                    <p id="artist-sticky-nav-artist-group-label" className="artist-sticky-nav__options-heading">{t('common.artist')}</p>
                     {hasArtist && onRequestUpdate && (
                       <Button
                         type="button"
@@ -268,7 +274,7 @@ export const ArtistStickyNav: React.FC<ArtistStickyNavProps> = ({
                         disabled={isUpdating}
                       >
                         <RefreshCw className={`h-4 w-4 ${isUpdating ? 'is-active' : ''}`} aria-hidden="true" />
-                        <span className="artist-sticky-nav__options-item-label">{isUpdating ? '更新中…' : '更新作品資料'}</span>
+                        <span className="artist-sticky-nav__options-item-label">{isUpdating ? t('common.updating') : t('common.updateWorks')}</span>
                       </Button>
                     )}
                     {hasArtist && onOpenSettings && (
@@ -285,7 +291,7 @@ export const ArtistStickyNav: React.FC<ArtistStickyNavProps> = ({
                         }}
                       >
                         <Settings2 className="h-4 w-4" aria-hidden="true" />
-                        <span className="artist-sticky-nav__options-item-label">繪師設定</span>
+                        <span className="artist-sticky-nav__options-item-label">{t('common.artistSettings')}</span>
                       </Button>
                     )}
                   </div>
@@ -295,10 +301,10 @@ export const ArtistStickyNav: React.FC<ArtistStickyNavProps> = ({
                 )}
                 {hasViewOptions && (
                   <div className="artist-sticky-nav__options-group artist-sticky-nav__options-group--view" role="group" aria-labelledby="artist-sticky-nav-view-group-label">
-                    <p id="artist-sticky-nav-view-group-label" className="artist-sticky-nav__options-heading">瀏覽</p>
+                    <p id="artist-sticky-nav-view-group-label" className="artist-sticky-nav__options-heading">{t('common.browsing')}</p>
                     {hasSortOptions && (
                       <>
-                        <p className="artist-sticky-nav__options-subheading">排序方式</p>
+                        <p className="artist-sticky-nav__options-subheading">{t('common.sortOptions')}</p>
                         {sortOptions?.map(option => (
                           <Button
                             key={option.value}
@@ -324,7 +330,7 @@ export const ArtistStickyNav: React.FC<ArtistStickyNavProps> = ({
                     )}
                     {hasPageSizeOptions && (
                       <>
-                        <p className="artist-sticky-nav__options-subheading">每頁顯示</p>
+                        <p className="artist-sticky-nav__options-subheading">{t('common.itemsPerPage')}</p>
                         {itemsPerPageOptions?.map(option => (
                           <Button
                             key={option.value}
@@ -355,7 +361,7 @@ export const ArtistStickyNav: React.FC<ArtistStickyNavProps> = ({
                 )}
                 {hasTailActions && (
                   <div className="artist-sticky-nav__options-group artist-sticky-nav__options-group--actions" role="group" aria-labelledby="artist-sticky-nav-actions-group-label">
-                    <p id="artist-sticky-nav-actions-group-label" className="artist-sticky-nav__options-heading">操作</p>
+                    <p id="artist-sticky-nav-actions-group-label" className="artist-sticky-nav__options-heading">{t('common.actions')}</p>
                     {onToggleEditMode && (
                       <Button
                         type="button"
@@ -371,7 +377,7 @@ export const ArtistStickyNav: React.FC<ArtistStickyNavProps> = ({
                         }}
                       >
                         <Pencil className="h-4 w-4" aria-hidden="true" />
-                        <span className="artist-sticky-nav__options-item-label">{isEditMode ? '結束編輯模式' : '編輯'}</span>
+                        <span className="artist-sticky-nav__options-item-label">{t(isEditMode ? 'common.endEditMode' : 'common.editMode')}</span>
                       </Button>
                     )}
                     {hasArtist && onClearArtist && (
@@ -388,7 +394,7 @@ export const ArtistStickyNav: React.FC<ArtistStickyNavProps> = ({
                         }}
                       >
                         <FilterX className="h-4 w-4" aria-hidden="true" />
-                        <span className="artist-sticky-nav__options-item-label">清除繪師篩選</span>
+                        <span className="artist-sticky-nav__options-item-label">{t('common.clearArtistFilter')}</span>
                       </Button>
                     )}
                   </div>

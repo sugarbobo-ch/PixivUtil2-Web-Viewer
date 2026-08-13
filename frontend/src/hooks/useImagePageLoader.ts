@@ -16,6 +16,7 @@ interface ImagePageRequest {
 }
 
 interface UseImagePageLoaderOptions {
+  enabled?: boolean;
   selectedMonths: string[];
   selectedArtist: string | null;
   searchQuery: string;
@@ -31,6 +32,7 @@ const createAbortError = () => {
 };
 
 export const useImagePageLoader = ({
+  enabled = true,
   selectedMonths,
   selectedArtist,
   searchQuery,
@@ -61,7 +63,13 @@ export const useImagePageLoader = ({
     const params = new URLSearchParams();
     const normalizedSelectedMonths = normalizeSelectedMonths(selectedMonths);
     if (normalizedSelectedMonths.length > 0) params.append('month', normalizedSelectedMonths.join(','));
-    if (selectedArtist !== null) params.append('artist_id', selectedArtist);
+    if (selectedArtist !== null) {
+      if (selectedArtist.startsWith('folder:')) {
+        params.append('folder_id', selectedArtist.slice(7));
+      } else {
+        params.append('artist_id', selectedArtist);
+      }
+    }
     if (searchQuery) params.append('search', searchQuery);
     params.append('sort_mode', sortMode);
     params.append('limit', itemsPerPage.toString());
@@ -116,6 +124,7 @@ export const useImagePageLoader = ({
   }, []);
 
   const fetchImages = useCallback(() => {
+    if (!enabled) return;
     const requestId = ++imageRequestIdRef.current;
     const params = buildImageRequestParams(currentPage);
     const cacheKey = params.toString();
@@ -149,13 +158,13 @@ export const useImagePageLoader = ({
       .finally(() => {
         if (requestId === imageRequestIdRef.current && isMountedRef.current) setIsLoadingImages(false);
       });
-  }, [buildImageRequestParams, currentPage, loadImagePage]);
+  }, [buildImageRequestParams, currentPage, enabled, loadImagePage]);
 
   const clearCache = useCallback(() => {
     requestGenerationRef.current += 1;
     imagePageCacheRef.current.clear();
     abortAllPageRequests();
-  }, [abortAllPageRequests]);
+  }, [abortAllPageRequests, enabled]);
 
   const hasCachedPage = useCallback((params: URLSearchParams) => (
     imagePageCacheRef.current.has(params.toString())

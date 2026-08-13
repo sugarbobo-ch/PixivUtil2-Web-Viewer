@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Artist, LibraryJob, MonthItem, ImageItem, SortMode, ViewMode, ViewerMode, ThemeMode, WorkGroup, WebConfig, VideoPreferencePatch, DEFAULT_WEB_CONFIG } from './types';
 import { ArrowUp } from 'lucide-react';
+import { useI18n, type I18nContextValue } from './i18n';
 import { groupImagesIntoWorkGroups } from './utils/grouping';
 import { buildThumbnailUrl, normalizeWebConfig } from './utils/webConfig';
 import { Header } from './components/Header';
@@ -9,15 +10,9 @@ import { MobileMenuDrawer } from './components/MobileMenuDrawer';
 import { Sidebar } from './components/Sidebar';
 import { GalleryGrid } from './components/GalleryGrid';
 import type { GalleryPageChangeOptions } from './components/GalleryGrid';
-import { FullscreenViewer } from './components/FullscreenViewer';
-import { WebtoonFeed } from './components/WebtoonFeed';
 import { BatchEditToolbar } from './components/BatchEditToolbar';
 import { ConfirmModal } from './components/ConfirmModal';
-import { SettingsModal } from './components/SettingsModal';
 import { FirstUseOnboarding } from './components/FirstUseOnboarding';
-import { ArtistSettingsModal } from './components/ArtistSettingsModal';
-import { RecycleBinModal } from './components/RecycleBinModal';
-import { MangaGroupModal } from './components/MangaGroupModal';
 import { IconButton, Toast, ToastVariant } from './components/ui';
 import { MonthJumpItem, MonthJumpNavigationOptions, MonthNavigationPhase } from './components/MonthQuickNav';
 import {
@@ -29,11 +24,17 @@ import {
 } from './utils/galleryLayout';
 import { imageLoadScheduler, ImagePreloadHandle } from './utils/imageLoadScheduler';
 import { parseFilterUrl, syncFilterUrl } from './utils/filterWorkflow';
-import { resolveMonthTarget as resolveMonthTargetForItem, sortMonthIndexItems } from './utils/monthNavigation';
+import {
+  getCrossPageMonthApproachTop,
+  resolveMonthTarget as resolveMonthTargetForItem,
+  sortMonthIndexItems,
+} from './utils/monthNavigation';
 import { getMotionAwareScrollBehavior } from './utils/motion';
+import { createSmoothScrollRunner, type SmoothScrollRunner } from './utils/smoothScroll';
 import { useImagePageLoader } from './hooks/useImagePageLoader';
 import { isLibraryJobActive, useLibraryJobStore } from './hooks/useLibraryJobStore';
-import { useWebConfigLifecycle } from './hooks/useWebConfigLifecycle';
+import { usePreferencesController } from './hooks/usePreferencesController';
+import { useViewerNavigation } from './hooks/useViewerNavigation';
 import { useSelectionWorkflow } from './hooks/useSelectionWorkflow';
 import { apiClient } from './api/client';
 import { isScrollPerformanceProbeRequested, startScrollPerformanceProbe } from './utils/scrollPerformance';
@@ -42,6 +43,100 @@ import {
   clampSidebarWidth,
   getSidebarMaxWidth,
 } from './utils/sidebarLayout';
+import { createNavigationTransactionController, type NavigationTransaction } from './utils/navigationTransaction';
+import {
+  buildGlobalGalleryLayoutIndex,
+  createGlobalHeightIndex,
+  getGalleryLayoutMetrics,
+} from './media-window/globalLayoutIndex';
+import { createHttpMediaRangeAdapter } from './media-window/httpMediaRangeAdapter';
+import { useGlobalMediaWindow } from './media-window/useGlobalMediaWindow';
+import { useGlobalReaderRange } from './media-window/useGlobalReaderRange';
+import type { MediaQuery } from './media-window';
+
+const loadFullscreenViewer = () => import('./components/FullscreenViewer').then(module => ({
+  default: module.FullscreenViewer,
+}));
+const loadSpreadViewer = () => import('./components/SpreadViewer').then(module => ({
+  default: module.SpreadViewer,
+}));
+const loadWebtoonFeed = () => import('./components/WebtoonFeed').then(module => ({
+  default: module.WebtoonFeed,
+}));
+const loadSettingsModal = () => import('./components/SettingsModal').then(module => ({
+  default: module.SettingsModal,
+}));
+const loadArtistSettingsModal = () => import('./components/ArtistSettingsModal').then(module => ({
+  default: module.ArtistSettingsModal,
+}));
+const loadRecycleBinModal = () => import('./components/RecycleBinModal').then(module => ({
+  default: module.RecycleBinModal,
+}));
+const loadMangaGroupModal = () => import('./components/MangaGroupModal').then(module => ({
+  default: module.MangaGroupModal,
+}));
+
+const LazyFullscreenViewer = React.lazy(loadFullscreenViewer);
+const LazySpreadViewer = React.lazy(loadSpreadViewer);
+const LazyWebtoonFeed = React.lazy(loadWebtoonFeed);
+const LazySettingsModal = React.lazy(loadSettingsModal);
+const LazyArtistSettingsModal = React.lazy(loadArtistSettingsModal);
+const LazyRecycleBinModal = React.lazy(loadRecycleBinModal);
+const LazyMangaGroupModal = React.lazy(loadMangaGroupModal);
+
+// Keep the first month-jump response close to the visible window. The API
+// still returns the complete month index, but hydrating 64 media rows is
+// materially faster than waiting on a 200-row thumbnail batch before the
+// dominant-color surfaces can be painted.
+const GLOBAL_MEDIA_CHUNK_SIZE = 64;
+const GLOBAL_MEDIA_MAX_CHUNKS = 8;
+const GLOBAL_READER_WINDOW_SIZE = 160;
+// The page owner is an explicit rollback path for an older backend. It is
+// opt-in after the global range contract is available, so the normal runtime
+// never starts a second current-page request beside GlobalMediaWindow.
+const LEGACY_PAGINATION_ENABLED = import.meta.env.VITE_ENABLE_LEGACY_PAGINATION === 'true';
+
+class LazyModuleBoundary extends React.Component<
+  { children: React.ReactNode },
+  { hasError: boolean }
+> {
+  state = { hasError: false };
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidUpdate(previousProps: { children: React.ReactNode }) {
+    if (previousProps.children !== this.props.children && this.state.hasError) {
+      this.setState({ hasError: false });
+    }
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return <LazyModuleError />;
+    }
+    return this.props.children;
+  }
+}
+
+const LazyModuleError: React.FC = () => {
+  const { t } = useI18n();
+  return (
+    <div className="app-root__loading" role="alert">
+      {t('errors.moduleLoad')}
+    </div>
+  );
+};
+
+const LazyModuleFallback: React.FC = () => {
+  const { t } = useI18n();
+  return (
+    <div className="app-root__loading" role="status" aria-live="polite">
+      {t('common.processing')}
+    </div>
+  );
+};
 
 const getDynamicThumbnailPrefetchCount = (thumbnailSize: number) => {
   if (typeof window === 'undefined') return 1;
@@ -59,51 +154,51 @@ const getDynamicThumbnailPrefetchCount = (thumbnailSize: number) => {
   return rows * columns;
 };
 
-const getLibraryUpdateAnnouncement = (job: LibraryJob) => {
+const getLibraryUpdateAnnouncement = (
+  job: LibraryJob,
+  t: I18nContextValue['t'],
+  formatNumber: I18nContextValue['formatNumber'],
+) => {
   const changes: string[] = [];
-  if (job.added > 0) changes.push(`新增 ${job.added} 張`);
-  if (job.updated > 0) changes.push(`更新 ${job.updated} 張`);
-  if ((job.removed ?? 0) > 0) changes.push(`清除 ${job.removed} 張遺失檔案`);
-  if (job.colors_created > 0) changes.push(`建立 ${job.colors_created} 筆圖片色彩資料`);
+  if (job.added > 0) changes.push(t('library.addedCount', { count: formatNumber(job.added) }));
+  if (job.updated > 0) changes.push(t('library.updatedCount', { count: formatNumber(job.updated) }));
+  if ((job.removed ?? 0) > 0) changes.push(t('library.removedCount', { count: formatNumber(job.removed ?? 0) }));
+  if (job.colors_created > 0) changes.push(t('library.colorsCreatedCount', { count: formatNumber(job.colors_created) }));
   return changes.length > 0
-    ? `圖片資料庫更新完成：${changes.join('、')}。`
-    : '圖片資料庫更新完成，沒有新增或遺失的圖片。';
+    ? t('library.updateSummary', { changes: changes.join(t('common.listSeparator')) })
+    : t('library.updateNoChanges');
 };
 
-const getLibraryJobAnnouncement = (job: LibraryJob) => {
+const getLibraryJobAnnouncement = (
+  job: LibraryJob,
+  t: I18nContextValue['t'],
+  formatNumber: I18nContextValue['formatNumber'],
+) => {
   if (job.status === 'completed') {
     return job.job_type === 'organize-thumbnail-cache'
-      ? `縮圖整理完成，移出 ${job.cache_moved} 個縮圖。`
-      : getLibraryUpdateAnnouncement(job);
+      ? t('library.thumbnailOrganized', { count: formatNumber(job.cache_moved) })
+      : getLibraryUpdateAnnouncement(job, t, formatNumber);
   }
-  if (job.status === 'cancelled') return '媒體資料庫工作已取消，已完成的資料仍會保留。';
-  if (job.status === 'interrupted') return '媒體資料庫工作已中斷，請從設定重新執行。';
-  return '媒體資料庫工作失敗，請從設定查看錯誤。';
+  if (job.status === 'cancelled') return t('library.jobCancelled');
+  if (job.status === 'interrupted') return t('library.jobInterrupted');
+  return t('library.jobFailed');
 };
 
-interface ViewAnchorRequest {
-  index: number;
-  requestId: number;
-}
-
 export const App: React.FC = () => {
-  const [theme, setTheme] = useState<ThemeMode>(DEFAULT_WEB_CONFIG.webTheme);
+  const { t, setLanguage, formatNumber } = useI18n();
   const initialIsMobileViewport = typeof window !== 'undefined' && window.innerWidth <= 640;
   const [isMobileViewport, setIsMobileViewport] = useState(initialIsMobileViewport);
   const isMobileViewportRef = useRef(initialIsMobileViewport);
   const preferredViewerModeRef = useRef<ViewerMode>(DEFAULT_WEB_CONFIG.defaultViewMode);
-  const [preferredViewerMode, setPreferredViewerMode] = useState<ViewerMode>(DEFAULT_WEB_CONFIG.defaultViewMode);
   // Entering or reloading the site always starts at the work list. The
   // persisted preferred browsing mode is applied only when opening a work.
-  const [viewMode, setViewMode] = useState<ViewMode>('grid');
   const [isSidebarOpen, setIsSidebarOpen] = useState(() => (
     typeof window === 'undefined' ? true : window.innerWidth > 640
   ));
-  const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_WEB_CONFIG.sidebarWidth);
+  const [sidebarWidthDraft, setSidebarWidthDraft] = useState<number | null>(null);
   const [viewportWidth, setViewportWidth] = useState(() => (
     typeof window === 'undefined' ? 1024 : window.innerWidth
   ));
-  const sidebarWidthSaveQueueRef = useRef<Promise<unknown>>(Promise.resolve());
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isEditMode, setIsEditMode] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -111,23 +206,8 @@ export const App: React.FC = () => {
   const [isRecycleBinOpen, setIsRecycleBinOpen] = useState(false);
   const [isArtistUpdateNoticeOpen, setIsArtistUpdateNoticeOpen] = useState(false);
 
-  // Group Mode & Manga Modal States
-  const [groupMangaPosts, setGroupMangaPosts] = useState(DEFAULT_WEB_CONFIG.groupMangaPosts);
-  const [preloadImageCount, setPreloadImageCount] = useState(DEFAULT_WEB_CONFIG.preloadImageCount);
-  const [fullscreenToolbarSimpleMode, setFullscreenToolbarSimpleMode] = useState(DEFAULT_WEB_CONFIG.fullscreenToolbarSimpleMode);
-  const [fullscreenShowToolbar, setFullscreenShowToolbar] = useState(DEFAULT_WEB_CONFIG.fullscreenShowToolbar);
-  const [fullscreenShowThumbnails, setFullscreenShowThumbnails] = useState(DEFAULT_WEB_CONFIG.fullscreenShowThumbnails);
-  const [thumbnailSize, setThumbnailSize] = useState(DEFAULT_WEB_CONFIG.thumbnailSize);
-  const [webtoonImageScale, setWebtoonImageScale] = useState(DEFAULT_WEB_CONFIG.webtoonImageScale);
-  const [webtoonImageGap, setWebtoonImageGap] = useState(DEFAULT_WEB_CONFIG.webtoonImageGap);
-  const [webtoonShowInfo, setWebtoonShowInfo] = useState(DEFAULT_WEB_CONFIG.webtoonShowInfo);
-  const [webtoonShowPageNumber, setWebtoonShowPageNumber] = useState(DEFAULT_WEB_CONFIG.webtoonShowPageNumber);
-  const [webtoonShowThumbnails, setWebtoonShowThumbnails] = useState(DEFAULT_WEB_CONFIG.webtoonShowThumbnails);
   const [activeWorkGroup, setActiveWorkGroup] = useState<WorkGroup | null>(null);
   const [isMangaModalOpen, setIsMangaModalOpen] = useState(false);
-  const [blurEnabled, setBlurEnabled] = useState(DEFAULT_WEB_CONFIG.blurEnabled);
-  const [demoMode, setDemoMode] = useState(DEFAULT_WEB_CONFIG.demoMode);
-  const [webConfigSnapshot, setWebConfigSnapshot] = useState<WebConfig>(DEFAULT_WEB_CONFIG);
   const [libraryAnnouncement, setLibraryAnnouncement] = useState('');
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [toastVariant, setToastVariant] = useState<ToastVariant>('info');
@@ -136,6 +216,41 @@ export const App: React.FC = () => {
     setToastMessage(message);
     setToastVariant(variant);
   }, []);
+
+  const handleWebConfigError = useCallback((error: unknown) => {
+    console.error('Failed to fetch or save web-config:', error);
+  }, []);
+  const {
+    config: webConfig,
+    patchConfig: persistWebConfigPatch,
+    replaceConfig,
+    loadConfig: loadWebConfig,
+    isReady: isWebConfigReady,
+  } = usePreferencesController({ onError: handleWebConfigError });
+  const theme = webConfig.webTheme;
+  const preferredViewerMode = webConfig.defaultViewMode;
+  const sidebarWidth = sidebarWidthDraft ?? webConfig.sidebarWidth;
+  const groupMangaPosts = webConfig.groupMangaPosts;
+  const preloadImageCount = webConfig.preloadImageCount;
+  const fullscreenToolbarSimpleMode = webConfig.fullscreenToolbarSimpleMode;
+  const fullscreenShowToolbar = webConfig.fullscreenShowToolbar;
+  const fullscreenShowThumbnails = webConfig.fullscreenShowThumbnails;
+  const thumbnailSize = webConfig.thumbnailSize;
+  const webtoonImageScale = webConfig.webtoonImageScale;
+  const webtoonImageGap = webConfig.webtoonImageGap;
+  const webtoonShowInfo = webConfig.webtoonShowInfo;
+  const webtoonShowPageNumber = webConfig.webtoonShowPageNumber;
+  const webtoonShowThumbnails = webConfig.webtoonShowThumbnails;
+  const blurEnabled = webConfig.blurEnabled;
+  const demoMode = webConfig.demoMode;
+  const itemsPerPage = webConfig.itemsPerPage;
+  const maxSidebarWidth = getSidebarMaxWidth(viewportWidth);
+  const effectiveSidebarWidth = clampSidebarWidth(sidebarWidth, maxSidebarWidth);
+
+  useEffect(() => {
+    preferredViewerModeRef.current = preferredViewerMode;
+    setLanguage(webConfig.uiLanguage);
+  }, [preferredViewerMode, setLanguage, webConfig.uiLanguage]);
 
   useEffect(() => {
     const mediaQuery = window.matchMedia('(max-width: 640px)');
@@ -178,7 +293,6 @@ export const App: React.FC = () => {
 
   // Pagination & Sort States
   const [currentPage, setCurrentPage] = useState(1);
-  const [itemsPerPage, setItemsPerPage] = useState(DEFAULT_WEB_CONFIG.itemsPerPage);
   const [sortMode, setSortMode] = useState<SortMode>('newest_month');
   const {
     images,
@@ -194,6 +308,7 @@ export const App: React.FC = () => {
     cancelSpeculativePageRequests: cancelImagePageRequests,
     supersedeNavigationPageRequests,
   } = useImagePageLoader({
+    enabled: LEGACY_PAGINATION_ENABLED,
     selectedMonths,
     selectedArtist,
     searchQuery,
@@ -201,6 +316,121 @@ export const App: React.FC = () => {
     itemsPerPage,
     currentPage,
   });
+
+  const globalMediaAdapter = useMemo(() => createHttpMediaRangeAdapter(), []);
+  const globalMediaQuery = useMemo<MediaQuery>(() => ({
+    selectedMonths,
+    selectedArtist,
+    searchQuery,
+    sortMode,
+    grouping: groupMangaPosts ? 'grouped' : 'ungrouped',
+  }), [groupMangaPosts, searchQuery, selectedArtist, selectedMonths, sortMode]);
+  const {
+    controller: globalMediaWindow,
+    snapshot: globalMediaSnapshot,
+    prefetch: prefetchGlobalMediaQuery,
+  } = useGlobalMediaWindow({
+    adapter: globalMediaAdapter,
+    query: globalMediaQuery,
+    chunkSize: GLOBAL_MEDIA_CHUNK_SIZE,
+    maxChunks: GLOBAL_MEDIA_MAX_CHUNKS,
+  });
+  const globalLayout = useMemo(() => {
+    if (!globalMediaSnapshot.revision || globalMediaSnapshot.months.length === 0) return null;
+    return buildGlobalGalleryLayoutIndex(
+      globalMediaSnapshot.months,
+      getGalleryLayoutMetrics(
+        viewportWidth,
+        isSidebarOpen && !isMobileViewport ? effectiveSidebarWidth : 0,
+      ),
+    );
+  }, [effectiveSidebarWidth, globalMediaSnapshot.months, globalMediaSnapshot.revision, isMobileViewport, isSidebarOpen, viewportWidth]);
+  const isGlobalMediaMode = globalLayout !== null;
+  const isGlobalMediaLoading = !LEGACY_PAGINATION_ENABLED && !globalMediaSnapshot.revision;
+  const navigationImageCount = globalMediaSnapshot.revision
+    ? globalMediaSnapshot.total
+    : totalImages;
+
+  const refreshMediaData = useCallback(() => {
+    if (LEGACY_PAGINATION_ENABLED) {
+      fetchImages();
+      return Promise.resolve();
+    }
+
+    globalMediaWindow.reset(globalMediaQuery);
+    return globalMediaWindow.ensure(
+      { start: 0, end: GLOBAL_MEDIA_CHUNK_SIZE },
+      'viewport',
+    );
+  }, [fetchImages, globalMediaQuery, globalMediaWindow]);
+
+  const navigationIndexGetterRef = useRef<() => number | null>(() => null);
+  const navigationCancelRef = useRef<() => void>(() => undefined);
+  const exitEditModeRef = useRef<() => void>(() => undefined);
+  const {
+    viewMode,
+    fullscreenIndex,
+    setFullscreenIndex,
+    gridRestoreAnchor,
+    webtoonStartAnchor,
+    requestWebtoonStart,
+    openImage: openViewerImage,
+    changeMode: changeViewerMode,
+    returnToGrid: returnViewerToGrid,
+    closeFullscreen: closeViewerFullscreen,
+  } = useViewerNavigation({
+    imageCount: navigationImageCount,
+    preferredMode: preferredViewerMode,
+    isMobileViewport,
+    getCurrentIndex: () => navigationIndexGetterRef.current(),
+    onExitEditMode: () => exitEditModeRef.current(),
+    onCancelNavigation: () => navigationCancelRef.current(),
+  });
+
+  const [globalWebtoonIndex, setGlobalWebtoonIndex] = useState<number | null>(null);
+  const [globalWebtoonRequestId, setGlobalWebtoonRequestId] = useState(0);
+  const globalReaderRange = useGlobalReaderRange({
+    controller: globalMediaWindow,
+    index: fullscreenIndex,
+    active: isGlobalMediaMode && fullscreenIndex !== null,
+    maxItems: GLOBAL_READER_WINDOW_SIZE,
+  });
+  const globalWebtoonRange = useGlobalReaderRange({
+    controller: globalMediaWindow,
+    index: globalWebtoonIndex,
+    active: isGlobalMediaMode && viewMode === 'webtoon' && globalWebtoonIndex !== null,
+    maxItems: GLOBAL_READER_WINDOW_SIZE,
+  });
+  const globalWebtoonEstimatedHeight = useMemo(() => {
+    const contentWidth = Math.max(
+      320,
+      viewportWidth - (isSidebarOpen && !isMobileViewport ? effectiveSidebarWidth : 0) - 48,
+    );
+    const mediaWidth = Math.min(960, Math.max(320, contentWidth * webtoonImageScale / 100));
+    return Math.max(180, Math.round(mediaWidth / (4 / 5) + (webtoonShowInfo ? 64 : 0) + 16));
+  }, [effectiveSidebarWidth, isMobileViewport, isSidebarOpen, viewportWidth, webtoonImageScale, webtoonShowInfo]);
+  const globalWebtoonHeightIndex = useMemo(
+    () => createGlobalHeightIndex(
+      globalMediaSnapshot.total,
+      globalWebtoonEstimatedHeight,
+    ),
+    [globalMediaSnapshot.total, globalWebtoonEstimatedHeight],
+  );
+
+  useEffect(() => {
+    if (!isGlobalMediaMode || viewMode !== 'webtoon') {
+      setGlobalWebtoonIndex(null);
+      return;
+    }
+    const anchor = webtoonStartAnchor?.index;
+    if (anchor !== undefined && anchor !== null && (webtoonStartAnchor?.requestId ?? 0) > 0) {
+      setGlobalWebtoonIndex(anchor);
+      setGlobalWebtoonRequestId(requestId => requestId === webtoonStartAnchor?.requestId ? requestId : webtoonStartAnchor?.requestId ?? requestId);
+    } else if (globalWebtoonIndex === null && globalMediaSnapshot.total > 0) {
+      setGlobalWebtoonIndex(0);
+      setGlobalWebtoonRequestId(requestId => requestId === 0 ? 1 : requestId);
+    }
+  }, [globalMediaSnapshot.total, globalWebtoonIndex, isGlobalMediaMode, viewMode, webtoonStartAnchor]);
 
   const applyArtistList = useCallback((data: unknown) => {
     const nextArtists = Array.isArray(data) ? data as Artist[] : [];
@@ -214,7 +444,7 @@ export const App: React.FC = () => {
 
       if (/^\d+$/.test(current)) {
         const memberMatches = nextArtists.filter(artist => String(artist.member_id) === current);
-        if (memberMatches.length === 1) return getArtistScopeKey(memberMatches[0]);
+        if (memberMatches.length >= 1) return getArtistScopeKey(memberMatches[0]);
       }
       return null;
     });
@@ -235,33 +465,39 @@ export const App: React.FC = () => {
   }, [applyArtistList]);
 
   // Selection & Modal States
-  const [fullscreenIndex, setFullscreenIndex] = useState<number | null>(null);
   const [showScrollTop, setShowScrollTop] = useState(false);
   const [isGridAtBottom, setIsGridAtBottom] = useState(false);
   const [gridScrollTopBottom, setGridScrollTopBottom] = useState<number | null>(null);
   const [gridScrollTopInlineEnd, setGridScrollTopInlineEnd] = useState<number | null>(null);
   const [isWebtoonHeaderHidden, setIsWebtoonHeaderHidden] = useState(false);
   const [isWebtoonToolbarOpen, setIsWebtoonToolbarOpen] = useState(false);
-  const [gridRestoreAnchor, setGridRestoreAnchor] = useState<ViewAnchorRequest | null>(null);
-  const [webtoonStartAnchor, setWebtoonStartAnchor] = useState<ViewAnchorRequest | null>(null);
   const mainScrollRef = useRef<HTMLElement | null>(null);
-  const gridRestoreRequestIdRef = useRef(0);
-  const webtoonStartRequestIdRef = useRef(0);
   const previousMainScrollTopRef = useRef(0);
   const webtoonUserScrollIntentRef = useRef(false);
   const thumbnailPreloadRequestsRef = useRef(new Map<string, ImagePreloadHandle>());
-  const blurSaveRequestRef = useRef(0);
-  const groupSaveRequestRef = useRef(0);
-  const fullscreenToolbarModeSaveRequestRef = useRef(0);
-  const fullscreenShowToolbarSaveRequestRef = useRef(0);
-  const fullscreenShowThumbnailsSaveRequestRef = useRef(0);
-  const fullscreenCheckerboardSaveRequestRef = useRef(0);
-  const fullscreenZoomModeSaveRequestRef = useRef(0);
   const [pendingMonthKey, setPendingMonthKey] = useState<string | null>(null);
   const pendingMonthScrollBehaviorRef = useRef<ScrollBehavior>('smooth');
   const [navigationMode, setNavigationMode] = useState<'idle' | 'click-scrolling' | 'scrubbing-preview' | 'scrubbing-settle' | 'scrubbing-commit'>('idle');
   const [destinationMonthKey, setDestinationMonthKey] = useState<string | null>(null);
   const [destinationGlobalIndex, setDestinationGlobalIndex] = useState<number | null>(null);
+  const globalNavigationTransactionRef = useRef(createNavigationTransactionController());
+  const globalNavigationActiveRef = useRef<NavigationTransaction | null>(null);
+  const globalNavigationTargetRef = useRef<number | null>(null);
+  const globalNavigationPinReleaseRef = useRef<(() => void) | null>(null);
+  const globalScrubContainerRef = useRef<HTMLElement | null>(null);
+  const globalScrubScrollRunnerRef = useRef<SmoothScrollRunner | null>(null);
+  if (globalScrubScrollRunnerRef.current === null) {
+    globalScrubScrollRunnerRef.current = createSmoothScrollRunner({
+      getScrollTop: () => globalScrubContainerRef.current?.scrollTop ?? 0,
+      setScrollTop: top => {
+        const container = globalScrubContainerRef.current;
+        if (container) container.scrollTop = top;
+      },
+      getViewportHeight: () => globalScrubContainerRef.current?.clientHeight ?? 1,
+    }, {
+      prefersReducedMotion: () => getMotionAwareScrollBehavior('smooth') === 'auto',
+    });
+  }
   const scrubSettleRef = useRef<{
     timer: number | null;
     cacheKey: string | null;
@@ -274,9 +510,13 @@ export const App: React.FC = () => {
 
   const selectionWorkflow = useSelectionWorkflow({
     images,
-    fullscreenImageId: fullscreenIndex === null ? null : images[fullscreenIndex]?.image_id ?? null,
+    fullscreenImageId: fullscreenIndex === null
+      ? null
+      : isGlobalMediaMode
+        ? globalMediaSnapshot.get(fullscreenIndex).item?.image_id ?? null
+        : images[fullscreenIndex]?.image_id ?? null,
     onFullscreenSelectionDeleted: () => setFullscreenIndex(null),
-    refreshImages: fetchImages,
+    refreshImages: refreshMediaData,
   });
   const {
     selectedIds,
@@ -301,7 +541,7 @@ export const App: React.FC = () => {
     if (libraryAnnouncementTimerRef.current !== null) {
       window.clearTimeout(libraryAnnouncementTimerRef.current);
     }
-    const announcement = getLibraryJobAnnouncement(job);
+    const announcement = getLibraryJobAnnouncement(job, t, formatNumber);
     setLibraryAnnouncement(announcement);
     const variant: ToastVariant = job.status === 'completed'
       ? 'success'
@@ -310,7 +550,7 @@ export const App: React.FC = () => {
       : 'error';
     showToast(announcement, variant);
     libraryAnnouncementTimerRef.current = window.setTimeout(() => setLibraryAnnouncement(''), 8000);
-  }, [showToast]);
+  }, [formatNumber, showToast, t]);
 
   const handleLibraryPollingError = useCallback((error: unknown) => {
     console.error('Failed to poll library job:', error);
@@ -324,59 +564,16 @@ export const App: React.FC = () => {
     onPollingError: handleLibraryPollingError,
   });
 
-  const applyWebConfig = useCallback((data: Partial<WebConfig>) => {
-    const config = normalizeWebConfig(data);
-    setWebConfigSnapshot(config);
-    preferredViewerModeRef.current = config.defaultViewMode;
-    setPreferredViewerMode(config.defaultViewMode);
-    setTheme(config.webTheme);
-    setThumbnailSize(config.thumbnailSize);
-    setItemsPerPage(config.itemsPerPage);
-    setSidebarWidth(config.sidebarWidth);
-    setGroupMangaPosts(config.groupMangaPosts);
-    setBlurEnabled(config.blurEnabled);
-    setDemoMode(config.demoMode);
-    setPreloadImageCount(config.preloadImageCount);
-    setFullscreenToolbarSimpleMode(config.fullscreenToolbarSimpleMode);
-    setFullscreenShowToolbar(config.fullscreenShowToolbar);
-    setFullscreenShowThumbnails(config.fullscreenShowThumbnails);
-    setWebtoonImageScale(config.webtoonImageScale);
-    setWebtoonImageGap(config.webtoonImageGap);
-    setWebtoonShowInfo(config.webtoonShowInfo);
-    setWebtoonShowPageNumber(config.webtoonShowPageNumber);
-    setWebtoonShowThumbnails(config.webtoonShowThumbnails);
-    setCurrentPage(1);
-  }, []);
-
-  const handleWebConfigError = useCallback((error: unknown) => {
-    console.error('Failed to fetch web-config:', error);
-  }, []);
-
-  const {
-    isReady: isWebConfigReady,
-    loadWebConfig,
-    persistWebConfigPatch,
-  } = useWebConfigLifecycle({
-    onConfigLoaded: applyWebConfig,
-    onError: handleWebConfigError,
-  });
-
-  const maxSidebarWidth = getSidebarMaxWidth(viewportWidth);
-  const effectiveSidebarWidth = clampSidebarWidth(sidebarWidth, maxSidebarWidth);
-
   const handleSidebarWidthChange = useCallback((nextWidth: number) => {
-    setSidebarWidth(clampSidebarWidth(nextWidth, maxSidebarWidth));
+    setSidebarWidthDraft(clampSidebarWidth(nextWidth, maxSidebarWidth));
   }, [maxSidebarWidth]);
 
   const handleSidebarWidthCommit = useCallback((nextWidth: number) => {
     const normalizedWidth = clampSidebarWidth(nextWidth, maxSidebarWidth);
-    setSidebarWidth(normalizedWidth);
-    sidebarWidthSaveQueueRef.current = sidebarWidthSaveQueueRef.current
-      .catch(() => undefined)
-      .then(() => persistWebConfigPatch({ sidebarWidth: normalizedWidth }))
-      .catch(error => {
-        console.error('Failed to save sidebarWidth setting:', error);
-      });
+    setSidebarWidthDraft(normalizedWidth);
+    void persistWebConfigPatch({ sidebarWidth: normalizedWidth })
+      .catch(error => console.error('Failed to save sidebarWidth setting:', error))
+      .finally(() => setSidebarWidthDraft(null));
   }, [maxSidebarWidth, persistWebConfigPatch]);
 
   const handleEditModeChange = useCallback((edit: boolean) => {
@@ -385,6 +582,8 @@ export const App: React.FC = () => {
     clearSelectionError();
     if (!nextEditMode) handleDeselectAll();
   }, [clearSelectionError, handleDeselectAll, viewMode]);
+
+  exitEditModeRef.current = () => handleEditModeChange(false);
 
   const handleToggleEditMode = useCallback(() => {
     setIsEditMode(current => {
@@ -396,8 +595,8 @@ export const App: React.FC = () => {
   }, [clearSelectionError, handleDeselectAll, viewMode]);
 
   const handleNavigateFullscreen = useCallback((index: number) => {
-    setFullscreenIndex(index);
-  }, []);
+    setFullscreenIndex(isGlobalMediaMode ? globalReaderRange.range.start + index : index);
+  }, [globalReaderRange.range.start, isGlobalMediaMode, setFullscreenIndex]);
 
   const updateGridScrollTopPosition = useCallback((scrollTarget: HTMLElement | null) => {
     const isGalleryScrollTarget = viewMode === 'grid'
@@ -568,24 +767,25 @@ export const App: React.FC = () => {
     return null;
   }, [fullscreenIndex, getFirstVisibleWebtoonIndex, getGalleryScrollContainer, viewMode]);
 
-  const normalizeViewAnchorIndex = useCallback((index: number | null) => {
-    if (images.length === 0 || index === null || !Number.isFinite(index)) return null;
-    return Math.max(0, Math.min(images.length - 1, Math.floor(index)));
-  }, [images.length]);
+  navigationIndexGetterRef.current = getCurrentViewAnchorIndex;
 
-  const requestGridRestore = useCallback((index: number | null) => {
-    const safeIndex = normalizeViewAnchorIndex(index);
-    if (safeIndex === null) return;
-    const requestId = ++gridRestoreRequestIdRef.current;
-    setGridRestoreAnchor({ index: safeIndex, requestId });
-  }, [normalizeViewAnchorIndex]);
+  const followGlobalScrubScroll = useCallback((container: HTMLElement, targetTop: number, mode: 'follow' | 'settle') => {
+    globalScrubContainerRef.current = container;
+    const runner = globalScrubScrollRunnerRef.current;
+    if (runner && !runner.isRunning()) {
+      // A pointer can begin while a previous click's native smooth scroll is
+      // still active. Reset that native animation before the rAF follower
+      // takes ownership of scrollTop.
+      container.scrollTo({ top: container.scrollTop, behavior: 'auto' });
+    }
+    runner?.setTarget(targetTop, mode);
+  }, []);
 
-  const requestWebtoonStart = useCallback((index: number | null) => {
-    const safeIndex = normalizeViewAnchorIndex(index);
-    if (safeIndex === null) return;
-    const requestId = ++webtoonStartRequestIdRef.current;
-    setWebtoonStartAnchor({ index: safeIndex, requestId });
-  }, [normalizeViewAnchorIndex]);
+  const stopGlobalScrubScroll = useCallback((snapToTarget = false) => {
+    const runner = globalScrubScrollRunnerRef.current;
+    runner?.stop({ snapToTarget: snapToTarget && runner.isRunning() });
+    globalScrubContainerRef.current = null;
+  }, []);
 
   const cancelMonthNavigation = useCallback(() => {
     const scrub = scrubSettleRef.current;
@@ -595,18 +795,30 @@ export const App: React.FC = () => {
     scrub.active = false;
     scrub.targetKey = null;
     scrub.targetPage = null;
+    if (globalNavigationActiveRef.current) {
+      globalNavigationTransactionRef.current.cancel(globalNavigationActiveRef.current);
+      globalNavigationActiveRef.current = null;
+    }
+    stopGlobalScrubScroll();
+    globalNavigationPinReleaseRef.current?.();
+    globalNavigationPinReleaseRef.current = null;
+    globalNavigationTargetRef.current = null;
     setPendingMonthKey(null);
     setDestinationMonthKey(null);
     setDestinationGlobalIndex(null);
     setNavigationMode('idle');
-  }, []);
+  }, [stopGlobalScrubScroll]);
+
+  navigationCancelRef.current = cancelMonthNavigation;
+
+  useEffect(() => () => {
+    stopGlobalScrubScroll();
+  }, [stopGlobalScrubScroll]);
 
   const handleCloseFullscreen = useCallback(() => {
-    requestGridRestore(fullscreenIndex);
-    setFullscreenIndex(null);
-    setViewMode('grid');
-    cancelMonthNavigation();
-  }, [cancelMonthNavigation, fullscreenIndex, requestGridRestore]);
+    closeViewerFullscreen();
+    setIsWebtoonToolbarOpen(false);
+  }, [closeViewerFullscreen]);
 
   const handleScrollToTop = () => {
     const scrollContainer = getGalleryScrollContainer();
@@ -671,23 +883,44 @@ export const App: React.FC = () => {
 
   useEffect(() => {
     if (!isWebConfigReady) return;
-    fetchImages();
-  }, [fetchImages, isWebConfigReady]);
+    void globalMediaWindow.ensure({ start: 0, end: GLOBAL_MEDIA_CHUNK_SIZE }, 'viewport').catch(error => {
+      if (!(error instanceof Error && error.name === 'AbortError')) {
+        console.error('Failed to load initial global media range:', error);
+      }
+    });
+  }, [globalMediaWindow, isWebConfigReady]);
+
+  const prefetchArtist = useCallback((artistKey: string | null) => {
+    if (LEGACY_PAGINATION_ENABLED || artistKey === selectedArtist) return;
+    void prefetchGlobalMediaQuery(
+      { ...globalMediaQuery, selectedArtist: artistKey },
+      { start: 0, end: GLOBAL_MEDIA_CHUNK_SIZE },
+      'scrub-preview',
+    ).catch(() => undefined);
+  }, [globalMediaQuery, prefetchGlobalMediaQuery, selectedArtist]);
 
   const monthIndexItems = useMemo<MonthJumpItem[]>(() => {
+    if (isGlobalMediaMode && globalLayout) {
+      return globalLayout.months.map(month => ({
+        key: month.key,
+        label: month.label,
+        count: month.imageCount,
+        offset: month.offset,
+      }));
+    }
     return sortMonthIndexItems(availableMonthIndexItems, sortMode);
-  }, [availableMonthIndexItems, sortMode]);
+  }, [availableMonthIndexItems, globalLayout, isGlobalMediaMode, sortMode]);
 
   useEffect(() => {
     const handleLibraryDataChanged = () => {
       clearImagePageCache();
       void refreshDirectoryMetadata().catch(err => console.error('Failed to refresh directory metadata:', err));
-      fetchImages();
+      void refreshMediaData().catch(err => console.error('Failed to refresh global media data:', err));
     };
 
     window.addEventListener('web-viewer-library-data-changed', handleLibraryDataChanged);
     return () => window.removeEventListener('web-viewer-library-data-changed', handleLibraryDataChanged);
-  }, [clearImagePageCache, fetchImages, refreshDirectoryMetadata]);
+  }, [clearImagePageCache, globalMediaWindow, refreshDirectoryMetadata, refreshMediaData]);
 
   useEffect(() => {
     const galleryInactive = fullscreenIndex !== null || viewMode !== 'grid';
@@ -791,6 +1024,13 @@ export const App: React.FC = () => {
   }, [resolveMonthTarget]);
 
   const prefetchMonthPage = useCallback((item: MonthJumpItem) => {
+    if (isGlobalMediaMode && globalMediaSnapshot.revision) {
+      const start = Math.max(0, item.offset ?? 0);
+      const range = { start, end: start + GLOBAL_MEDIA_CHUNK_SIZE };
+      void globalMediaWindow.ensure(range, 'scrub-preview').catch(() => undefined);
+      return;
+    }
+
     if (scrubSettleRef.current.timer !== null) {
       window.clearTimeout(scrubSettleRef.current.timer);
     }
@@ -828,29 +1068,135 @@ export const App: React.FC = () => {
           if (error instanceof DOMException && error.name === 'AbortError') return;
         });
     }, 100);
-  }, [applyScrubPreviewPage, buildImageRequestParams, cancelSpeculativePageRequests, currentPage, hasCachedPage, loadImagePage, navigationMode, preloadThumbnail, prefetchCurrentPageWindow, resolveMonthTarget, thumbnailSize]);
+  }, [applyScrubPreviewPage, buildImageRequestParams, cancelSpeculativePageRequests, currentPage, globalMediaSnapshot.revision, globalMediaWindow, hasCachedPage, isGlobalMediaMode, loadImagePage, navigationMode, preloadThumbnail, prefetchCurrentPageWindow, resolveMonthTarget, thumbnailSize]);
 
   const handleJumpToMonth = useCallback((item: MonthJumpItem, options: MonthJumpNavigationOptions = {}) => {
-    scrubSettleRef.current.active = false;
-    scrubSettleRef.current.targetKey = null;
-    scrubSettleRef.current.targetPage = null;
+    if (isGlobalMediaMode && globalLayout && globalMediaSnapshot.revision) {
+      const container = getGalleryScrollContainer();
+      const monthIndex = globalLayout.months.findIndex(month => month.key === item.key);
+      if (!container || monthIndex < 0) return;
+
+      const lowerMonth = globalLayout.months[monthIndex];
+      const fractionalIndex = options.fractionalIndex;
+      const clampedFractionalIndex = fractionalIndex === undefined
+        ? monthIndex
+        : Math.max(0, Math.min(globalLayout.months.length - 1, fractionalIndex));
+      const lowerIndex = Math.floor(clampedFractionalIndex);
+      const upperIndex = Math.min(globalLayout.months.length - 1, lowerIndex + 1);
+      const fraction = clampedFractionalIndex - lowerIndex;
+      const targetTop = globalLayout.months[lowerIndex].top
+        + (globalLayout.months[upperIndex].top - globalLayout.months[lowerIndex].top) * fraction;
+      const currentTop = Math.max(0, container.scrollTop);
+      const activeTransaction = globalNavigationActiveRef.current;
+      const transaction = activeTransaction && options.scrubbing
+        ? activeTransaction
+        : globalNavigationTransactionRef.current.begin({ currentTop, targetTop });
+      globalNavigationActiveRef.current = transaction;
+      globalNavigationTargetRef.current = targetTop;
+      const viewportRange = globalLayout.getViewportRange(targetTop, targetTop + Math.max(1, container.clientHeight), 0, groupMangaPosts);
+      const targetRange = {
+        start: Math.max(0, Math.min(item.offset ?? lowerMonth.offset, viewportRange.start)),
+        end: Math.max(viewportRange.end, (item.offset ?? lowerMonth.offset) + GLOBAL_MEDIA_CHUNK_SIZE),
+      };
+      globalNavigationPinReleaseRef.current?.();
+      globalNavigationPinReleaseRef.current = globalMediaWindow.pin('month-navigation', targetRange);
+      const request = globalMediaWindow.ensure(
+        targetRange,
+        options.previewOnly ? 'scrub-preview' : 'month-jump',
+      ).catch(() => undefined);
+      const commitJump = () => {
+        // Scrubbing is allowed to reverse direction. The transaction
+        // controller intentionally accepts only monotonic commits for async
+        // jumps, so live pointer targets use the latest position directly.
+        const nextTop = options.scrubbing
+          ? targetTop
+          : globalNavigationTransactionRef.current.commit(transaction, targetTop);
+        if (nextTop === null) return;
+        if (options.scrubbing) {
+          followGlobalScrubScroll(container, nextTop, options.previewOnly ? 'follow' : 'settle');
+        } else {
+          stopGlobalScrubScroll();
+          if (Math.abs(nextTop - container.scrollTop) > 0.5) {
+            container.scrollTo({
+              top: nextTop,
+              behavior: getMotionAwareScrollBehavior(options.behavior ?? 'smooth'),
+            });
+          }
+        }
+        setPendingMonthKey(null);
+        setDestinationMonthKey(item.key);
+        setDestinationGlobalIndex(item.offset ?? lowerMonth.offset);
+        setNavigationMode(options.scrubbing
+          ? options.previewOnly ? 'scrubbing-preview' : 'scrubbing-commit'
+          : 'click-scrolling');
+      };
+
+      // The layout index already provides the exact destination geometry.
+      // Start moving immediately and let the range request fill cards or
+      // dominant-color placeholders while the scroll is in progress.
+      void request;
+      commitJump();
+      return;
+    }
+
     const target = resolveMonthTarget(item);
+    const isScrubPreview = options.scrubbing === true && options.previewOnly === true;
+    scrubSettleRef.current.active = isScrubPreview;
+    scrubSettleRef.current.targetKey = isScrubPreview ? item.key : null;
+    scrubSettleRef.current.targetPage = isScrubPreview ? target.page : null;
     const preserveCacheKey = buildImageRequestParams(target.page).toString();
     supersedeNavigationPageRequests(preserveCacheKey);
     cancelSpeculativePageRequests(preserveCacheKey);
-    pendingMonthScrollBehaviorRef.current = options.behavior ?? 'smooth';
+    const behavior = getMotionAwareScrollBehavior(options.behavior ?? 'smooth');
+    pendingMonthScrollBehaviorRef.current = behavior;
     setPendingMonthKey(item.key);
     setDestinationMonthKey(item.key);
     setDestinationGlobalIndex(target.localIndex);
-    setNavigationMode(options.scrubbing ? 'scrubbing-commit' : 'click-scrolling');
+    setNavigationMode(isScrubPreview ? 'scrubbing-preview' : options.scrubbing ? 'scrubbing-commit' : 'click-scrolling');
 
     // The month ruler is navigation, not another filter. The API calculates
     // each month's first offset after applying the current artist/search/month
     // filters and sort mode, so changing page keeps those filters intact.
+    // Begin moving on the currently mounted page immediately. Without this
+    // approach scroll, a cold cross-page request leaves the viewport frozen
+    // until the destination page arrives, then starts the smooth animation.
+    const container = getGalleryScrollContainer();
+    if (container) {
+      const approachTop = getCrossPageMonthApproachTop({
+        currentPage,
+        targetPage: target.page,
+        scrollHeight: container.scrollHeight,
+        clientHeight: container.clientHeight,
+      });
+      if (approachTop !== null && Math.abs(container.scrollTop - approachTop) > 0.5) {
+        container.scrollTo({ top: approachTop, behavior });
+      }
+    }
     setCurrentPage(target.page);
-  }, [buildImageRequestParams, cancelSpeculativePageRequests, resolveMonthTarget, supersedeNavigationPageRequests]);
+  }, [buildImageRequestParams, cancelSpeculativePageRequests, currentPage, followGlobalScrubScroll, getGalleryScrollContainer, globalLayout, globalMediaSnapshot, globalMediaWindow, groupMangaPosts, isGlobalMediaMode, resolveMonthTarget, stopGlobalScrubScroll, supersedeNavigationPageRequests]);
 
   const handleMonthNavigationChange = useCallback((phase: MonthNavigationPhase, item?: MonthJumpItem) => {
+    if (isGlobalMediaMode) {
+      if (phase === 'scrub-start' && item) {
+        handleJumpToMonth(item, { behavior: 'auto', scrubbing: true, previewOnly: true });
+        return;
+      }
+      if (phase === 'commit' && item) {
+        handleJumpToMonth(item, { behavior: 'auto', scrubbing: true, previewOnly: false });
+        return;
+      }
+      if (phase === 'cancel' || phase === 'end') {
+        cancelMonthNavigation();
+        return;
+      }
+      if (phase === 'click-start' && item) {
+        setNavigationMode('click-scrolling');
+        setDestinationMonthKey(item.key);
+        setDestinationGlobalIndex(item.offset ?? null);
+      }
+      return;
+    }
+
     if (phase === 'click-start') {
       scrubSettleRef.current.active = false;
       scrubSettleRef.current.targetKey = null;
@@ -914,7 +1260,7 @@ export const App: React.FC = () => {
       setDestinationMonthKey(null);
       setDestinationGlobalIndex(null);
     }
-  }, [buildImageRequestParams, cancelSpeculativePageRequests, resolveMonthTarget, supersedeNavigationPageRequests]);
+  }, [buildImageRequestParams, cancelMonthNavigation, cancelSpeculativePageRequests, handleJumpToMonth, isGlobalMediaMode, resolveMonthTarget, supersedeNavigationPageRequests]);
 
   const loadSelectionPage = useCallback((page: number) => {
     const params = buildImageRequestParams(page);
@@ -980,7 +1326,10 @@ export const App: React.FC = () => {
   }, [currentPage, getGalleryScrollContainer, images, pendingMonthKey]);
 
   useEffect(() => {
-    if (navigationMode === 'idle' || pendingMonthKey) return undefined;
+    // A pointer can remain held while the preview target is stationary. Keep
+    // the smoother and its target pin alive until MonthQuickNav emits commit
+    // or cancel; a scroll-settle timer must not end a live drag by itself.
+    if (navigationMode === 'idle' || navigationMode === 'scrubbing-preview' || pendingMonthKey) return undefined;
     const container = mainScrollRef.current?.querySelector<HTMLElement>('[data-gallery-scroll-container="true"]')
       ?? mainScrollRef.current;
     if (!container) return undefined;
@@ -988,6 +1337,16 @@ export const App: React.FC = () => {
     let settleTimer: number | null = null;
     const finish = () => {
       if (settleTimer !== null) window.clearTimeout(settleTimer);
+      if (isGlobalMediaMode) {
+        stopGlobalScrubScroll(true);
+        if (globalNavigationActiveRef.current) {
+          globalNavigationTransactionRef.current.cancel(globalNavigationActiveRef.current);
+          globalNavigationActiveRef.current = null;
+        }
+        globalNavigationPinReleaseRef.current?.();
+        globalNavigationPinReleaseRef.current = null;
+        globalNavigationTargetRef.current = null;
+      }
       setNavigationMode('idle');
       setDestinationMonthKey(null);
       setDestinationGlobalIndex(null);
@@ -1006,14 +1365,17 @@ export const App: React.FC = () => {
       window.clearTimeout(fallbackTimer);
       if (settleTimer !== null) window.clearTimeout(settleTimer);
     };
-  }, [navigationMode, pendingMonthKey]);
+  }, [globalNavigationTransactionRef, isGlobalMediaMode, navigationMode, pendingMonthKey, stopGlobalScrubScroll]);
 
   React.useLayoutEffect(() => {
     // Do not poll the DOM while a cross-page request is in flight. The old
     // page remains mounted during that interval, so a requestAnimationFrame
     // loop would spin once per frame waiting for a section that cannot exist
     // yet and compete with the navigation response.
-    if (!pendingMonthKey || isLoadingImages || images.length === 0) return undefined;
+    // GlobalMediaWindow resolves the month anchor from its dense layout index
+    // and owns the scroll transaction directly; this legacy fallback must not
+    // become a second scroll owner after the global range is ready.
+    if (isGlobalMediaMode || !pendingMonthKey || isLoadingImages || images.length === 0) return undefined;
 
     let frameId: number | null = null;
     let retryTimer: number | null = null;
@@ -1046,9 +1408,8 @@ export const App: React.FC = () => {
       const targetTop = targetRect.top - containerRect.top;
       const requestedTop = getScrollTopForElement(container, target);
       const shouldAlign = Math.abs(container.scrollTop - requestedTop) > 0.5;
-      const shouldPreserveInitialMotion = behavior === 'smooth' && frameCount < 8;
 
-      if (shouldAlign && (frameCount === 0 || !shouldPreserveInitialMotion || frameCount >= 8)) {
+      if (shouldAlign && (frameCount === 0 || behavior === 'auto')) {
         container.scrollTo({
           top: requestedTop,
           behavior: frameCount === 0 ? behavior : 'auto',
@@ -1066,7 +1427,9 @@ export const App: React.FC = () => {
       previousScrollTop = currentScrollTop;
       frameCount += 1;
 
-      if (stableFrames >= 4 || frameCount >= 45) {
+      const minStable = behavior === 'auto' ? 1 : 4;
+      const maxFrames = behavior === 'auto' ? 6 : 45;
+      if (stableFrames >= minStable || frameCount >= maxFrames) {
         scrollElementToContainerStart(container, target, 'auto');
         setPendingMonthKey(null);
         return;
@@ -1080,10 +1443,8 @@ export const App: React.FC = () => {
       if (frameId !== null) window.cancelAnimationFrame(frameId);
       if (retryTimer !== null) window.clearTimeout(retryTimer);
     };
-  }, [getGalleryScrollContainer, images, isLoadingImages, pendingMonthKey]);
+  }, [getGalleryScrollContainer, images, isGlobalMediaMode, isLoadingImages, pendingMonthKey]);
 
-  const webtoonConfigSaveQueueRef = useRef<Promise<unknown>>(Promise.resolve());
-  const viewerModeSaveQueueRef = useRef<Promise<unknown>>(Promise.resolve());
   const videoPreferenceSaveQueueRef = useRef<Promise<unknown>>(Promise.resolve());
   const videoPreferenceSaveTimerRef = useRef<number | null>(null);
   const pendingVideoPreferencePatchRef = useRef<VideoPreferencePatch>({});
@@ -1104,7 +1465,6 @@ export const App: React.FC = () => {
     if (patch.videoVolume !== undefined) nextPatch.videoVolume = normalized.videoVolume;
     if (Object.keys(nextPatch).length === 0) return;
 
-    setWebConfigSnapshot(current => normalizeWebConfig({ ...current, ...nextPatch }));
     pendingVideoPreferencePatchRef.current = {
       ...pendingVideoPreferencePatchRef.current,
       ...nextPatch,
@@ -1127,105 +1487,68 @@ export const App: React.FC = () => {
   }, []);
 
   const handleWebtoonSettingsChange = useCallback((patch: Partial<WebConfig>) => {
-    const normalized = normalizeWebConfig(patch);
-    if (patch.webtoonImageScale !== undefined) setWebtoonImageScale(normalized.webtoonImageScale);
-    if (patch.webtoonImageGap !== undefined) setWebtoonImageGap(normalized.webtoonImageGap);
-    if (patch.webtoonShowInfo !== undefined) setWebtoonShowInfo(normalized.webtoonShowInfo);
-    if (patch.webtoonShowPageNumber !== undefined) setWebtoonShowPageNumber(normalized.webtoonShowPageNumber);
-    if (patch.webtoonShowThumbnails !== undefined) setWebtoonShowThumbnails(normalized.webtoonShowThumbnails);
-
-    webtoonConfigSaveQueueRef.current = webtoonConfigSaveQueueRef.current
-      .catch(() => undefined)
-      .then(() => persistWebConfigPatch(patch))
-      .catch(error => {
-        console.error('Failed to save webtoon setting:', error);
-      });
+    void persistWebConfigPatch(patch).catch(error => {
+      console.error('Failed to save webtoon setting:', error);
+    });
   }, [persistWebConfigPatch]);
 
   const handlePreferredViewerModeChange = useCallback((nextMode: ViewerMode) => {
     preferredViewerModeRef.current = nextMode;
-    setPreferredViewerMode(nextMode);
-
-    viewerModeSaveQueueRef.current = viewerModeSaveQueueRef.current
-      .catch(() => undefined)
-      .then(() => persistWebConfigPatch({ defaultViewMode: nextMode }))
-      .catch(error => {
-        console.error('Failed to save defaultViewMode setting:', error);
-      });
+    void persistWebConfigPatch({ defaultViewMode: nextMode }).catch(error => {
+      console.error('Failed to save defaultViewMode setting:', error);
+    });
   }, [persistWebConfigPatch]);
 
   const handleViewModeChange = useCallback((requestedMode: ViewMode) => {
     if (requestedMode === 'fullscreen' || requestedMode === 'webtoon') {
       handlePreferredViewerModeChange(requestedMode);
     }
-
-    const nextMode = isMobileViewportRef.current && requestedMode === 'grid'
-      ? preferredViewerModeRef.current
-      : requestedMode;
-    const fullscreenActive = fullscreenIndex !== null;
-    if (nextMode === viewMode && !fullscreenActive) return;
-
-    const anchorIndex = getCurrentViewAnchorIndex();
-    const safeAnchorIndex = normalizeViewAnchorIndex(anchorIndex);
-
-    // A mode change is also a navigation boundary. Do not let an in-flight
-    // month scrub resume against the newly mounted grid and overwrite the
-    // row anchor or page that the user chose.
-    cancelMonthNavigation();
-
-    if (nextMode === 'fullscreen') {
-      setFullscreenIndex(safeAnchorIndex ?? (images.length > 0 ? 0 : null));
-    } else if (nextMode === 'webtoon') {
-      handleEditModeChange(false);
-      requestWebtoonStart(safeAnchorIndex ?? (images.length > 0 ? 0 : null));
-      setFullscreenIndex(null);
-    } else {
-      requestGridRestore(safeAnchorIndex);
-      setFullscreenIndex(null);
-    }
-
-    setViewMode(nextMode);
+    changeViewerMode(requestedMode);
   }, [
-    fullscreenIndex,
-    getCurrentViewAnchorIndex,
-    images.length,
-    normalizeViewAnchorIndex,
-    cancelMonthNavigation,
-    requestGridRestore,
-    requestWebtoonStart,
-    handleEditModeChange,
+    changeViewerMode,
     handlePreferredViewerModeChange,
-    viewMode,
   ]);
 
   const handleReturnToGrid = useCallback(() => {
-    const anchorIndex = normalizeViewAnchorIndex(getCurrentViewAnchorIndex());
-    cancelMonthNavigation();
-    requestGridRestore(anchorIndex);
-    setFullscreenIndex(null);
+    returnViewerToGrid();
     setIsWebtoonToolbarOpen(false);
-    setViewMode('grid');
-  }, [cancelMonthNavigation, getCurrentViewAnchorIndex, normalizeViewAnchorIndex, requestGridRestore]);
+  }, [returnViewerToGrid]);
 
   const handleOpenImage = useCallback((index: number) => {
-    const safeIndex = normalizeViewAnchorIndex(index);
-    if (safeIndex === null) return;
+    openViewerImage(index);
+  }, [openViewerImage]);
 
-    cancelMonthNavigation();
-    if (preferredViewerModeRef.current === 'webtoon') {
-      requestWebtoonStart(safeIndex);
-      setFullscreenIndex(null);
-      setViewMode('webtoon');
-      return;
-    }
+  const prefetchReader = useCallback(() => {
+    const loader = preferredViewerModeRef.current === 'webtoon'
+      ? loadWebtoonFeed
+      : webConfig.fullscreenPageLayout === 'spread' && !isMobileViewport
+        ? loadSpreadViewer
+        : loadFullscreenViewer;
+    void loader().catch(error => {
+      console.debug('Reader prefetch failed:', error);
+    });
+  }, [isMobileViewport, webConfig.fullscreenPageLayout]);
 
-    setFullscreenIndex(safeIndex);
-    setViewMode('fullscreen');
-  }, [cancelMonthNavigation, normalizeViewAnchorIndex, requestWebtoonStart]);
+  const handleFullscreenPageLayoutChange = useCallback((layout: WebConfig['fullscreenPageLayout']) => {
+    void persistWebConfigPatch({ fullscreenPageLayout: layout }).catch(error => {
+      console.error('Failed to save fullscreenPageLayout setting:', error);
+    });
+  }, [persistWebConfigPatch]);
+
+  const handleFullscreenReadingDirectionChange = useCallback((direction: WebConfig['fullscreenReadingDirection']) => {
+    void persistWebConfigPatch({ fullscreenReadingDirection: direction }).catch(error => {
+      console.error('Failed to save fullscreenReadingDirection setting:', error);
+    });
+  }, [persistWebConfigPatch]);
+
+  const handleFullscreenSpreadPairingChange = useCallback((pairing: WebConfig['fullscreenSpreadPairing']) => {
+    void persistWebConfigPatch({ fullscreenSpreadPairing: pairing }).catch(error => {
+      console.error('Failed to save fullscreenSpreadPairing setting:', error);
+    });
+  }, [persistWebConfigPatch]);
 
   const handleThemeChange = useCallback((nextTheme: ThemeMode) => {
-    setTheme(nextTheme);
-    persistWebConfigPatch({ webTheme: nextTheme }).catch(err => {
+    void persistWebConfigPatch({ webTheme: nextTheme }).catch(err => {
       console.error('Failed to save webTheme setting:', err);
     });
   }, [persistWebConfigPatch]);
@@ -1262,113 +1585,98 @@ export const App: React.FC = () => {
   }, [handleEditModeChange, isEditMode, viewMode]);
 
   const handleToggleGroupMangaPosts = useCallback(() => {
-    const previousValue = groupMangaPosts;
-    const nextVal = !previousValue;
-    const requestId = ++groupSaveRequestRef.current;
-
-    setGroupMangaPosts(nextVal);
-    persistWebConfigPatch({ groupMangaPosts: nextVal }).catch(err => {
-      if (requestId !== groupSaveRequestRef.current) return;
+    void persistWebConfigPatch({ groupMangaPosts: !groupMangaPosts }).catch(err => {
       console.error('Failed to save groupMangaPosts setting:', err);
-      setGroupMangaPosts(previousValue);
     });
   }, [groupMangaPosts, persistWebConfigPatch]);
 
   const handleToggleBlur = useCallback(() => {
-    const previousValue = blurEnabled;
-    const nextValue = !previousValue;
-    const requestId = ++blurSaveRequestRef.current;
-
-    setBlurEnabled(nextValue);
-    persistWebConfigPatch({ blurEnabled: nextValue }).catch(err => {
-      if (requestId !== blurSaveRequestRef.current) return;
+    void persistWebConfigPatch({ blurEnabled: !blurEnabled }).catch(err => {
       console.error('Failed to save blurEnabled setting:', err);
-      setBlurEnabled(previousValue);
     });
   }, [blurEnabled, persistWebConfigPatch]);
 
   const handleFullscreenToolbarSimpleModeChange = useCallback((simpleMode: boolean) => {
-    const previousValue = fullscreenToolbarSimpleMode;
-    const requestId = ++fullscreenToolbarModeSaveRequestRef.current;
-
-    setFullscreenToolbarSimpleMode(simpleMode);
-    setWebConfigSnapshot(current => ({ ...current, fullscreenToolbarSimpleMode: simpleMode }));
-    persistWebConfigPatch({ fullscreenToolbarSimpleMode: simpleMode }).catch(err => {
-      if (requestId !== fullscreenToolbarModeSaveRequestRef.current) return;
+    void persistWebConfigPatch({ fullscreenToolbarSimpleMode: simpleMode }).catch(err => {
       console.error('Failed to save fullscreenToolbarSimpleMode setting:', err);
-      setFullscreenToolbarSimpleMode(previousValue);
-      setWebConfigSnapshot(current => ({ ...current, fullscreenToolbarSimpleMode: previousValue }));
     });
   }, [fullscreenToolbarSimpleMode, persistWebConfigPatch]);
 
   const handleFullscreenShowToolbarChange = useCallback((showToolbar: boolean) => {
-    const previousValue = fullscreenShowToolbar;
-    const requestId = ++fullscreenShowToolbarSaveRequestRef.current;
-
-    setFullscreenShowToolbar(showToolbar);
-    setWebConfigSnapshot(current => ({ ...current, fullscreenShowToolbar: showToolbar }));
-    persistWebConfigPatch({ fullscreenShowToolbar: showToolbar }).catch(error => {
-      if (requestId !== fullscreenShowToolbarSaveRequestRef.current) return;
+    void persistWebConfigPatch({ fullscreenShowToolbar: showToolbar }).catch(error => {
       console.error('Failed to save fullscreenShowToolbar setting:', error);
-      setFullscreenShowToolbar(previousValue);
-      setWebConfigSnapshot(current => ({ ...current, fullscreenShowToolbar: previousValue }));
     });
   }, [fullscreenShowToolbar, persistWebConfigPatch]);
 
   const handleFullscreenShowFilmstripChange = useCallback((showFilmstrip: boolean) => {
-    const previousValue = fullscreenShowThumbnails;
-    const requestId = ++fullscreenShowThumbnailsSaveRequestRef.current;
-
-    setFullscreenShowThumbnails(showFilmstrip);
-    setWebConfigSnapshot(current => ({ ...current, fullscreenShowThumbnails: showFilmstrip }));
-    persistWebConfigPatch({ fullscreenShowThumbnails: showFilmstrip }).catch(error => {
-      if (requestId !== fullscreenShowThumbnailsSaveRequestRef.current) return;
+    void persistWebConfigPatch({ fullscreenShowThumbnails: showFilmstrip }).catch(error => {
       console.error('Failed to save fullscreenShowThumbnails setting:', error);
-      setFullscreenShowThumbnails(previousValue);
-      setWebConfigSnapshot(current => ({ ...current, fullscreenShowThumbnails: previousValue }));
     });
   }, [fullscreenShowThumbnails, persistWebConfigPatch]);
 
   const handleFullscreenCheckerboardChange = useCallback((enabled: boolean) => {
-    const previousValue = webConfigSnapshot.fullscreenShowCheckerboard;
-    const requestId = ++fullscreenCheckerboardSaveRequestRef.current;
-
-    setWebConfigSnapshot(current => ({ ...current, fullscreenShowCheckerboard: enabled }));
-    persistWebConfigPatch({ fullscreenShowCheckerboard: enabled }).catch(error => {
-      if (requestId !== fullscreenCheckerboardSaveRequestRef.current) return;
+    void persistWebConfigPatch({ fullscreenShowCheckerboard: enabled }).catch(error => {
       console.error('Failed to save fullscreenShowCheckerboard setting:', error);
-      setWebConfigSnapshot(current => ({ ...current, fullscreenShowCheckerboard: previousValue }));
     });
-  }, [persistWebConfigPatch, webConfigSnapshot.fullscreenShowCheckerboard]);
+  }, [persistWebConfigPatch]);
 
   const handleFullscreenZoomModeChange = useCallback((mode: WebConfig['fullscreenZoomMode']) => {
-    const previousValue = webConfigSnapshot.fullscreenZoomMode;
-    const requestId = ++fullscreenZoomModeSaveRequestRef.current;
-
-    setWebConfigSnapshot(current => ({ ...current, fullscreenZoomMode: mode }));
-    persistWebConfigPatch({ fullscreenZoomMode: mode }).catch(error => {
-      if (requestId !== fullscreenZoomModeSaveRequestRef.current) return;
+    void persistWebConfigPatch({ fullscreenZoomMode: mode }).catch(error => {
       console.error('Failed to save fullscreenZoomMode setting:', error);
-      setWebConfigSnapshot(current => ({ ...current, fullscreenZoomMode: previousValue }));
     });
-  }, [persistWebConfigPatch, webConfigSnapshot.fullscreenZoomMode]);
+  }, [persistWebConfigPatch]);
 
   const displayArtists = artists;
   const displayImages = images;
+  const mediaTotalImages = globalMediaSnapshot.revision
+    ? globalMediaSnapshot.total
+    : totalImages;
+  const readerImages = isGlobalMediaMode && fullscreenIndex !== null
+    ? globalReaderRange.images
+    : displayImages;
+  const readerIndex = isGlobalMediaMode && fullscreenIndex !== null
+    ? globalReaderRange.currentIndex
+    : fullscreenIndex ?? 0;
+  const readerPageOffset = isGlobalMediaMode && fullscreenIndex !== null
+    ? globalReaderRange.range.start
+    : Math.max(0, (currentPage - 1) * itemsPerPage);
+  const readerIsReady = !isGlobalMediaMode || fullscreenIndex === null || globalReaderRange.isReady;
+  const webtoonGlobalMode = isGlobalMediaMode
+    && globalWebtoonIndex !== null
+    && globalWebtoonRange.isReady;
+  const webtoonImages = webtoonGlobalMode ? globalWebtoonRange.images : displayImages;
+  const webtoonPageOffset = webtoonGlobalMode
+    ? globalWebtoonRange.range.start
+    : Math.max(0, (currentPage - 1) * itemsPerPage);
+  const webtoonInitialIndex = webtoonGlobalMode
+    ? globalWebtoonRange.currentIndex
+    : webtoonStartAnchor?.index ?? null;
+  const handleGlobalWebtoonIndexChange = useCallback((index: number, options: { align?: boolean } = {}) => {
+    if (!webtoonGlobalMode) return;
+    const safeIndex = Math.max(0, Math.min(Math.max(0, mediaTotalImages - 1), Math.floor(index)));
+    setGlobalWebtoonIndex(current => current === safeIndex ? current : safeIndex);
+    if (options.align) setGlobalWebtoonRequestId(requestId => requestId + 1);
+  }, [mediaTotalImages, webtoonGlobalMode]);
 
   // Group images into WorkGroups for current page
   const allWorkGroups = useMemo(() => {
-    return groupImagesIntoWorkGroups(displayImages);
-  }, [displayImages]);
+    return groupImagesIntoWorkGroups(readerImages);
+  }, [readerImages]);
 
   // Current Fullscreen Active Work Group & Item Index
-  const currentFullscreenItem = fullscreenIndex !== null ? displayImages[fullscreenIndex] : null;
+  const currentFullscreenItem = fullscreenIndex !== null ? readerImages[readerIndex] : null;
   const currentFullscreenGroup = useMemo(() => {
     if (!currentFullscreenItem) return null;
     return allWorkGroups.find(g => g.items.some(it => it.save_name === currentFullscreenItem.save_name)) || null;
   }, [currentFullscreenItem, allWorkGroups]);
 
   const handleNavigateNextWork = () => {
+    if (isGlobalMediaMode) {
+      if (fullscreenIndex !== null && fullscreenIndex < mediaTotalImages - 1) {
+        setFullscreenIndex(fullscreenIndex + 1);
+      }
+      return;
+    }
     if (!currentFullscreenGroup) {
       if (fullscreenIndex !== null && fullscreenIndex < images.length - 1) {
         setFullscreenIndex(fullscreenIndex + 1);
@@ -1385,6 +1693,12 @@ export const App: React.FC = () => {
   };
 
   const handleNavigatePrevWork = () => {
+    if (isGlobalMediaMode) {
+      if (fullscreenIndex !== null && fullscreenIndex > 0) {
+        setFullscreenIndex(fullscreenIndex - 1);
+      }
+      return;
+    }
     if (!currentFullscreenGroup) {
       if (fullscreenIndex !== null && fullscreenIndex > 0) {
         setFullscreenIndex(fullscreenIndex - 1);
@@ -1408,7 +1722,9 @@ export const App: React.FC = () => {
   const handleSelectMangaPage = (pageIdx: number) => {
     if (!activeWorkGroup) return;
     const targetItem = activeWorkGroup.items[pageIdx];
-    const globalIdx = images.findIndex(x => x.save_name === targetItem?.save_name);
+    const globalIdx = isGlobalMediaMode
+      ? globalMediaSnapshot.getLoaded?.().find(slot => slot.item?.save_name === targetItem?.save_name)?.index ?? -1
+      : images.findIndex(x => x.save_name === targetItem?.save_name);
     if (globalIdx !== -1) handleOpenImage(globalIdx);
     setIsMangaModalOpen(false);
   };
@@ -1452,13 +1768,13 @@ export const App: React.FC = () => {
           analyze_colors: true,
           priority: 0,
         });
-      if (!data.job) throw new Error('背景更新啟動失敗');
+      if (!data.job) throw new Error(t('common.backgroundUpdateFailed'));
       startLibraryJob(data.job);
-      setLibraryAnnouncement('已開始在背景更新目前繪師；既有索引可繼續瀏覽，完成後列表會自動更新。');
+      setLibraryAnnouncement(t('common.backgroundUpdateStarted'));
     } catch (error) {
-      setLibraryAnnouncement(error instanceof Error ? error.message : '背景更新啟動失敗');
+      setLibraryAnnouncement(error instanceof Error ? error.message : t('common.backgroundUpdateFailed'));
     }
-  }, [currentArtist, startLibraryJob]);
+  }, [currentArtist, startLibraryJob, t]);
 
   const handleArtistChanged = useCallback(() => {
     clearImagePageCache();
@@ -1473,8 +1789,8 @@ export const App: React.FC = () => {
   const handleArtistVisibilityChanged = useCallback(() => {
     clearImagePageCache();
     void refreshDirectoryMetadata().catch(err => console.error('Failed to refresh artist list after visibility action:', err));
-    fetchImages();
-  }, [clearImagePageCache, fetchImages, refreshDirectoryMetadata]);
+    void refreshMediaData().catch(err => console.error('Failed to refresh media after artist visibility action:', err));
+  }, [clearImagePageCache, refreshDirectoryMetadata, refreshMediaData]);
 
   const handleOpenRecycleBin = useCallback(() => {
     setIsSettingsOpen(false);
@@ -1484,30 +1800,33 @@ export const App: React.FC = () => {
 
   const handleSettingsSaved = useCallback((savedConfig?: Partial<WebConfig>) => {
     if (savedConfig) {
-      applyWebConfig(savedConfig);
+      replaceConfig({ ...webConfig, ...savedConfig });
+      setCurrentPage(1);
     } else {
-      loadWebConfig().catch(err => console.error('Failed to refresh web-config:', err));
+      loadWebConfig()
+        .then(() => setCurrentPage(1))
+        .catch(err => console.error('Failed to refresh web-config:', err));
     }
 
-    fetchImages();
+    void refreshMediaData().catch(err => console.error('Failed to refresh media after settings save:', err));
     // Also refetch artists and months in case directory rescan indexed new files.
     void refreshDirectoryMetadata().catch(err => console.error(err));
-  }, [applyWebConfig, fetchImages, loadWebConfig, refreshDirectoryMetadata]);
+  }, [loadWebConfig, refreshDirectoryMetadata, refreshMediaData, replaceConfig, webConfig]);
 
   const handleOnboardingComplete = useCallback((config: WebConfig) => {
-    applyWebConfig(config);
-  }, [applyWebConfig]);
+    replaceConfig(config);
+  }, [replaceConfig]);
 
   if (!isWebConfigReady) {
     return (
       <div className="app-root__loading" aria-busy="true">
-        載入 Web Viewer 設定中…
+        {t('common.loadingConfig')}
       </div>
     );
   }
 
-  if (!webConfigSnapshot.onboardingCompleted) {
-    return <FirstUseOnboarding initialConfig={webConfigSnapshot} onComplete={handleOnboardingComplete} />;
+  if (!webConfig.onboardingCompleted) {
+    return <FirstUseOnboarding initialConfig={webConfig} onComplete={handleOnboardingComplete} />;
   }
 
   return (
@@ -1525,7 +1844,7 @@ export const App: React.FC = () => {
         toggleMenu={handleToggleMobileMenu}
         isSidebarOpen={isSidebarOpen}
         isMobileMenuOpen={isMobileMenuOpen}
-        totalCount={totalImages}
+        totalCount={mediaTotalImages}
         onOpenSettings={() => setIsSettingsOpen(true)}
         groupMangaPosts={groupMangaPosts}
         onToggleGroupMangaPosts={handleToggleGroupMangaPosts}
@@ -1578,8 +1897,8 @@ export const App: React.FC = () => {
             type="button"
             className="app-sidebar__backdrop"
             onClick={() => setIsSidebarOpen(false)}
-            aria-label="關閉篩選側欄"
-            title="關閉篩選側欄"
+            aria-label={t('filters.closeSidebar')}
+            title={t('filters.closeSidebar')}
           />
         )}
 
@@ -1596,6 +1915,7 @@ export const App: React.FC = () => {
           setSelectedMonths={setSelectedMonths}
           selectedArtist={selectedArtist}
           setSelectedArtist={setSelectedArtist}
+          onPrefetchArtist={prefetchArtist}
           searchQuery={searchQuery}
           setSearchQuery={setSearchQuery}
           onResetAllFilters={handleResetAllFilters}
@@ -1620,13 +1940,17 @@ export const App: React.FC = () => {
           {viewMode === 'grid' && (
           <GalleryGrid
             images={displayImages}
-            totalImages={totalImages}
+            totalImages={mediaTotalImages}
             currentPage={currentPage}
             itemsPerPage={itemsPerPage}
             thumbnailSize={thumbnailSize}
             onPageChange={handlePageChange}
             onLoadPage={loadSelectionPage}
-            onItemsPerPageChange={(num) => setItemsPerPage(num)}
+            onItemsPerPageChange={(num) => {
+              void persistWebConfigPatch({ itemsPerPage: num }).catch(error => {
+                console.error('Failed to save itemsPerPage setting:', error);
+              });
+            }}
             sortMode={sortMode}
             onSortModeChange={(mode) => setSortMode(mode)}
             isEditMode={isEditMode}
@@ -1636,6 +1960,7 @@ export const App: React.FC = () => {
             onSetSelection={setSelectedImages}
             onReplaceSelection={replaceSelectedImages}
             onOpenFullscreen={handleOpenImage}
+            onPrefetchReader={prefetchReader}
             searchQuery={searchQuery}
             selectedArtist={selectedArtist}
             onClearArtist={() => setSelectedArtist(null)}
@@ -1656,43 +1981,56 @@ export const App: React.FC = () => {
              restoreGlobalIndex={gridRestoreAnchor?.index ?? null}
              restoreRequestId={gridRestoreAnchor?.requestId ?? 0}
              loadedPage={loadedPage}
-             isLoading={isLoadingImages}
+            isLoading={isLoadingImages || isGlobalMediaLoading}
              isArtistLoading={isLoadingImages && selectedArtist !== null}
             isArtistUpdating={isArtistUpdating}
             onRequestArtistUpdate={handleRequestArtistUpdate}
             onOpenArtistSettings={() => setIsArtistSettingsOpen(true)}
             blurEnabled={blurEnabled}
             demoMode={demoMode}
+            globalMediaWindow={isGlobalMediaMode ? globalMediaWindow : undefined}
+            globalMediaSnapshot={isGlobalMediaMode ? globalMediaSnapshot : undefined}
+            globalLayout={isGlobalMediaMode ? globalLayout ?? undefined : undefined}
           />
           )}
 
           {viewMode === 'webtoon' && (
-            <WebtoonFeed
-              images={displayImages}
-              blurEnabled={blurEnabled}
-              demoMode={demoMode}
-              initialIndex={webtoonStartAnchor?.index ?? null}
-              initialRequestId={webtoonStartAnchor?.requestId ?? 0}
-              thumbnailSize={thumbnailSize}
-              imageScale={webtoonImageScale}
-              imageGap={webtoonImageGap}
-              showInfo={webtoonShowInfo}
-              showPageNumber={webtoonShowPageNumber}
-              showThumbnails={isMobileViewport ? false : webtoonShowThumbnails}
-              groupMangaPosts={groupMangaPosts}
-              pageOffset={Math.max(0, (currentPage - 1) * itemsPerPage)}
-              totalImages={totalImages}
-              currentPage={currentPage}
-              totalPages={Math.max(1, Math.ceil(totalImages / Math.max(1, itemsPerPage)))}
-              mobileToolbarOpen={isWebtoonToolbarOpen}
-              isMobileViewport={isMobileViewport}
-              videoMuted={webConfigSnapshot.videoMuted}
-              videoVolume={webConfigSnapshot.videoVolume}
-              videoAutoplay={webConfigSnapshot.videoAutoplay}
-              onPageChange={handleWebtoonPageChange}
-              onSettingsChange={handleWebtoonSettingsChange}
-              onVideoPreferenceChange={handleVideoPreferenceChange}
-            />
+            <LazyModuleBoundary>
+              <React.Suspense fallback={<LazyModuleFallback />}>
+                <LazyWebtoonFeed
+                  images={webtoonImages}
+                  blurEnabled={blurEnabled}
+                  demoMode={demoMode}
+                  initialIndex={webtoonInitialIndex}
+                  initialRequestId={webtoonGlobalMode
+                    ? globalWebtoonRequestId
+                    : webtoonStartAnchor?.requestId ?? 0}
+                  thumbnailSize={thumbnailSize}
+                  imageScale={webtoonImageScale}
+                  imageGap={webtoonImageGap}
+                  showInfo={webtoonShowInfo}
+                  showPageNumber={webtoonShowPageNumber}
+                  showThumbnails={isMobileViewport ? false : webtoonShowThumbnails}
+                  groupMangaPosts={groupMangaPosts}
+                  pageOffset={webtoonPageOffset}
+                  totalImages={mediaTotalImages}
+                  currentPage={webtoonGlobalMode ? 1 : currentPage}
+                  totalPages={webtoonGlobalMode ? 1 : Math.max(1, Math.ceil(totalImages / Math.max(1, itemsPerPage)))}
+                  mobileToolbarOpen={isWebtoonToolbarOpen}
+                  isMobileViewport={isMobileViewport}
+                  videoMuted={webConfig.videoMuted}
+                  videoVolume={webConfig.videoVolume}
+                  videoAutoplay={webConfig.videoAutoplay}
+                  onPageChange={handleWebtoonPageChange}
+                  onSettingsChange={handleWebtoonSettingsChange}
+                  onVideoPreferenceChange={handleVideoPreferenceChange}
+                  isGlobalMode={webtoonGlobalMode}
+                  globalRangeStart={webtoonGlobalMode ? globalWebtoonRange.range.start : 0}
+                  globalHeightIndex={webtoonGlobalMode ? globalWebtoonHeightIndex : undefined}
+                  onGlobalIndexChange={handleGlobalWebtoonIndexChange}
+                />
+              </React.Suspense>
+            </LazyModuleBoundary>
           )}
 
         </main>
@@ -1713,71 +2051,135 @@ export const App: React.FC = () => {
               if (event.detail > 0) event.currentTarget.blur();
             }}
             variant="secondary"
-          aria-label="回到頂端"
-          title="回到頂端"
+          aria-label={t('common.scrollToTop')}
+          title={t('common.scrollToTop')}
         >
           <ArrowUp className="h-5 w-5" aria-hidden="true" />
         </IconButton>
       )}
 
       {/* Manga Group Preview Modal */}
-      <MangaGroupModal
-        isOpen={isMangaModalOpen}
-        workGroup={activeWorkGroup}
-        onClose={() => setIsMangaModalOpen(false)}
-        onSelectImage={handleSelectMangaPage}
-        thumbnailSize={thumbnailSize}
-        blurEnabled={blurEnabled}
-        demoMode={demoMode}
-      />
+      {isMangaModalOpen && activeWorkGroup && (
+        <LazyModuleBoundary>
+          <React.Suspense fallback={<LazyModuleFallback />}>
+            <LazyMangaGroupModal
+              isOpen={isMangaModalOpen}
+              workGroup={activeWorkGroup}
+              onClose={() => setIsMangaModalOpen(false)}
+              onSelectImage={handleSelectMangaPage}
+              thumbnailSize={thumbnailSize}
+              blurEnabled={blurEnabled}
+              demoMode={demoMode}
+            />
+          </React.Suspense>
+        </LazyModuleBoundary>
+      )}
 
       {/* Keep one previewer instance for the single-image reader mode. */}
-      {(fullscreenIndex !== null || viewMode === 'fullscreen') && images.length > 0 && (
-        <FullscreenViewer
-          key="fullscreen-viewer"
-          images={displayImages}
-          currentIndex={fullscreenIndex ?? 0}
-          onClose={handleCloseFullscreen}
-          onNavigate={handleNavigateFullscreen}
-          activeMode={viewMode === 'webtoon' ? 'webtoon' : 'fullscreen'}
-          onChangeMode={handleViewModeChange}
-          onDeleteCurrent={promptDeleteSingle}
-          onNavigateNextWork={handleNavigateNextWork}
-          onNavigatePrevWork={handleNavigatePrevWork}
-          preloadCount={preloadImageCount}
-          thumbnailSize={thumbnailSize}
-          blurEnabled={blurEnabled}
-          demoMode={demoMode}
-          isMobileViewport={isMobileViewport}
-          groupMangaPosts={groupMangaPosts}
-          onToggleGroupMangaPosts={handleToggleGroupMangaPosts}
-          onToggleBlur={handleToggleBlur}
-          simpleToolbar={fullscreenToolbarSimpleMode}
-          onSimpleToolbarChange={handleFullscreenToolbarSimpleModeChange}
-          showToolbarByDefault={fullscreenShowToolbar}
-          onShowToolbarChange={handleFullscreenShowToolbarChange}
-          showFilmstripByDefault={fullscreenShowThumbnails}
-          onShowFilmstripChange={handleFullscreenShowFilmstripChange}
-          fullscreenShowCheckerboard={webConfigSnapshot.fullscreenShowCheckerboard}
-          onCheckerboardChange={handleFullscreenCheckerboardChange}
-          fullscreenZoomMode={webConfigSnapshot.fullscreenZoomMode}
-          onZoomModeChange={handleFullscreenZoomModeChange}
-          videoSeekSeconds={webConfigSnapshot.fullscreenVideoSeekSeconds}
-          videoHoldPlaybackRate={webConfigSnapshot.fullscreenVideoHoldPlaybackRate}
-          videoMuted={webConfigSnapshot.videoMuted}
-          videoVolume={webConfigSnapshot.videoVolume}
-          videoAutoplay={webConfigSnapshot.videoAutoplay}
-          onVideoPreferenceChange={handleVideoPreferenceChange}
-          pageOffset={Math.max(0, (currentPage - 1) * itemsPerPage)}
-          totalImages={totalImages}
-        />
+      {(fullscreenIndex !== null || viewMode === 'fullscreen') && (isGlobalMediaMode ? mediaTotalImages > 0 : images.length > 0) && (
+        <LazyModuleBoundary>
+          <React.Suspense fallback={<LazyModuleFallback />}>
+            {!readerIsReady ? (
+              <LazyModuleFallback />
+            ) : webConfig.fullscreenPageLayout === 'spread' && !isMobileViewport ? (
+              <LazySpreadViewer
+                key="spread-viewer"
+                images={readerImages}
+                currentIndex={readerIndex}
+                onClose={handleCloseFullscreen}
+                onNavigate={handleNavigateFullscreen}
+                onNavigateNextRange={isGlobalMediaMode && fullscreenIndex !== null && fullscreenIndex < mediaTotalImages - 1
+                  ? handleNavigateNextWork
+                  : undefined}
+                onNavigatePrevRange={isGlobalMediaMode && fullscreenIndex !== null && fullscreenIndex > 0
+                  ? handleNavigatePrevWork
+                  : undefined}
+                thumbnailSize={thumbnailSize}
+                blurEnabled={blurEnabled}
+                demoMode={demoMode}
+                fullscreenPageLayout={webConfig.fullscreenPageLayout}
+                fullscreenReadingDirection={webConfig.fullscreenReadingDirection}
+                fullscreenSpreadPairing={webConfig.fullscreenSpreadPairing}
+                onPageLayoutChange={handleFullscreenPageLayoutChange}
+                onReadingDirectionChange={handleFullscreenReadingDirectionChange}
+                onSpreadPairingChange={handleFullscreenSpreadPairingChange}
+                showToolbarByDefault={fullscreenShowToolbar}
+                onShowToolbarChange={handleFullscreenShowToolbarChange}
+                showFilmstripByDefault={fullscreenShowThumbnails}
+                onShowFilmstripChange={handleFullscreenShowFilmstripChange}
+                fullscreenShowCheckerboard={webConfig.fullscreenShowCheckerboard}
+                onCheckerboardChange={handleFullscreenCheckerboardChange}
+                simpleToolbar={fullscreenToolbarSimpleMode}
+                onSimpleToolbarChange={handleFullscreenToolbarSimpleModeChange}
+                globalMediaMode={isGlobalMediaMode}
+                activeMode="fullscreen"
+                onChangeMode={handleViewModeChange}
+                groupMangaPosts={groupMangaPosts}
+                onToggleGroupMangaPosts={handleToggleGroupMangaPosts}
+                onToggleBlur={handleToggleBlur}
+                onDeleteCurrent={promptDeleteSingle}
+                videoMuted={webConfig.videoMuted}
+                videoVolume={webConfig.videoVolume}
+                videoAutoplay={webConfig.videoAutoplay}
+                videoSeekSeconds={webConfig.fullscreenVideoSeekSeconds}
+                videoHoldPlaybackRate={webConfig.fullscreenVideoHoldPlaybackRate}
+                onVideoPreferenceChange={handleVideoPreferenceChange}
+                pageOffset={readerPageOffset}
+                totalImages={mediaTotalImages}
+              />
+            ) : (
+              <LazyFullscreenViewer
+                key="fullscreen-viewer"
+                images={readerImages}
+                currentIndex={readerIndex}
+                onClose={handleCloseFullscreen}
+                onNavigate={handleNavigateFullscreen}
+                activeMode="fullscreen"
+                onChangeMode={handleViewModeChange}
+                fullscreenPageLayout={isMobileViewport ? 'single' : webConfig.fullscreenPageLayout}
+                onPageLayoutChange={handleFullscreenPageLayoutChange}
+                fullscreenReadingDirection={webConfig.fullscreenReadingDirection}
+                onReadingDirectionChange={handleFullscreenReadingDirectionChange}
+                onDeleteCurrent={promptDeleteSingle}
+                onNavigateNextWork={handleNavigateNextWork}
+                onNavigatePrevWork={handleNavigatePrevWork}
+                preloadCount={preloadImageCount}
+                thumbnailSize={thumbnailSize}
+                blurEnabled={blurEnabled}
+                demoMode={demoMode}
+                isMobileViewport={isMobileViewport}
+                groupMangaPosts={groupMangaPosts}
+                onToggleGroupMangaPosts={handleToggleGroupMangaPosts}
+                onToggleBlur={handleToggleBlur}
+                simpleToolbar={fullscreenToolbarSimpleMode}
+                onSimpleToolbarChange={handleFullscreenToolbarSimpleModeChange}
+                showToolbarByDefault={fullscreenShowToolbar}
+                onShowToolbarChange={handleFullscreenShowToolbarChange}
+                showFilmstripByDefault={fullscreenShowThumbnails}
+                onShowFilmstripChange={handleFullscreenShowFilmstripChange}
+                fullscreenShowCheckerboard={webConfig.fullscreenShowCheckerboard}
+                onCheckerboardChange={handleFullscreenCheckerboardChange}
+                fullscreenZoomMode={webConfig.fullscreenZoomMode}
+                onZoomModeChange={handleFullscreenZoomModeChange}
+                videoSeekSeconds={webConfig.fullscreenVideoSeekSeconds}
+                videoHoldPlaybackRate={webConfig.fullscreenVideoHoldPlaybackRate}
+                videoMuted={webConfig.videoMuted}
+                videoVolume={webConfig.videoVolume}
+                videoAutoplay={webConfig.videoAutoplay}
+                onVideoPreferenceChange={handleVideoPreferenceChange}
+                pageOffset={readerPageOffset}
+                totalImages={mediaTotalImages}
+              />
+            )}
+          </React.Suspense>
+        </LazyModuleBoundary>
       )}
 
       {/* Batch Edit Toolbar */}
       {isEditMode && (
         <BatchEditToolbar
           selectedCount={selectedIds.size}
-          totalCount={totalImages}
+          totalCount={mediaTotalImages}
           onSelectAll={handleSelectAll}
           onDeselectAll={handleDeselectAll}
           onDownloadSelected={handleDownloadSelected}
@@ -1791,47 +2193,65 @@ export const App: React.FC = () => {
       {/* Confirmation Modal */}
       <ConfirmModal
         isOpen={showConfirmModal}
-        title="移至回收區？"
-        message={`確定要將選取的 ${deleteTargets.length} 項作品移至回收區嗎？原始檔案會保留在回收區，不會永久刪除。`}
-        confirmLabel="移至回收區"
-        cancelLabel="取消"
+        title={t('common.moveToRecycleBinConfirmTitle')}
+        message={t('common.moveToRecycleBinConfirmMessage', { count: formatNumber(deleteTargets.length) })}
+        confirmLabel={t('common.moveToRecycleBin')}
+        cancelLabel={t('common.cancel')}
         onConfirm={confirmExecuteDelete}
         onCancel={() => setShowConfirmModal(false)}
       />
 
       <ConfirmModal
         isOpen={isArtistUpdateNoticeOpen}
-        title="在背景更新繪師作品？"
-        message="更新只會讀取目前繪師的資料夾，並寫入 Web Viewer 自己的索引。既有索引會先維持顯示，你可以繼續瀏覽；完成後列表會自動更新。"
-        confirmLabel="開始背景更新"
-        cancelLabel="稍後再做"
+        title={t('common.backgroundUpdateTitle')}
+        message={t('common.backgroundUpdateMessage')}
+        confirmLabel={t('common.startBackgroundUpdate')}
+        cancelLabel={t('common.later')}
         variant="primary"
         onConfirm={() => void handleStartArtistUpdate()}
         onCancel={() => setIsArtistUpdateNoticeOpen(false)}
       />
 
       {/* Settings Modal */}
-      <SettingsModal
-        isOpen={isSettingsOpen}
-        onClose={() => setIsSettingsOpen(false)}
-        onSettingsSaved={handleSettingsSaved}
-        onArtistVisibilityChanged={handleArtistVisibilityChanged}
-        onOpenRecycleBin={handleOpenRecycleBin}
-        artists={displayArtists}
-      />
+      {isSettingsOpen && (
+        <LazyModuleBoundary>
+          <React.Suspense fallback={<LazyModuleFallback />}>
+            <LazySettingsModal
+              isOpen={isSettingsOpen}
+              onClose={() => setIsSettingsOpen(false)}
+              onSettingsSaved={handleSettingsSaved}
+              onArtistVisibilityChanged={handleArtistVisibilityChanged}
+              onOpenRecycleBin={handleOpenRecycleBin}
+              artists={displayArtists}
+            />
+          </React.Suspense>
+        </LazyModuleBoundary>
+      )}
 
-      <ArtistSettingsModal
-        isOpen={isArtistSettingsOpen}
-        artist={currentArtist}
-        onClose={() => setIsArtistSettingsOpen(false)}
-        onArtistChanged={handleArtistChanged}
-        onArtistMetadataChanged={handleArtistMetadataChanged}
-      />
+      {isArtistSettingsOpen && (
+        <LazyModuleBoundary>
+          <React.Suspense fallback={<LazyModuleFallback />}>
+            <LazyArtistSettingsModal
+              isOpen={isArtistSettingsOpen}
+              artist={currentArtist}
+              onClose={() => setIsArtistSettingsOpen(false)}
+              onArtistChanged={handleArtistChanged}
+              onArtistMetadataChanged={handleArtistMetadataChanged}
+            />
+          </React.Suspense>
+        </LazyModuleBoundary>
+      )}
 
-      <RecycleBinModal
-        isOpen={isRecycleBinOpen}
-        onClose={() => setIsRecycleBinOpen(false)}
-      />
+      {isRecycleBinOpen && (
+        <LazyModuleBoundary>
+          <React.Suspense fallback={<LazyModuleFallback />}>
+            <LazyRecycleBinModal
+              isOpen={isRecycleBinOpen}
+              onClose={() => setIsRecycleBinOpen(false)}
+            />
+          </React.Suspense>
+        </LazyModuleBoundary>
+      )}
 
       <Toast
         isOpen={!!toastMessage}

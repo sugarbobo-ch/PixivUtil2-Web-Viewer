@@ -11,6 +11,7 @@ export interface Artist {
   display_name?: string;
   source_kind?: 'pixiv' | 'fanbox' | 'discord' | 'unknown';
   identity_status?: 'inferred' | 'verified' | 'rejected' | 'unknown';
+  fanbox_id?: string | null;
 }
 
 export interface HiddenArtist {
@@ -47,7 +48,7 @@ export interface SourceLink {
 }
 
 export interface ArtistSourceLinks {
-  verified_member_id: number;
+  verified_member_id: number | null;
   pixiv?: SourceLink | null;
   fanbox?: SourceLink | null;
 }
@@ -62,6 +63,8 @@ export interface MonthIndexItem {
   label: string;
   count: number;
   offset?: number;
+  imageCount?: number;
+  cardCount?: number;
 }
 
 export interface ImageItem {
@@ -70,6 +73,8 @@ export interface ImageItem {
   member_id: number;
   title: string;
   save_name: string;
+  /** Byte size reported by the committed media index, when available. */
+  file_size?: number | null;
   created_date: string;
   last_update_date: string;
   artist_name?: string;
@@ -78,6 +83,10 @@ export interface ImageItem {
   group_page_index?: number;
   /** Total number of pages in the current work group. */
   group_page_total?: number;
+  /** Stable zero-based card position within the containing month. */
+  group_card_index?: number;
+  /** Total number of grouped cards within the containing month. */
+  group_card_total?: number;
   media_status?: 'invalid' | 'missing' | 'internal';
   media_error?: string;
 }
@@ -85,6 +94,10 @@ export interface ImageItem {
 export type ViewerMode = 'fullscreen' | 'webtoon';
 export type ViewMode = 'grid' | ViewerMode;
 export type ThemeMode = 'dark' | 'light';
+export type UiLanguage = 'zh-TW' | 'zh-CN' | 'en' | 'ja';
+export type FullscreenPageLayout = 'single' | 'spread';
+export type FullscreenReadingDirection = 'ltr' | 'rtl';
+export type FullscreenSpreadPairing = 'cover-single' | 'first-page';
 export type FullscreenZoomMode = 'auto' | 'lock' | 'width' | 'height' | 'fit' | 'fill';
 export type SortMode =
   | 'newest_month'
@@ -107,8 +120,10 @@ export interface WorkGroup {
 
 export interface WebConfig {
   webTheme: ThemeMode;
+  uiLanguage: UiLanguage;
   defaultViewMode: ViewerMode;
   thumbnailSize: number;
+  /** Compatibility value for the opt-in legacy pagination rollback path. */
   itemsPerPage: number;
   sidebarWidth: number;
   autoOpenBrowser: boolean;
@@ -120,6 +135,9 @@ export interface WebConfig {
   fullscreenShowToolbar: boolean;
   fullscreenShowThumbnails: boolean;
   fullscreenShowCheckerboard: boolean;
+  fullscreenPageLayout: FullscreenPageLayout;
+  fullscreenReadingDirection: FullscreenReadingDirection;
+  fullscreenSpreadPairing: FullscreenSpreadPairing;
   fullscreenZoomMode: FullscreenZoomMode;
   fullscreenVideoSeekSeconds: number;
   fullscreenVideoHoldPlaybackRate: number;
@@ -147,6 +165,7 @@ export type WebConfigDraft = Omit<WebConfig, 'pixivConfigPath'> & {
 
 export const DEFAULT_WEB_CONFIG: WebConfig = {
   webTheme: 'dark',
+  uiLanguage: 'zh-TW',
   defaultViewMode: 'fullscreen',
   thumbnailSize: 320,
   itemsPerPage: 200,
@@ -160,6 +179,9 @@ export const DEFAULT_WEB_CONFIG: WebConfig = {
   fullscreenShowToolbar: true,
   fullscreenShowThumbnails: true,
   fullscreenShowCheckerboard: true,
+  fullscreenPageLayout: 'single',
+  fullscreenReadingDirection: 'ltr',
+  fullscreenSpreadPairing: 'cover-single',
   fullscreenZoomMode: 'auto',
   fullscreenVideoSeekSeconds: 5,
   fullscreenVideoHoldPlaybackRate: 2,

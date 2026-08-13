@@ -1,0 +1,519 @@
+@tailwind components;
+
+@layer components {
+  .spread-reader {
+    position: fixed;
+    inset: 0;
+    z-index: 55;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+    background: var(--viewer-stage);
+    color: var(--viewer-text);
+  }
+
+  .spread-reader:focus {
+    outline: none;
+  }
+
+  .spread-reader__topbar {
+    position: relative;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    min-height: 4.25rem;
+    padding-block: 0.75rem;
+    padding-inline: var(--ui-overlay-gutter);
+    border-block-end: 1px solid var(--viewer-border);
+    background: var(--viewer-surface);
+  }
+
+  .spread-reader__identity,
+  .spread-reader__toolbar,
+  .spread-reader__option-group,
+  .spread-reader__mode-group {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+    gap: 0.375rem;
+  }
+
+  .spread-reader__identity {
+    flex: 0 1 clamp(12rem, 28vw, 26rem);
+  }
+
+  .spread-reader__toolbar {
+    box-sizing: border-box;
+    flex: 1 1 0%;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    min-inline-size: 0;
+    max-width: 100%;
+    overflow: visible;
+    overscroll-behavior-inline: contain;
+    row-gap: 0.375rem;
+  }
+
+  .spread-reader__close-action {
+    flex: 0 0 auto;
+  }
+
+  .spread-reader__toolbar::-webkit-scrollbar {
+    display: none;
+  }
+
+  .spread-reader__counter,
+  .spread-reader__status,
+  .spread-reader__fallback {
+    display: inline-flex;
+    align-items: center;
+    min-height: 2rem;
+    border: 1px solid var(--viewer-border);
+    border-radius: var(--ui-control-radius);
+    padding-inline: 0.625rem;
+    background: var(--viewer-control);
+    color: var(--viewer-control-text);
+    font-size: var(--ui-font-min);
+    font-variant-numeric: tabular-nums;
+    font-weight: 650;
+    line-height: 1.25;
+    white-space: nowrap;
+  }
+
+  .spread-reader__title {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--viewer-text);
+    font-size: var(--ui-font-min);
+    font-weight: 650;
+    line-height: 1.25;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .spread-reader__toolbar-divider {
+    inline-size: 1px;
+    block-size: 1.75rem;
+    flex: 0 0 auto;
+    background: var(--viewer-border);
+  }
+
+  .spread-reader__option-group,
+  .spread-reader__mode-group {
+    flex: 0 0 auto;
+    border: 1px solid var(--viewer-border);
+    border-radius: var(--ui-control-radius);
+    padding: 0.25rem;
+    background: var(--viewer-control);
+  }
+
+  .spread-reader__option-group .ui-button,
+  .spread-reader__mode-group .ui-button {
+    white-space: nowrap;
+  }
+
+  .spread-reader__option-group .ui-button svg {
+    inline-size: 1rem;
+    block-size: 1rem;
+  }
+
+  .spread-reader__status-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+    min-height: 2.5rem;
+    padding-block: 0.25rem;
+    padding-inline: var(--ui-overlay-gutter);
+    background: var(--viewer-surface-muted);
+  }
+
+  .spread-reader__status,
+  .spread-reader__fallback {
+    min-height: 1.75rem;
+    font-size: var(--ui-font-caption);
+    font-weight: 600;
+  }
+
+  .spread-reader__fallback {
+    color: var(--viewer-text-muted);
+  }
+
+  .spread-reader__stage {
+    display: flex;
+    flex: 1 1 0%;
+    align-items: center;
+    justify-content: center;
+    min-block-size: 0;
+    min-inline-size: 0;
+    overflow: hidden;
+    padding-block: 0;
+    padding-inline: 0;
+    background: var(--viewer-stage);
+    touch-action: none;
+  }
+
+  .spread-reader__canvas {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: clamp(0.5rem, 2vw, 1.5rem);
+    inline-size: 100%;
+    block-size: 100%;
+    min-block-size: 0;
+    min-inline-size: 0;
+    transform-origin: center;
+    user-select: none;
+    will-change: transform;
+  }
+
+  .spread-reader__canvas.is-panning {
+    cursor: grabbing;
+  }
+
+  /* The spread surface is a bounded, opaque page plane. The media canvas can
+     be narrower than it when two portrait pages are height-fitted, so a wide
+     stage never stretches the pair to the viewport edges. */
+  .spread-reader__surface {
+    display: contents;
+  }
+
+  .spread-reader__surface.is-spread {
+    display: flex;
+    flex: 0 1 auto;
+    inline-size: min(90vw, 144rem);
+    block-size: min(85vh, 100%);
+    min-inline-size: 0;
+    min-block-size: 0;
+    max-inline-size: 100%;
+    max-block-size: 100%;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    background: transparent;
+  }
+
+  .spread-reader__stage.is-single .spread-reader__canvas {
+    inline-size: 100%;
+    block-size: 100%;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .spread-reader__stage.is-single .spread-reader__slot {
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+  }
+
+  .spread-reader__stage.is-cover .spread-reader__canvas {
+    grid-template-columns: minmax(0, min(100%, 56rem));
+    justify-content: center;
+  }
+
+  .spread-reader__stage.is-spread .spread-reader__canvas {
+    gap: 0;
+    inline-size: 100%;
+    block-size: 100%;
+    max-inline-size: 100%;
+    max-block-size: 100%;
+    margin-inline: 0;
+  }
+
+  .spread-reader__stage.is-spread .spread-reader__surface.is-boundary .spread-reader__canvas {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-rows: minmax(0, 1fr);
+    align-items: stretch;
+  }
+
+  .spread-reader__stage.is-spread .spread-reader__slot {
+    border: 0;
+    border-radius: 0;
+    align-items: flex-start;
+    background: transparent;
+  }
+
+  .spread-reader__stage.is-spread .spread-reader__slot--boundary {
+    background: var(--viewer-surface);
+  }
+
+  .spread-reader__stage.is-spread .spread-reader__slot.is-boundary-media {
+    align-items: center;
+  }
+
+  .spread-reader__stage.is-spread .spread-reader__slot.is-boundary-media--right .spread-reader__media-frame {
+    align-items: center;
+    justify-content: flex-start;
+  }
+
+  .spread-reader__stage.is-spread .spread-reader__slot.is-boundary-media--left .spread-reader__media-frame {
+    align-items: center;
+    justify-content: flex-end;
+  }
+
+  .spread-reader__stage.is-spread .spread-reader__slot.is-boundary-media--right .fullscreen-viewer__video-frame,
+  .spread-reader__stage.is-spread .spread-reader__slot.is-boundary-media--left .fullscreen-viewer__video-frame {
+    align-items: center;
+  }
+
+  .spread-reader__boundary-page {
+    display: flex;
+    inline-size: 100%;
+    block-size: 100%;
+    min-inline-size: 0;
+    min-block-size: 0;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.75rem;
+    box-sizing: border-box;
+    padding: clamp(1rem, 4vw, 3rem);
+    background: var(--viewer-surface);
+    color: var(--viewer-text);
+    text-align: center;
+  }
+
+  .spread-reader__boundary-label {
+    margin: 0;
+    color: var(--viewer-text-muted);
+    font-size: clamp(1.25rem, 2.8vw, 2rem);
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    line-height: 1.2;
+    text-transform: uppercase;
+  }
+
+  .spread-reader__boundary-title {
+    max-inline-size: 100%;
+    margin: 0;
+    overflow-wrap: anywhere;
+    font-size: clamp(1.125rem, 2.4vw, 2rem);
+    font-weight: 700;
+    line-height: 1.2;
+  }
+
+  .spread-reader__boundary-artist {
+    max-inline-size: 100%;
+    margin: 0;
+    overflow-wrap: anywhere;
+    color: var(--viewer-text-muted);
+    font-size: var(--ui-font-min);
+    line-height: 1.35;
+  }
+
+  /* A spread receives its measured proportional canvas from SpreadViewer. The
+     fallback bounds below keep the first paint safe until both media report
+     their intrinsic dimensions. The canvas is centered; its two slots have no
+     artificial gap. Blur gets its opaque backing below so its filter cannot
+     make the media look translucent. */
+  .spread-reader__stage.is-spread .spread-reader__canvas {
+    align-items: center;
+    transform-origin: center;
+  }
+
+  .spread-reader__stage.is-spread .spread-reader__media-frame {
+    place-items: start center;
+    align-items: flex-start;
+    background: transparent;
+  }
+
+  /* Match the single-page reader: blur owns an opaque media-sized backing
+     plane, while the checkerboard remains visible only outside the media. */
+  .spread-reader.is-blur-enabled .spread-reader__stage.is-spread .spread-reader__media-frame,
+  .spread-reader.is-blur-enabled .spread-reader__stage.is-spread .fullscreen-viewer__video-surface {
+    background-color: var(--viewer-stage);
+  }
+
+  .spread-reader__stage.is-spread .spread-reader__media-frame > img.spread-reader__media {
+    inline-size: 100%;
+    block-size: auto;
+    max-inline-size: 100%;
+    max-block-size: 100%;
+    object-position: center top;
+  }
+
+  .spread-reader__stage.is-spread .fullscreen-viewer__video-frame {
+    align-items: flex-start;
+    background: transparent;
+  }
+
+  .spread-reader__zoom-current {
+    min-inline-size: 3.5rem;
+    color: var(--viewer-control-text);
+    font-size: var(--ui-font-caption);
+    font-variant-numeric: tabular-nums;
+    font-weight: 700;
+    line-height: 1.25;
+    text-align: center;
+  }
+
+  .spread-reader__filmstrip {
+    flex: 0 0 auto;
+    min-inline-size: 0;
+    border-block-start: 1px solid var(--viewer-border);
+    padding-block: 0.5rem;
+    padding-inline: var(--ui-overlay-gutter);
+    background: var(--viewer-surface);
+  }
+
+  .spread-reader__filmstrip-track {
+    display: flex;
+    gap: 0.5rem;
+    min-inline-size: min-content;
+    overflow-x: auto;
+    overscroll-behavior-inline: contain;
+    padding-block: 0.125rem;
+    scrollbar-width: thin;
+  }
+
+  .spread-reader__filmstrip-item.ui-button {
+    flex: 0 0 5.25rem;
+    min-height: 4.75rem;
+    align-items: stretch;
+    flex-direction: column;
+    gap: 0.25rem;
+    padding-block: 0.25rem;
+    padding-inline: 0.25rem;
+    overflow: hidden;
+  }
+
+  .spread-reader__filmstrip-item img {
+    display: block;
+    inline-size: 100%;
+    block-size: 3.25rem;
+    min-block-size: 0;
+    object-fit: contain;
+    border-radius: 0.5rem;
+    background: var(--viewer-surface-muted);
+  }
+
+  .spread-reader__filmstrip-item span {
+    display: block;
+    overflow: hidden;
+    font-size: var(--ui-font-caption);
+    line-height: 1.125;
+    text-overflow: ellipsis;
+  }
+
+  .spread-reader__slot {
+    display: flex;
+    min-inline-size: 0;
+    min-block-size: 0;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    border: 1px solid var(--viewer-border);
+    border-radius: 1rem;
+    background: var(--viewer-surface-muted);
+  }
+
+  .spread-reader__media-frame {
+    display: flex;
+    inline-size: 100%;
+    block-size: 100%;
+    min-inline-size: 0;
+    min-block-size: 0;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .spread-reader__media {
+    display: block;
+    inline-size: 100%;
+    block-size: 100%;
+    min-inline-size: 0;
+    min-block-size: 0;
+    object-fit: contain;
+  }
+
+  .spread-reader__media-frame .media-issue-placeholder {
+    inline-size: 100%;
+    block-size: 100%;
+    min-inline-size: 0;
+    min-block-size: 0;
+    border: 0;
+  }
+
+  .spread-reader__demo {
+    inline-size: 100%;
+    block-size: 100%;
+  }
+
+  .spread-reader__live-region {
+    position: absolute;
+    inline-size: 1px;
+    block-size: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .spread-reader.is-checkerboard .spread-reader__stage {
+    background-color: var(--viewer-stage);
+    background-image:
+      linear-gradient(45deg, var(--viewer-checker) 25%, transparent 25%),
+      linear-gradient(-45deg, var(--viewer-checker) 25%, transparent 25%),
+      linear-gradient(45deg, transparent 75%, var(--viewer-checker) 75%),
+      linear-gradient(-45deg, transparent 75%, var(--viewer-checker) 75%);
+    background-position: 0 0, 0 0.75rem, 0.75rem -0.75rem, -0.75rem 0;
+    background-size: 1.5rem 1.5rem;
+  }
+
+  @media (max-width: 720px) {
+    .spread-reader__topbar {
+      align-items: flex-start;
+      padding-block: 0.625rem;
+    }
+
+    .spread-reader__identity {
+      flex: 1 1 auto;
+      max-inline-size: calc(100% - 3.25rem);
+    }
+
+    .spread-reader__close-action {
+      position: absolute;
+      inset-block-start: 0.625rem;
+      inset-inline-end: 0.625rem;
+    }
+
+    .spread-reader__toolbar {
+      inline-size: 100%;
+      max-inline-size: 100%;
+      flex-wrap: nowrap;
+      padding-inline: 0.25rem;
+      justify-content: flex-start;
+      overflow-x: auto;
+    }
+
+    .spread-reader__stage {
+      padding-block: 0.625rem;
+      padding-inline: 0.625rem;
+    }
+
+    .spread-reader__stage.is-single {
+      padding-block: 0;
+      padding-inline: 0;
+    }
+
+    .spread-reader__canvas {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .spread-reader__filmstrip {
+      padding-inline: 0.625rem;
+    }
+
+    .spread-reader__slot {
+      border-radius: 0.75rem;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .spread-reader * {
+      scroll-behavior: auto;
+      transition-duration: 0ms;
+    }
+  }
+}

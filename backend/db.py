@@ -508,6 +508,12 @@ def _ensure_viewer_schema(cursor: sqlite3.Cursor) -> None:
         cursor.execute(
             "ALTER TABLE viewer_library_job ADD COLUMN colors_created INTEGER NOT NULL DEFAULT 0"
         )
+    managed_folder_columns = {
+        row["name"]
+        for row in cursor.execute("PRAGMA table_info(viewer_managed_folder)").fetchall()
+    }
+    if "fanbox_id" not in managed_folder_columns:
+        cursor.execute("ALTER TABLE viewer_managed_folder ADD COLUMN fanbox_id TEXT")
     if "colors_reused" not in job_columns:
         cursor.execute(
             "ALTER TABLE viewer_library_job ADD COLUMN colors_reused INTEGER NOT NULL DEFAULT 0"
@@ -1688,6 +1694,15 @@ def get_managed_folder(identifier: Union[int, str]) -> Optional[Dict[str, Any]]:
                 """,
                 (identifier_text,),
             ).fetchone()
+        elif re.match(r"^[a-f\d]{8}-(?:[a-f\d]{4}-){3}[a-f\d]{12}$", identifier_text, re.IGNORECASE):
+            row = conn.execute(
+                """
+                SELECT * FROM viewer_managed_folder
+                WHERE (folder_id = ? OR folder_id = ?) AND is_active = 1
+                LIMIT 1
+                """,
+                (identifier_text, f"folder:{identifier_text}"),
+            ).fetchone()
         elif identifier_text.startswith("artist:"):
             row = conn.execute(
                 """
@@ -1755,18 +1770,34 @@ def get_artist_scope(identifier: Union[int, str]) -> Optional[Dict[str, Any]]:
     return dict(row) if row else None
 
 
-def set_managed_folder_identity(folder_id: str, status: str) -> Optional[Dict[str, Any]]:
+def set_managed_folder_identity(
+    folder_id: str,
+    status: str,
+    member_id: Optional[int] = None,
+    fanbox_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
     if status not in {"inferred", "verified", "rejected", "unknown"}:
         raise ValueError("Invalid folder identity status")
     init_db_schema()
     with get_db_connection() as conn:
+        updates = ["identity_status = ?"]
+        params: List[Any] = [status]
+        if member_id is not None:
+            updates.append("member_id = ?")
+            params.append(int(member_id))
+        if fanbox_id is not None:
+            updates.append("fanbox_id = ?")
+            clean_fanbox = str(fanbox_id).strip()
+            params.append(clean_fanbox if clean_fanbox else None)
+
+        params.append(str(folder_id).strip())
         cursor = conn.execute(
-            """
+            f"""
             UPDATE viewer_managed_folder
-            SET identity_status = ?
+            SET {", ".join(updates)}
             WHERE folder_id = ? AND is_active = 1
             """,
-            (status, str(folder_id).strip()),
+            tuple(params),
         )
         if cursor.rowcount <= 0:
             return None
@@ -3525,14 +3556,138 @@ def _artist_folder_name_for_media_path(
     return str(matching_scope.get("folder_name") or "") or None
 
 
+def _gallery_result_revision(items: List[Dict[str, Any]]) -> str:
+    """Build a deterministic revision for one committed result snapshot.
+
+    The query already materializes the visible snapshot in memory, so hashing
+    stable row identity here avoids another SQLite scan while still changing
+    whenever a row is added, removed, moved, or its ordering metadata changes.
+    The digest is independent of the requested range and sort order.
+    """
+    digest = hashlib.sha1()
+    stable_rows = sorted(
+        (
+            str(item.get("image_id") or ""),
+            str(item.get("save_name") or ""),
+            str(item.get("file_size") or ""),
+            str(item.get("created_date") or ""),
+            str(item.get("last_update_date") or ""),
+        )
+        for item in items
+    )
+    for row in stable_rows:
+        digest.update("\0".join(row).encode("utf-8", errors="replace"))
+        digest.update(b"\n")
+    return f"gallery-{digest.hexdigest()}"
+
+
+_GALLERY_BASE_CACHE_LOCK = threading.RLock()
+_GALLERY_BASE_CACHE: Dict[Tuple[Any, ...], Tuple[
+    List[Dict[str, Any]],
+    List[Dict[str, Any]],
+    List[Dict[str, Any]],
+    str,
+]] = {}
+_GALLERY_BASE_CACHE_LIMIT = 16
+
+
+def _gallery_database_stamp() -> Tuple[str, int, int]:
+    path = os.path.abspath(DB_PATH)
+    try:
+        stat = os.stat(path)
+        return path, int(stat.st_mtime_ns), int(stat.st_size)
+    except OSError:
+        return path, 0, 0
+
+
+def _hydrate_gallery_page_items(items: List[Dict[str, Any]]) -> None:
+    if not items:
+        return
+    for item in items:
+        path = item.get("save_name")
+        stored_status = item.get("media_status")
+        # Imported PixivUtil2 rows can outlive their source file without ever
+        # receiving a viewer_media_metadata row.  Those rows have no stored
+        # status, so letting the browser discover the problem turns a normal
+        # cold MonthQuickNav jump into two doomed thumbnail requests and a
+        # misleading "thumbnail failed" card.  A cheap existence check keeps
+        # the expensive decode validation limited to already-suspect rows
+        # while still classifying stale paths before they reach the grid.
+        needs_status_refresh = (
+            bool(stored_status)
+            or not path
+            or is_internal_media_path(path)
+            or not os.path.isfile(os.path.abspath(path))
+        )
+        if needs_status_refresh:
+            media_status, media_error = get_media_status(path)
+            if media_status:
+                item["media_status"] = media_status
+                item["media_error"] = media_error
+                continue
+        if not needs_status_refresh or not item.get("media_status"):
+            item.pop("media_status", None)
+            item.pop("media_error", None)
+
+    dominant_colors = get_dominant_colors([
+        _normalise_media_path(item.get("save_name", ""))
+        for item in items
+        if item.get("save_name")
+    ])
+    for item in items:
+        color = dominant_colors.get(_normalise_media_path(item.get("save_name", "")))
+        if color:
+            item["dominant_color"] = color
+
+
 def _get_images_from_viewer_snapshot(
     month: Optional[str],
     artist_id: Optional[Union[int, str]],
-    search: Optional[str],
-    limit: int,
-    offset: int,
-    sort_mode: str,
-) -> Tuple[List[Dict[str, Any]], int, List[Dict[str, Any]]]:
+    folder_id: Optional[Union[int, str]] = None,
+    search: Optional[str] = None,
+    limit: int = 200,
+    offset: int = 0,
+    sort_mode: str = "newest",
+    grouping: str = "ungrouped",
+) -> Tuple[
+    List[Dict[str, Any]],
+    int,
+    List[Dict[str, Any]],
+    List[Dict[str, Any]],
+    str,
+]:
+    # FastAPI runs sync routes in a worker pool. Several sparse chunks for the
+    # same query can therefore arrive together; serialize the first materialize
+    # so followers reuse it instead of each sorting the full library snapshot.
+    with _GALLERY_BASE_CACHE_LOCK:
+        return _get_images_from_viewer_snapshot_locked(
+            month,
+            artist_id,
+            folder_id,
+            search,
+            limit,
+            offset,
+            sort_mode,
+            grouping,
+        )
+
+
+def _get_images_from_viewer_snapshot_locked(
+    month: Optional[str],
+    artist_id: Optional[Union[int, str]],
+    folder_id: Optional[Union[int, str]] = None,
+    search: Optional[str] = None,
+    limit: int = 200,
+    offset: int = 0,
+    sort_mode: str = "newest",
+    grouping: str = "ungrouped",
+) -> Tuple[
+    List[Dict[str, Any]],
+    int,
+    List[Dict[str, Any]],
+    List[Dict[str, Any]],
+    str,
+]:
     """Read gallery data from Viewer SQLite only.
 
     This function is deliberately independent of ``os.walk``, ``scandir`` and
@@ -3540,6 +3695,44 @@ def _get_images_from_viewer_snapshot(
     this query is running; the last committed Viewer snapshot remains usable.
     """
     init_db_schema()
+    effective_limit = max(0, int(limit))
+    effective_offset = max(0, int(offset))
+    is_grouped = str(grouping).strip().lower() in {"grouped", "manga", "true", "1"}
+
+    cache_key = (
+        _gallery_database_stamp(),
+        month or "",
+        str(artist_id) if artist_id is not None else None,
+        str(folder_id) if folder_id is not None else None,
+        search or "",
+        sort_mode,
+        "grouped" if is_grouped else "ungrouped",
+    )
+    cached = _GALLERY_BASE_CACHE.get(cache_key)
+    if cached is not None:
+        cached_items, cached_months, cached_month_index, cached_revision = cached
+        page_items = [
+            dict(item)
+            for item in cached_items[effective_offset:effective_offset + effective_limit]
+        ]
+        _hydrate_gallery_page_items(page_items)
+        return (
+            page_items,
+            len(cached_items),
+            [dict(item) for item in cached_months],
+            [dict(item) for item in cached_month_index],
+            cached_revision,
+        )
+
+    def empty_contract() -> Tuple[
+        List[Dict[str, Any]],
+        int,
+        List[Dict[str, Any]],
+        List[Dict[str, Any]],
+        str,
+    ]:
+        return [], 0, [], [], _gallery_result_revision([])
+
     month_list = [value.strip() for value in month.split(",") if value.strip()] if month else []
     hidden_artist_ids = get_hidden_artist_ids()
     with get_db_connection() as conn:
@@ -3573,27 +3766,32 @@ def _get_images_from_viewer_snapshot(
         for row in managed_rows
     ]
     hidden_scope_directories = get_hidden_artist_scope_directories()
-    normalized_artist_id = _normalise_artist_identifier(artist_id)
+    effective_artist_id = artist_id if artist_id is not None else folder_id
+    if effective_artist_id is not None and isinstance(effective_artist_id, str):
+        stripped_effective = effective_artist_id.strip()
+        if re.match(r"^[a-f\d]{8}-(?:[a-f\d]{4}-){3}[a-f\d]{12}$", stripped_effective, re.IGNORECASE):
+            effective_artist_id = f"folder:{stripped_effective}"
+    normalized_artist_id = _normalise_artist_identifier(effective_artist_id)
     artist_scope_directory: Optional[str] = None
     artist_folder_id: Optional[str] = None
     try:
         root_directory = os.path.abspath(get_configured_root_directory())
     except config_paths.MediaSourceConfigurationError:
-        return [], 0, []
+        return empty_contract()
     if normalized_artist_id is not None and normalized_artist_id != -1:
         managed_folder = get_managed_folder(normalized_artist_id)
         if managed_folder is None:
-            return [], 0, []
+            return empty_contract()
         artist_folder_id = str(managed_folder["folder_id"])
         artist_scope = get_artist_scope(normalized_artist_id)
         if artist_scope is None:
-            return [], 0, []
+            return empty_contract()
         artist_scope_directory = os.path.abspath(str(artist_scope["directory"]))
         if (
             not _stored_media_path_is_within(artist_scope_directory, root_directory, root_directory)
             or os.path.normcase(os.path.dirname(artist_scope_directory)) != os.path.normcase(root_directory)
         ):
-            return [], 0, []
+            return empty_contract()
     items: List[Dict[str, Any]] = []
 
     with get_db_connection() as conn:
@@ -3604,12 +3802,8 @@ def _get_images_from_viewer_snapshot(
         if month_list:
             month_conditions = []
             for value in month_list:
-                month_conditions.append(
-                    "strftime('%Y', i.created_date) = ?"
-                    if len(value) == 4
-                    else "strftime('%Y-%m', i.created_date) = ?"
-                )
-                params.append(value)
+                month_conditions.append("i.created_date LIKE ?")
+                params.append(f"{value}%")
             conditions.append("(" + " OR ".join(month_conditions) + ")")
         if normalized_artist_id is not None:
             if normalized_artist_id == -1:
@@ -3639,6 +3833,7 @@ def _get_images_from_viewer_snapshot(
         rows = conn.execute(
             f"""
             SELECT i.image_id, i.member_id, i.title, i.save_name,
+                   metadata.file_size AS file_size,
                    i.created_date, i.last_update_date, m.name AS artist_name,
                    metadata.folder_id,
                    CASE WHEN metadata.is_present = 0 THEN 'missing' END AS media_status
@@ -3695,6 +3890,7 @@ def _get_images_from_viewer_snapshot(
             manga_rows = conn.execute(
                 f"""
                 SELECT mg.image_id, i.member_id, i.title, mg.save_name,
+                       metadata.file_size AS file_size,
                        mg.created_date, mg.last_update_date, m.name AS artist_name,
                        metadata.folder_id,
                        CASE WHEN metadata.is_present = 0 THEN 'missing' END AS media_status
@@ -3758,13 +3954,37 @@ def _get_images_from_viewer_snapshot(
     all_items = _sort_gallery_items(list(deduplicated.values()), sort_mode)
     _annotate_group_page_numbers(all_items)
 
+    # Preserve a stable grouped-card position in the sparse range response.
+    # The position is scoped to the month section because the gallery groups
+    # by month before it groups pages into a work card.
+    month_group_totals: Dict[Tuple[str, str], int] = {}
+    for item in all_items:
+        month_key = (item.get("created_date") or "")[:7]
+        group_key = _get_image_group_key(item)
+        month_group_totals[(month_key, group_key)] = month_group_totals.get((month_key, group_key), 0) + 1
+    month_card_totals = {
+        month_key: sum(1 for key in month_group_totals if key[0] == month_key)
+        for month_key in {key[0] for key in month_group_totals}
+    }
+    month_group_indexes: Dict[str, Dict[str, int]] = {}
+    for item in all_items:
+        month_key = (item.get("created_date") or "")[:7]
+        group_key = _get_image_group_key(item)
+        month_indexes = month_group_indexes.setdefault(month_key, {})
+        if group_key not in month_indexes:
+            month_indexes[group_key] = len(month_indexes)
+        item["group_card_index"] = month_indexes[group_key]
+        item["group_card_total"] = month_card_totals.get(month_key, 1)
+
     available_month_counts: Dict[str, int] = {}
     available_month_offsets: Dict[str, int] = {}
+    available_month_groups: Dict[str, set[str]] = {}
     for item_offset, item in enumerate(all_items):
         month_key = (item.get("created_date") or "")[:7]
         if len(month_key) == 7 and month_key[4] == "-":
             available_month_counts[month_key] = available_month_counts.get(month_key, 0) + 1
             available_month_offsets.setdefault(month_key, item_offset)
+            available_month_groups.setdefault(month_key, set()).add(_get_image_group_key(item))
     available_months = [
         {
             "month": month_key,
@@ -3775,48 +3995,47 @@ def _get_images_from_viewer_snapshot(
         if count > 0
     ]
 
-    page_items = all_items[offset:offset + limit]
-    if page_items:
-        for item in page_items:
-            path = item.get("save_name")
-            stored_status = item.get("media_status")
-            # Keep the normal gallery path to a cheap stat/header check. Full
-            # raster decoding is reserved for rows already flagged by the
-            # snapshot or files that are missing/obviously invalid, so a page
-            # refresh does not decode every visible image again.
-            needs_status_refresh = bool(stored_status) or not path
-            if path and not needs_status_refresh:
-                needs_status_refresh = not os.path.isfile(path) or not is_usable_media_file(path)
+    month_index = [
+        {
+            "key": month_key,
+            "month": month_key,
+            "label": month_key,
+            "offset": available_month_offsets[month_key],
+            "image_count": count,
+            "card_count": len(available_month_groups.get(month_key, set())) if is_grouped else count,
+        }
+        for month_key, count in sorted(
+            available_month_counts.items(),
+            key=lambda entry: available_month_offsets[entry[0]],
+        )
+        if count > 0
+    ]
 
-            if needs_status_refresh:
-                media_status, media_error = get_media_status(path)
-                if media_status:
-                    item["media_status"] = media_status
-                    item["media_error"] = media_error
-                    continue
+    revision = _gallery_result_revision(all_items)
+    _GALLERY_BASE_CACHE[cache_key] = (
+        [dict(item) for item in all_items],
+        [dict(item) for item in available_months],
+        [dict(item) for item in month_index],
+        revision,
+    )
+    while len(_GALLERY_BASE_CACHE) > _GALLERY_BASE_CACHE_LIMIT:
+        _GALLERY_BASE_CACHE.pop(next(iter(_GALLERY_BASE_CACHE)))
 
-            # The database snapshot can briefly say "missing" while a copied
-            # file is still being indexed. Reconcile the visible page against
-            # the current file signature on every refresh so a repaired file
-            # can immediately return to thumbnail loading.
-            if not needs_status_refresh or not item.get("media_status"):
-                item.pop("media_status", None)
-                item.pop("media_error", None)
-        dominant_colors = get_dominant_colors([
-            _normalise_media_path(item.get("save_name", ""))
-            for item in page_items
-            if item.get("save_name")
-        ])
-        for item in page_items:
-            color = dominant_colors.get(_normalise_media_path(item.get("save_name", "")))
-            if color:
-                item["dominant_color"] = color
-    return page_items, len(all_items), available_months
+    page_items = [dict(item) for item in all_items[effective_offset:effective_offset + effective_limit]]
+    _hydrate_gallery_page_items(page_items)
+    return (
+        page_items,
+        len(all_items),
+        available_months,
+        month_index,
+        revision,
+    )
 
 
 def get_images(
     month: Optional[str] = None,
     artist_id: Optional[Union[int, str]] = None,
+    folder_id: Optional[Union[int, str]] = None,
     search: Optional[str] = None,
     limit: int = 200,
     offset: int = 0,
@@ -3826,14 +4045,53 @@ def get_images(
     # Gallery reads must never synchronously reconcile the source directory.
     # ``only_show_db_files`` remains in the signature for API compatibility;
     # both modes now use the last committed Viewer snapshot.
-    return _get_images_from_viewer_snapshot(
+    result = _get_images_from_viewer_snapshot(
         month,
         artist_id,
+        folder_id,
         search,
         limit,
         offset,
         sort_mode,
     )
+    return result[:3]
+
+
+def get_images_range(
+    month: Optional[str] = None,
+    artist_id: Optional[Union[int, str]] = None,
+    folder_id: Optional[Union[int, str]] = None,
+    search: Optional[str] = None,
+    limit: int = 200,
+    offset: int = 0,
+    only_show_db_files: bool = False,
+    sort_mode: str = "newest",
+    grouping: str = "ungrouped",
+) -> Dict[str, Any]:
+    """Return a backward-compatible sparse range and its global layout data."""
+    page_items, total, months, month_index, revision = _get_images_from_viewer_snapshot(
+        month,
+        artist_id,
+        folder_id,
+        search,
+        limit,
+        offset,
+        sort_mode,
+        grouping,
+    )
+    effective_limit = max(0, int(limit))
+    effective_offset = max(0, int(offset))
+    return {
+        "images": page_items,
+        "total": total,
+        "limit": effective_limit,
+        "offset": effective_offset,
+        "revision": revision,
+        # ``months`` is the legacy response shape. New readers use the richer
+        # ``month_index`` field below while old pagination remains untouched.
+        "months": months,
+        "month_index": month_index,
+    }
 
 def get_image_paths_by_ids(image_ids: List[int]) -> List[Tuple[int, str]]:
     """Return database media paths for the requested image IDs."""

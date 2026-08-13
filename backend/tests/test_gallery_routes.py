@@ -1,6 +1,6 @@
 import unittest
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import MagicMock, Mock
 
 from fastapi import HTTPException
 import main
@@ -61,6 +61,35 @@ class GalleryRouteTests(unittest.TestCase):
             offset=48,
             only_db=False,
             sort_mode="oldest",
+        )
+
+    def test_gallery_route_forwards_folder_id(self):
+        service = SimpleNamespace(
+            images=MagicMock(return_value=([{"image_id": 9}], 1, []))
+        )
+        request = SimpleNamespace(
+            app=SimpleNamespace(
+                state=SimpleNamespace(
+                    runtime_context=SimpleNamespace(gallery_service=service),
+                ),
+            ),
+        )
+
+        result = read_images(
+            request,
+            folder_id="064a0f75-ab29-42d1-aae6-5c469bd0774a",
+        )
+
+        self.assertEqual(result["images"], [{"image_id": 9}])
+        service.images.assert_called_once_with(
+            month=None,
+            artist_id=None,
+            folder_id="064a0f75-ab29-42d1-aae6-5c469bd0774a",
+            search=None,
+            limit=200,
+            offset=0,
+            only_db=False,
+            sort_mode="newest",
         )
 
     def test_gallery_route_requires_ready_runtime_context(self):

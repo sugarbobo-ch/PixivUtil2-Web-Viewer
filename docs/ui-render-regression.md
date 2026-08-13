@@ -4,10 +4,10 @@
 
 ## Automated gate
 
-- `frontend/pnpm.cmd lint`（TypeScript no-unused baseline）
-- `frontend/pnpm.cmd test`
-- `frontend/pnpm.cmd build`
-- `(backend/) python -m unittest discover -s tests -v`
+- `(frontend/) ..\.runtime\pnpm\pnpm.cmd lint`（TypeScript no-unused baseline）
+- `(frontend/) ..\.runtime\pnpm\pnpm.cmd test`
+- `(frontend/) ..\.runtime\pnpm\pnpm.cmd build`
+- `(backend/) ..\.runtime\backend-venv\Scripts\python.exe -m unittest discover -s tests -v`
 - `py_compile` for backend route/service modules and `scripts/measure-web-viewer-performance.py`
 - `python scripts/check-reduced-motion.py`（10 個 reduced-motion CSS selector/declaration contract）
 - `git diff --check`
@@ -52,3 +52,38 @@ long-task measurement because the available page-evaluation API does not
 expose `PerformanceObserver`; the reduced-motion reduce and no-preference
 browser gates have both been verified in Chrome, so no browser-only gate
 remains in this matrix.
+
+## 2026-08-12 refactor / i18n / spread gate
+
+- `..\.runtime\pnpm\pnpm.cmd exec tsc --noEmit` passed from `frontend/`.
+- `..\.runtime\pnpm\pnpm.cmd test` passed from `frontend/`: 37 test files, 142 tests. Vitest still prints the existing jsdom `HTMLMediaElement.pause()` not-implemented notice; it is not a failed test.
+- `..\.runtime\pnpm\pnpm.cmd build` passed from `frontend/`. Initial JS is now `500.06 kB` raw / `145.17 kB` gzip; initial CSS is `150.99 kB` raw / `23.18 kB` gzip. Vite reports the initial chunk is only slightly above its 500 kB warning threshold; the change is the development-only pseudo QA switch. Reader/settings implementation is emitted as separate chunks: Fullscreen `70.15 kB` JS + `28.50 kB` CSS, Settings `99.71 kB` JS + `20.05 kB` CSS, Webtoon `24.14 kB` JS + `15.09 kB` CSS, Spread `14.93 kB` JS + `7.00 kB` CSS, plus low-frequency modal chunks.
+- Backend unittest gate passed: 70 tests. Backend `py_compile` passed for the route/service modules. `scripts/check-reduced-motion.py` passed all 10 CSS contracts. `git diff --check` passed.
+- Forbidden-style scoped scan returned no matches for purple/indigo/violet/fuchsia/magenta, shadow/glow declarations, or `transition: all` in `frontend/src`.
+- Browser smoke on the real local gallery (14,627 works) passed with no error/warning entries after final reload. Settings opened in dark mode; language selector switched to English without reload, synchronized `document.lang=en`/`dir=ltr`, rendered English tabs/options, and localized the save feedback. Fullscreen video reached `is-video-ready` after the `useViewerVideo` extraction. The saved configuration was restored to `zh-TW`, dark theme, simple toolbar, single page, LTR.
+- Spread smoke passed with a temporary persisted `en` + `spread` + `rtl` fixture: the cover stayed single, next spread navigation rendered pages `63–64`, RTL DOM order was page 64 then page 63, LTR toggle rendered page 63 then page 64, and the dark-mode screenshot showed readable neutral surfaces and semantic blue selected controls with no shadow/glow. The desktop spread toolbar was then changed to wrap its controls so RTL no longer clipped the first control; the narrow breakpoint keeps horizontal operation. The fixture was restored afterward.
+- Responsive 390×844 single fallback, earlier desktop/light/dark Settings, and webtoon/fullscreen real-media smoke remain recorded above; the remaining QA-702 gap is a real screen-reader session and native browser 200% device-level verification. The automated pseudo-localization and locale-formatting tests are green.
+- Follow-up Settings smoke after content extraction: real Gallery opened Web／Library／Pixiv／Backup tabs; English was applied by saving the Web tab, `document.lang` became `en` without reload, and Pixiv section tabs plus field labels/descriptions rendered localized copy. The persisted `uiLanguage` was restored to `zh-TW`; no new browser alert/error was observed.
+- 2026-08-13 i18n split: translation dictionaries moved to four editable JSON files (`zh-TW`／`zh-CN`／`en`／`ja`). The full frontend suite passed 216 tests and the production build succeeded; coverage verifies identical key and placeholder sets, Simplified Chinese normalization, locale persistence, and contextual Pixiv settings copy. Manual light/dark and narrow-width rendering for `zh-CN` remains to be checked in a future browser smoke pass.
+- 2026-08-13 config.ini localization follow-up: all 11 documented sections and 139 known fields now load explicit labels and full descriptions from four editable `config-locales` JSON files. Tests verify complete key coverage, runtime lookup, and preservation of technical identifiers; manual narrow-width rendering remains pending.
+- Fullscreen image lifecycle follow-up: `useViewerImage` now owns active admission, directional preload, decoded-image retention, transition suppression, stale reload and error cleanup; the parent retains composition and the video reload bridge. The added hook test and the full 37-file／142-test suite pass. The final build reports initial JS `500.06 kB` raw / `145.17 kB` gzip and Fullscreen `70.15 kB` JS.
+- Responsive follow-up: at a temporary 320px viewport, Gallery and mobile menu had no body overflow; Settings dialog controls remained inside the viewport and its four tabs plus Pixiv category tabs remained horizontally scrollable. At a 640px viewport used as a 200% equivalent CSS viewport, header, dialog, tabs and primary controls had no clipping. The temporary viewport was reset after verification.
+- Pseudo-locale follow-up: with development `?qa-pseudo=1` and saved `en`, real Gallery and Settings rendered expanded copy at 320px without body overflow; main Settings tabs and Pixiv category tabs remained horizontally scrollable, while the content area remained vertically scrollable. The 640px equivalent CSS viewport also kept the dialog and primary controls operable; runtime error/warning logs were empty. The saved language was restored to `zh-TW` and the temporary viewport was reset.
+- Accessible browser-surface follow-up: the Settings accessibility tree exposed the dialog heading, `tablist`／four `tab` nodes, selected `tabpanel`, switches, slider and live status; eight Tab keypresses stayed inside the dialog focus boundary. This verifies DOM semantics and keyboard containment, but does not replace a real screen-reader speech session.
+
+## 2026-08-13 sparse global media window gate
+
+- Cold-tab Gallery validation used a fresh Vite tab on port 3001 backed by a newly started FastAPI process on port 8001. The first range response contained `revision`, `total=14,627`, and `month_index`; no legacy current-page request was needed with the default `VITE_ENABLE_LEGACY_PAGINATION=false` path.
+- MonthQuickNav moved the gallery scroll container from `0` to `393,788` on a cold tail jump before the target range settled. After the range loaded, the tail showed ready cards with no visible skeletons and the track remained bounded to the viewport rows.
+- Single fullscreen and spread fullscreen crossed the tail range boundary through `14,600`–`14,627`; counters remained global and no console error or warning was observed. The bounded filmstrip remained mounted only for the reader window.
+- Webtoon opened at `14,618 / 14,627` with eight virtual articles. Eight ArrowDown actions produced monotonic article windows (`14,619…14,626` through `14,624…14,627`) and monotonic scroll positions (`90,260` through `93,138`); the previous range-anchor oscillation did not recur.
+- This historical browser run used a five-chunk cap. Current production limits and the required capacity gate live in `docs/global-gallery-navigation-contract.md`; reader windows remained at 160 items, thumbnail admission at 12 concurrent loads, originals at 2, completed URL retention at 384, and Gallery/Webtoon DOM used bounded virtual windows. The active Settings UI no longer exposes the old page-size field; the old loader remains an explicit opt-in rollback path only.
+- Final cold-tab follow-up after the initial-anchor gate: a tail entry opened with the requested global index and active anchor aligned, then five consecutive ArrowDown steps advanced `14,619 → 14,623` with strictly increasing `scrollTop`; the final tail articles `14,624…14,627` all rendered original media. The browser emitted no error or warning entries.
+- A held ruler drag continuously updated the slider to `aria-valuenow=99` (`2018 年 05 月`) and populated the target tail range without waiting for pointer-up. Single and spread readers both crossed `14,599 → 14,600` with continuous global counters and no new browser diagnostics.
+
+## 2026-08-13 Agent 文件同步 gate
+
+- 修正 Agent 文件中的 project-local pnpm 路徑與 backend `unittest` 命令；`frontend/` 的 `..\.runtime\pnpm\pnpm.cmd test:gallery-contract` 通過 7 files／29 tests，repository root 的指定 backend contract 命令通過 13 tests。
+- 完整 frontend suite 通過 48 files／216 tests；jsdom 仍只輸出既有的 `HTMLMediaElement.pause()` not-implemented 提示，沒有 failed test。
+- Production build 通過。當次輸出為 initial JS `586.60 kB` raw／`169.88 kB` gzip、initial CSS `152.16 kB` raw／`23.37 kB` gzip；Vite 仍提示 initial chunk 超過 500 kB，屬警告而非 build failure。
+- 本批只修改 README 與 Agent／contract 文件，未改 UI 或資料行為，因此沒有新增 browser render 結果；簡中 light／dark、窄寬與真實 screen-reader session 的既有待驗狀態不變。

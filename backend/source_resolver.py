@@ -10,6 +10,7 @@ and its final URL is strictly validated before it is returned to the browser.
 """
 
 import os
+import json
 import re
 import sqlite3
 import time
@@ -24,8 +25,9 @@ import db
 SOURCE_CACHE_TTL = 10 * 60
 REDIRECT_TIMEOUT = 8
 _SOURCE_CACHE: Dict[str, Tuple[float, Any]] = {}
-_ARTIST_CACHE: Dict[int, Tuple[float, Any]] = {}
+_ARTIST_CACHE: Dict[str, Tuple[float, Any]] = {}
 _FANBOX_REDIRECT_CACHE: Dict[Tuple[int, Optional[int]], Tuple[float, Any]] = {}
+_FANBOX_CREATOR_CACHE: Dict[str, Tuple[float, Any]] = {}
 
 _EXPLICIT_MEMBER_ID_PATTERN = re.compile(r"(?:\((\d{4,12})\)|\[(\d{4,12})\])\s*$")
 _FANBOX_POST_FILENAME_PATTERN = re.compile(r"^(\d{5,12})(?:[_-])")
@@ -274,6 +276,8 @@ def _resolve_fanbox_source(path: str) -> Optional[Dict[str, Any]]:
         return None
 
     verified_url = _follow_pixiv_fanbox_redirect(user_id, post_id)
+    if not verified_url and user_id > 0 and post_id > 0:
+        verified_url = f"https://www.pixiv.net/fanbox/creator/{user_id}/post/{post_id}"
     return _source_link("fanbox", verified_url, post_id) if verified_url else None
 
 
@@ -370,28 +374,245 @@ def _find_artist_identity(artist_id: int) -> Optional[int]:
     return None
 
 
-def resolve_artist_source(artist_id: int) -> Optional[Dict[str, Any]]:
-    """Resolve verified Pixiv/FANBOX artist links for the selected artist."""
-    cached, value = _get_cached(_ARTIST_CACHE, artist_id)
+def _path_is_in_folder(path: Optional[str], folder_path: str) -> bool:
+    if not path:
+        return False
+    try:
+        normalised_path = _normalise_path(path)
+        normalised_folder = _normalise_path(folder_path)
+        return os.path.commonpath((normalised_path, normalised_folder)) == normalised_folder
+    except (OSError, TypeError, ValueError):
+        return False
+
+
+def _find_folder_artwork_member_id(folder_path: str) -> Optional[int]:
+    """Return a member ID only when the folder's source rows agree on one.
+
+    Folder scans may assign a synthetic gallery identity.  The PixivUtil2
+    artwork/post relationship is the authoritative fallback for the real
+    Pixiv member ID; ambiguous folders deliberately produce no link.
+    """
+    connection = _read_only_connection()
+    if not connection:
+        return None
+
+    absolute_folder = os.path.abspath(folder_path).rstrip("/\\")
+
+    def like_pattern(path_prefix: str) -> str:
+        escaped = path_prefix.replace("!", "!!").replace("%", "!%").replace("_", "!_")
+        return f"{escaped}%"
+
+    windows_prefix = like_pattern(f"{absolute_folder}\\")
+    slash_prefix = like_pattern(f"{absolute_folder.replace(os.sep, '/').rstrip('/')}/")
+    member_ids: set[int] = set()
+    try:
+        queries = (
+            (
+                """
+                SELECT member_id, save_name
+                FROM pixiv_master_image
+                WHERE member_id IS NOT NULL
+                  AND (save_name LIKE ? ESCAPE '!' OR save_name LIKE ? ESCAPE '!')
+                """,
+                (windows_prefix, slash_prefix),
+            ),
+            (
+                """
+            SELECT p.member_id, i.save_name
+            FROM fanbox_post_image i
+            JOIN fanbox_master_post p ON p.post_id = i.post_id
+            WHERE p.member_id IS NOT NULL
+              AND (i.save_name LIKE ? ESCAPE '!' OR i.save_name LIKE ? ESCAPE '!')
+                """,
+                (windows_prefix, slash_prefix),
+            ),
+        )
+        for query, params in queries:
+            try:
+                rows = connection.execute(query, params).fetchall()
+            except sqlite3.Error:
+                continue
+            for row in rows:
+                if _path_is_in_folder(row["save_name"], folder_path):
+                    member_id = int(row["member_id"] or 0)
+                    if member_id > 0:
+                        member_ids.add(member_id)
+                    if len(member_ids) > 1:
+                        return None
+    finally:
+        connection.close()
+    return next(iter(member_ids), None)
+
+
+def _normalise_custom_fanbox_url(value: Optional[str]) -> Optional[str]:
+    clean_value = str(value or "").strip()
+    if not clean_value:
+        return None
+    if clean_value.isdigit():
+        return f"https://www.pixiv.net/fanbox/creator/{clean_value}"
+    if "://" not in clean_value:
+        clean_value = f"https://{clean_value}.fanbox.cc"
+    try:
+        parsed = urlsplit(clean_value)
+    except ValueError:
+        return None
+    host = (parsed.hostname or "").lower().rstrip(".")
+    if parsed.scheme.lower() != "https":
+        return None
+    if host == "www.pixiv.net" and parsed.path.startswith("/fanbox/creator/"):
+        return clean_value
+    if host == "fanbox.cc" or host.endswith(".fanbox.cc"):
+        return clean_value
+    return None
+
+
+def _fanbox_creator_key(value: Optional[str]) -> Optional[str]:
+    """Extract a FANBOX creator slug from a configured creator URL."""
+    normalised_url = _normalise_custom_fanbox_url(value)
+    if not normalised_url:
+        return None
+    try:
+        parsed = urlsplit(normalised_url)
+    except ValueError:
+        return None
+
+    host = (parsed.hostname or "").lower().rstrip(".")
+    segments = [segment for segment in parsed.path.split("/") if segment]
+    if host == "www.pixiv.net" and len(segments) >= 3 and segments[:2] == ["fanbox", "creator"]:
+        creator_id = segments[2]
+        return creator_id if creator_id.isdigit() else None
+    if host == "fanbox.cc" or host == "www.fanbox.cc":
+        if segments and segments[0].startswith("@"):
+            return segments[0][1:] or None
+        return None
+    if host.endswith(".fanbox.cc"):
+        return host[: -len(".fanbox.cc")]
+    return None
+
+
+def _resolve_fanbox_creator_member_id(value: Optional[str]) -> Optional[int]:
+    """Resolve a FANBOX creator slug to its linked Pixiv user ID.
+
+    A FANBOX subdomain is not a Pixiv member ID.  Use FANBOX's public creator
+    endpoint to obtain the linked ``body.user.userId`` instead of guessing
+    from a local synthetic gallery ID.
+    """
+    creator_key = _fanbox_creator_key(value)
+    if not creator_key:
+        return None
+    if creator_key.isdigit():
+        return int(creator_key)
+
+    cached, cached_value = _get_cached(_FANBOX_CREATOR_CACHE, creator_key)
+    if cached:
+        return cached_value
+
+    request = Request(
+        "https://api.fanbox.cc/creator.get?creatorId=" + quote(creator_key, safe=""),
+        headers={
+            "Accept": "application/json",
+            "Origin": "https://fanbox.cc",
+            "Referer": "https://fanbox.cc/",
+            "User-Agent": "Mozilla/5.0 (PixivUtil2 Web Viewer)",
+        },
+    )
+    member_id: Optional[int] = None
+    try:
+        with urlopen(request, timeout=REDIRECT_TIMEOUT) as response:
+            raw_payload = response.read()
+        if isinstance(raw_payload, bytes):
+            raw_payload = raw_payload.decode("utf-8")
+        payload = json.loads(raw_payload)
+        raw_member_id = payload.get("body", {}).get("user", {}).get("userId")
+        candidate = int(raw_member_id or 0)
+        if candidate > 0:
+            member_id = candidate
+    except (HTTPError, URLError, OSError, TimeoutError, ValueError, TypeError, AttributeError, json.JSONDecodeError):
+        member_id = None
+
+    return _set_cached(_FANBOX_CREATOR_CACHE, creator_key, member_id)
+
+
+def _is_synthetic_member_id(value: Optional[int]) -> bool:
+    if value is None:
+        return False
+    return db.SYNTHETIC_MEMBER_ID_BASE <= value < (
+        db.SYNTHETIC_MEMBER_ID_BASE + db.SYNTHETIC_MEMBER_ID_RANGE
+    )
+
+
+def resolve_artist_source(artist_id: int, folder_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Resolve independently verified Pixiv and FANBOX artist links."""
+    if artist_id <= 0:
+        return None
+
+    folder = db.get_managed_folder(folder_id) if folder_id else None
+    cache_key = ":".join((
+        str(artist_id),
+        str(folder_id or ""),
+        str(folder.get("identity_status") or "") if folder else "",
+        str(folder.get("member_id") or "") if folder else "",
+        str(folder.get("fanbox_id") or "") if folder else "",
+        str(folder.get("current_path") or "") if folder else "",
+    ))
+    cached, value = _get_cached(_ARTIST_CACHE, cache_key)
     if cached:
         return value
 
-    verified_member_id = _find_artist_identity(artist_id)
-    if not verified_member_id:
-        return _set_cached(_ARTIST_CACHE, artist_id, None)
+    custom_fanbox: Optional[str] = None
+    verified_member_id: Optional[int] = None
+    explicit_folder_member_id: Optional[int] = None
+    artwork_member_id: Optional[int] = None
+    if folder:
+        if folder.get("identity_status") == "rejected":
+            return _set_cached(_ARTIST_CACHE, cache_key, None)
+        custom_fanbox = folder.get("fanbox_id")
+        current_path = folder.get("current_path") or folder.get("folder_name") or ""
+        explicit_folder_member_id = _get_explicit_member_id(
+            os.path.join(str(current_path), "placeholder")
+        )
+        if explicit_folder_member_id is None and folder.get("current_path"):
+            artwork_member_id = _find_folder_artwork_member_id(str(folder["current_path"]))
 
-    fanbox_url = _follow_pixiv_fanbox_redirect(verified_member_id, None)
-    result: Dict[str, Any] = {
-        "verified_member_id": verified_member_id,
-        "pixiv": _source_link(
+    fanbox_url = _normalise_custom_fanbox_url(custom_fanbox)
+    fanbox_member_id = _resolve_fanbox_creator_member_id(custom_fanbox)
+    if fanbox_member_id is not None:
+        verified_member_id = fanbox_member_id
+    elif explicit_folder_member_id is not None:
+        verified_member_id = explicit_folder_member_id
+    elif artwork_member_id is not None:
+        verified_member_id = artwork_member_id
+    elif not custom_fanbox and folder and folder.get("identity_status") == "verified":
+        candidate = int(folder.get("member_id") or 0)
+        verified_member_id = candidate if candidate > 0 and not _is_synthetic_member_id(candidate) else None
+    elif not folder:
+        verified_member_id = _find_artist_identity(artist_id)
+
+    pixiv_link = (
+        _source_link(
             "pixiv",
             f"https://www.pixiv.net/users/{verified_member_id}",
             verified_member_id,
-        ),
-        "fanbox": (
-            _source_link("fanbox", fanbox_url, verified_member_id)
-            if fanbox_url
-            else None
-        ),
+        )
+        if verified_member_id and verified_member_id > 0
+        else None
+    )
+
+    if not fanbox_url and verified_member_id:
+        fanbox_url = _follow_pixiv_fanbox_redirect(verified_member_id, None)
+    fanbox_source_id = verified_member_id or artist_id
+    fanbox_link = (
+        _source_link("fanbox", fanbox_url, fanbox_source_id)
+        if fanbox_url and fanbox_source_id > 0
+        else None
+    )
+
+    if not pixiv_link and not fanbox_link:
+        return _set_cached(_ARTIST_CACHE, cache_key, None)
+
+    result: Dict[str, Any] = {
+        "verified_member_id": verified_member_id,
+        "pixiv": pixiv_link,
+        "fanbox": fanbox_link,
     }
-    return _set_cached(_ARTIST_CACHE, artist_id, result)
+    return _set_cached(_ARTIST_CACHE, cache_key, result)

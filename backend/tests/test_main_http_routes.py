@@ -258,6 +258,20 @@ class MainHttpRouteCharacterizationTests(unittest.TestCase):
         self.assertEqual(result["trashed_db_entries"], 1)
         self.assertEqual(result["errors"], [])
 
+    def test_artist_source_link_route_resolves_for_artists(self):
+        with patch(
+            "db.get_managed_folder",
+            return_value={"folder_id": "folder:123", "member_id": 12345, "identity_status": "inferred"},
+        ), patch(
+            "source_resolver.resolve_artist_source",
+            return_value={"verified_member_id": 12345, "pixiv": {"platform": "pixiv", "url": "https://www.pixiv.net/users/12345", "source_id": "12345", "verified": True}, "fanbox": None},
+        ):
+            status_code, _, body = self.request("GET", "/api/artist-source-link", query="artist_id=12345")
+            self.assertEqual(status_code, 200)
+            data = json.loads(body)
+            self.assertEqual(data["verified_member_id"], 12345)
+            self.assertEqual(data["pixiv"]["url"], "https://www.pixiv.net/users/12345")
+
     def test_artist_and_recycle_bin_routes_keep_response_contract(self):
         rejected_status, _, _ = self.request("POST", "/api/artists/-1/trash")
         self.assertEqual(rejected_status, 422)

@@ -1,0 +1,606 @@
+{
+  "sections": {
+    "Network": {
+      "label": "ネットワーク設定",
+      "description": "PixivUtil2 の接続、再試行、バージョン チェック動作を制御します。"
+    },
+    "Debug": {
+      "label": "デバッグとログ",
+      "description": "デバッグ ページ、ログ出力、コンソール表示を制御します。"
+    },
+    "IrfanView": {
+      "label": "IrfanView 連携",
+      "description": "ダウンロード完了後に IrfanView を起動するか、ダウンロードリストを作成するかを設定します。"
+    },
+    "Settings": {
+      "label": "一般設定",
+      "description": "ダウンロードのルートディレクトリ、データベース、画像情報の出力方法を制御します。"
+    },
+    "Filename": {
+      "label": "ファイル名とフォルダー",
+      "description": "画像、情報ファイル、シリーズデータ、タグディレクトリの命名規則を制御します。"
+    },
+    "Authentication": {
+      "label": "ログインと認証",
+      "description": "Pixiv、Fanbox、Cloudflareのログインに必要な認証情報を保存します。"
+    },
+    "Pixiv": {
+      "label": "Pixiv ダウンロード",
+      "description": "ダウンロードする Pixiv 作品の範囲、R-18 フィルター、データベースへ保存する情報を設定します。"
+    },
+    "FANBOX": {
+      "label": "FANBOX ダウンロード",
+      "description": "Fanbox の表紙、記事の HTML、作品情報の保存方法を制御します。"
+    },
+    "FFmpeg": {
+      "label": "FFmpeg 変換",
+      "description": "うごイラを動画やアニメーション画像へ変換するときに使用する FFmpeg 実行ファイルとパラメーターを設定します。"
+    },
+    "Ugoira": {
+      "label": "うごイラ変換",
+      "description": "うごイラの元ファイルを保存するか、どの変換形式を作成するかを設定します。"
+    },
+    "DownloadControl": {
+      "label": "ダウンロード制御",
+      "description": "ファイルサイズの制御、更新判定、ブラックリスト、後処理、圧縮保存。"
+    }
+  },
+  "fields": {
+    "Network.useproxy": {
+      "label": "プロキシサーバーを有効にする",
+      "description": "True に設定すると、すべてのネットワーク リクエストは proxyAddress で指定されたプロキシを使用します。"
+    },
+    "Network.proxyaddress": {
+      "label": "プロキシサーバーアドレス",
+      "description": "http、socks4、socks5 形式に対応し、ユーザー名、パスワード、ポートも指定できます。"
+    },
+    "Network.useragent": {
+      "label": "ブラウザユーザーエージェント",
+      "description": "Pixiv に送信されるブラウザ識別文字列。通常、ブラウザの現在のユーザー エージェントを維持します。"
+    },
+    "Network.userobots": {
+      "label": "robots.txt を読む",
+      "description": "mechanize で使用される robots.txt ルールをダウンロードして従うかどうか。"
+    },
+    "Network.timeout": {
+      "label": "接続タイムアウト秒数",
+      "description": "この秒数を超えて待機すると、接続は失敗したとみなされます。"
+    },
+    "Network.retry": {
+      "label": "再試行回数",
+      "description": "ネットワークリクエストが失敗した場合の再試行回数。"
+    },
+    "Network.retrywait": {
+      "label": "再試行を待つ秒数",
+      "description": "各再試行の前に待機する秒数。"
+    },
+    "Network.downloaddelay": {
+      "label": "ダウンロード遅延の上限",
+      "description": "各作品をダウンロードする前のランダム待機時間の上限です。0 にすると無効になります。"
+    },
+    "Network.checknewversion": {
+      "label": "新しいバージョンを確認する",
+      "description": "GitHub で PixivUtil2 の新しいバージョンを確認するかどうか。"
+    },
+    "Network.notifybetaversion": {
+      "label": "ベータ版を通知する",
+      "description": "ベータ版の更新通知を表示するかどうか。"
+    },
+    "Network.opennewversion": {
+      "label": "新しいバージョンのページを開く",
+      "description": "新しいバージョンが検出されたときに、ブラウザでリリース ページを自動的に開くかどうか。"
+    },
+    "Network.enablesslverification": {
+      "label": "SSL証明書を検証する",
+      "description": "SSL証明書を検証するかどうか。無効にすることは、SSL エラーが引き続き発生する場合にのみ推奨されます。"
+    },
+    "Debug.loglevel": {
+      "label": "ログレベル",
+      "description": "使用可能な値は、CRITICAL、ERROR、WARNING、INFO、DEBUG、NOTSET です。"
+    },
+    "Debug.enabledump": {
+      "label": "HTMLダンプを有効にする",
+      "description": "エラーが発生したときに、デバッグ用に HTML ページを保存するかどうか。"
+    },
+    "Debug.skipdumpfilter": {
+      "label": "スキップダンプエラーコード",
+      "description": "正規表現を使用して、HTML ダンプを保存しないエラー コード (1.*|2.* など) を指定します。"
+    },
+    "Debug.dumpmediumpage": {
+      "label": "medium ページを保存",
+      "description": "デバッグ用にすべての medium ページを保存するかどうか。"
+    },
+    "Debug.dumptagsearchpage": {
+      "label": "保存タグ検索ページ",
+      "description": "デバッグ用にタグ検索ページを保存するかどうか。"
+    },
+    "Debug.debughttp": {
+      "label": "HTTP ヘッダーを出力",
+      "description": "接続問題の診断用に HTTP ヘッダーをコンソールへ出力するかどうか。"
+    },
+    "Debug.disablelog": {
+      "label": "ログファイルを無効にする",
+      "description": "PixivUtil2のログファイル出力を無効にするかどうか。"
+    },
+    "Debug.disablescreenclear": {
+      "label": "コンソールのクリアを無効にする",
+      "description": "プロセス中にメイン コンソール画面を保持し、既存の出力をクリアしないかどうか。"
+    },
+    "IrfanView.irfanviewpath": {
+      "label": "IrfanViewのインストールパス",
+      "description": "IrfanView のインストール ディレクトリ。 IrfanView機能を有効にする際に設定する必要があります。"
+    },
+    "IrfanView.startirfanview": {
+      "label": "終了時に IrfanView を起動",
+      "description": "PixivUtil2 の終了時に、ダウンロードした画像を IrfanView で開くかどうか。"
+    },
+    "IrfanView.startirfanslide": {
+      "label": "終了時にスライドショーを開始",
+      "description": "PixivUtil2 の終了時に IrfanView のスライドショーを開始するかどうか。"
+    },
+    "IrfanView.createdownloadlists": {
+      "label": "ダウンロードリストを自動作成",
+      "description": "IrfanView が使用するダウンロード リストを自動的に作成するかどうか。"
+    },
+    "Settings.downloadlistdirectory": {
+      "label": "ダウンロードリストの保存先",
+      "description": "list.txt と IrfanView ダウンロード リストが保存される場所。空白のままにした場合は、PixivUtil2 ディレクトリを使用します。"
+    },
+    "Settings.uselist": {
+      "label": "list.txtを読む",
+      "description": "list.txt を解析し、それを member_id とカスタム ダウンロード フォルダーの更新に使用するかどうか。"
+    },
+    "Settings.processfromdb": {
+      "label": "データベースから作者フォルダーを読み込む",
+      "description": "データベースに記録されている member_id とフォルダー情報を使用するかどうか。"
+    },
+    "Settings.rootdirectory": {
+      "label": "画像のルートディレクトリ",
+      "description": "ダウンロードした画像と作品フォルダーを保存するルートディレクトリです。"
+    },
+    "Settings.downloadavatar": {
+      "label": "作者のアバターをダウンロード",
+      "description": "アーティストのアバターを各フォルダーにfolder.jpgとしてダウンロードするかどうか。"
+    },
+    "Settings.usesuppresstags": {
+      "label": "抑制されたタグを除外する",
+      "description": "suppress_tags.txt に記載されたタグを %tags% から削除するかどうか。"
+    },
+    "Settings.tagslimit": {
+      "label": "タグの最大数",
+      "description": "ファイル名の %tags% に含めるタグ数の上限です。-1 にするとすべてのタグを使用します。"
+    },
+    "Settings.writeimagejson": {
+      "label": "出力画像JSON",
+      "description": "簡易画像情報JSONを出力するかどうか。ファイル名には filenameInfoFormat を使用します。"
+    },
+    "Settings.writeimageinfo": {
+      "label": "画像テキスト情報を出力します",
+      "description": "圧縮画像情報テキストファイルを出力するかどうか。ファイル名には filenameInfoFormat を使用します。"
+    },
+    "Settings.writerawjson": {
+      "label": "生のJSONを出力する",
+      "description": "オリジナルの未変更の画像 JSON をソースから保存するかどうか。"
+    },
+    "Settings.rawjsonfilter": {
+      "label": "未加工の JSON フィールドのフィルタリング",
+      "description": "writeRawJSON から削除する JSON フィールドをカンマで区切ります。"
+    },
+    "Settings.includeseriesjson": {
+      "label": "シリーズ JSON を出力",
+      "description": "作品シリーズ情報のJSONを出力するかどうか。シリーズ以外の作品にはこの情報はありません。"
+    },
+    "Settings.writeimagexmp": {
+      "label": "XMP情報ファイルのエクスポート",
+      "description": "画像情報を XMP サイドカーファイルへ出力するかどうか。画像自体は変更しません。"
+    },
+    "Settings.writeimagexmpperimage": {
+      "label": "画像ごとに XMP を出力",
+      "description": "コミックまたは各エンコード画像の XMP を出力するかどうか。有効にすると、writeImageXMP よりも優先されます。"
+    },
+    "Settings.verifyimage": {
+      "label": "ダウンロードファイルを検証する",
+      "description": "ダウンロードしたファイルが有効なイメージまたは ZIP であるかどうかを確認するかどうか。"
+    },
+    "Settings.writeurlindescription": {
+      "label": "URLを説明に保存",
+      "description": "作品説明内の URL をルートディレクトリの URL リストへ出力するかどうか。"
+    },
+    "Settings.striphtmltagsfromcaption": {
+      "label": "説明から HTML を削除",
+      "description": "メタデータを出力するときに、説明内の HTML タグとそのコンテンツを削除するかどうか。リンクテキストも削除されます。"
+    },
+    "Settings.urlblacklistregex": {
+      "label": "URL ブラックリスト正規表現",
+      "description": "正規表現を使用した作品説明内の URL のフィルタリング。"
+    },
+    "Settings.dbpath": {
+      "label": "データベースのパス",
+      "description": "使用する SQLite データベースを指定します。デフォルトのデータベースを使用する場合は空白のままにします。"
+    },
+    "Settings.setlastmodified": {
+      "label": "ファイル変更時刻を設定する",
+      "description": "ローカルファイルの最終更新時刻をPixiv作品のアップロード時刻に基づいて設定するかどうか。"
+    },
+    "Settings.uselocaltimezone": {
+      "label": "ローカルタイムゾーンを使用する",
+      "description": "テキスト情報やXMPを出力する際にローカルタイムゾーンを使用するかどうか。"
+    },
+    "Settings.defaultsketchoption": {
+      "label": "Pixiv Sketchのデフォルトオプション",
+      "description": "member_id のダウンロード時に Pixiv Sketch の確認を省略します。y は常に含め、n は常に除外します。"
+    },
+    "Filename.filenameformat": {
+      "label": "作品ファイル名の形式",
+      "description": "一般的な画像に使用されるファイル名テンプレート。予約文字は削除され、フルパスは最大 250 文字まで可能です。"
+    },
+    "Filename.filenamemangaformat": {
+      "label": "コミックページのファイル名の形式",
+      "description": "コミックの各ページに使用されるファイル名のテンプレート。 %page_index% または %page_number% と一緒に使用できます。"
+    },
+    "Filename.filenameinfoformat": {
+      "label": "画像情報ファイル名の形式",
+      "description": "画像JSON、テキスト情報、XMP、その他の情報ファイルに使用されるファイル名のテンプレートです。"
+    },
+    "Filename.filenamemangainfoformat": {
+      "label": "コミック情報ファイル名の形式",
+      "description": "コミック情報ファイルに使用されるファイル名のテンプレートです。"
+    },
+    "Filename.filenameseriesjson": {
+      "label": "シリーズの JSON ファイル名の形式",
+      "description": "シリーズ情報JSONで使用されるファイル名のテンプレートは、%manga_series_id%と%manga_series_title%が一般的に使用されます。"
+    },
+    "Filename.filenameformatsketch": {
+      "label": "Pixiv Sketchのファイル名の形式",
+      "description": "Pixiv Sketch作品で使用するファイル名のテンプレートです。"
+    },
+    "Filename.filenameformatnovel": {
+      "label": "小説ファイル名の形式",
+      "description": "Pixiv 小説のファイル名テンプレートです。シリーズ ID、シリーズ内の順序、URL ファイル名などを使用できます。"
+    },
+    "Filename.avatarnameformat": {
+      "label": "アバターのファイル名の形式",
+      "description": "アーティストのアバターで使用されるファイル名のテンプレート。通常のイメージよりも使用できる置換変数が少なくなります。"
+    },
+    "Filename.backgroundnameformat": {
+      "label": "背景画像ファイル名の形式",
+      "description": "作者の背景画像に使用するファイル名テンプレートです。通常の画像より使用できる置換変数が少なくなります。"
+    },
+    "Filename.tagsseparator": {
+      "label": "タグの区切り文字",
+      "description": "ファイル名のタグ間で使用される区切り文字。 %space% または %ideo_space% を使用できます。"
+    },
+    "Filename.createmangadir": {
+      "label": "漫画フォルダを作成する",
+      "description": "コミックモードをダウンロードするときに、image_id の _pxx セグメントに基づいてフォルダーを作成するかどうか。"
+    },
+    "Filename.usetagsasdir": {
+      "label": "検索タグを使用してフォルダーを作成する",
+      "description": "tagslist.txt のクエリタグを保存先のルートディレクトリに付加するかどうか。"
+    },
+    "Filename.urldumpfilename": {
+      "label": "URLリストファイル名の形式",
+      "description": "strftime 形式の URL リスト ファイル名。デフォルトは url_list_%Y%m%d です。"
+    },
+    "Filename.usetranslatedtag": {
+      "label": "翻訳されたタグを使用する",
+      "description": "ファイル名の %tags% に翻訳されたタグを使用するかどうか。"
+    },
+    "Filename.tagtranslationlocale": {
+      "label": "タグ翻訳言語",
+      "description": "タグの翻訳に使用する言語を指定します（例：en）。"
+    },
+    "Filename.custombadchars": {
+      "label": "無効文字のカスタムルール",
+      "description": "ファイル名を安全な形式へ整えるときに適用する正規表現ルールです。"
+    },
+    "Filename.customcleanupre": {
+      "label": "ファイル名のカスタム整理ルール",
+      "description": "PixivUtil2 の整理構文に従い、ファイル名の内容を削除または置換する正規表現です。"
+    },
+    "Authentication.username": {
+      "label": "ピクシブのユーザー名",
+      "description": "OAuth ログイン用の Pixiv ユーザー名またはメール アドレス。"
+    },
+    "Authentication.password": {
+      "label": "ピクシブパスワード",
+      "description": "ログイン用の OAuth パスワード。 PixivUtil2 はこの設定を平文で読み込むため、ファイルを適切に保護してください。"
+    },
+    "Authentication.cookie": {
+      "label": "ピクシブクッキー",
+      "description": "Pixiv ログイン Cookie;ログインに成功すると、PixivUtil2 によって自動的に更新される場合があります。"
+    },
+    "Authentication.cookiefanbox": {
+      "label": "ファンボックスクッキー",
+      "description": "fanbox.cc で使用される Cookie は通常、手動で入力する必要はありません。"
+    },
+    "Authentication.cookiefanboxtemp": {
+      "label": "ファンボックスの一時クッキー",
+      "description": "Fanbox ログインプロセスで使用される一時的な Cookie。"
+    },
+    "Authentication.refresh_token": {
+      "label": "OAuthリフレッシュトークン",
+      "description": "再ログインの回数を減らす OAuth refresh token です。通常はログイン処理で自動生成されます。"
+    },
+    "Authentication.cf_clearance": {
+      "label": "クラウドフレアクリアランス",
+      "description": "Cloudflare クリアランス Cookie。 Cloudflare の検証が発生した場合にのみ必要です。"
+    },
+    "Authentication.cf_bm": {
+      "label": "Cloudflareボット管理",
+      "description": "Cloudflareボット管理Cookie。必要な場合にのみ入力してください。"
+    },
+    "Pixiv.numberofpage": {
+      "label": "処理される最大ページ数",
+      "description": "処理するページ数。すべてのページを処理するには 0 に設定します。"
+    },
+    "Pixiv.r18mode": {
+      "label": "R-18 のみをダウンロード",
+      "description": "メンバー、ブックマーク、タグを検索する際に、R-18タグが付いた作品のみを一覧表示するかどうか。"
+    },
+    "Pixiv.r18type": {
+      "label": "R-18 種別フィルター",
+      "description": "0 は R-18 と R-18G の両方をダウンロードすることを意味し、1 は R-18 のみをダウンロードすることを意味し、2 は R-18G のみをダウンロードすることを意味します。"
+    },
+    "Pixiv.dateformat": {
+      "label": "Pixivの日付形式",
+      "description": "Pixiv の日時の strftime 形式。デフォルトの YYYY-MM-DD を使用するには、空白のままにします。"
+    },
+    "Pixiv.autoaddmember": {
+      "label": "作者を自動登録",
+      "description": "すべてのダウンロード中にアーティスト member_id をデータベースに自動的に書き込むかどうか。"
+    },
+    "Pixiv.autoaddtag": {
+      "label": "タグを自動的に追加する",
+      "description": "ダウンロード時にワークタグをデータベースに自動的に書き込むかどうか。"
+    },
+    "Pixiv.autoaddcaption": {
+      "label": "説明を自動的に追加",
+      "description": "ダウンロード時に作品説明をデータベースに自動的に書き込むかどうか。"
+    },
+    "Pixiv.autoaddseries": {
+      "label": "シリーズを自動登録",
+      "description": "すべてのダウンロード中にシリーズ情報をデータベースに自動的に書き込むかどうか。"
+    },
+    "Pixiv.aidisplayfewer": {
+      "label": "AIによる作品を除外する",
+      "description": "aiType が 2 の AI 生成作品を除外するかどうか。"
+    },
+    "FANBOX.filenameformatfanboxcover": {
+      "label": "ファンボックスカバーのファイル名の形式",
+      "description": "Fanbox 記事のカバー画像で使用されるファイル名のテンプレート。"
+    },
+    "FANBOX.filenameformatfanboxcontent": {
+      "label": "Fanbox コンテンツのファイル名の形式",
+      "description": "Fanbox 記事内の画像に使用されるファイル名のテンプレート。"
+    },
+    "FANBOX.filenameformatfanboxinfo": {
+      "label": "ファンボックス情報ファイル名の形式",
+      "description": "Fanboxの記事情報やHTMLで使用されるファイル名のテンプレートです。"
+    },
+    "FANBOX.writehtml": {
+      "label": "ファンボックス HTML の出力",
+      "description": "Fanbox の記事を HTML として記述するかどうか。記事以外の場合は、文章の長さと写真の枚数で判断します。"
+    },
+    "FANBOX.mintextlengthfornonarticle": {
+      "label": "記事以外のテキストの最小長",
+      "description": "writeHtml が有効な場合、HTML を出力する前に記事以外に必要なテキストの最小量。"
+    },
+    "FANBOX.minimagecountfornonarticle": {
+      "label": "記事以外の画像の最小数",
+      "description": "writeHtml が有効な場合、HTML を出力する前に記事以外に必要な画像の最小数。"
+    },
+    "FANBOX.useabsolutepathsinhtml": {
+      "label": "HTML は絶対パスを使用します",
+      "description": "Fanbox HTML で絶対ファイルパスを使用するかどうか。False の場合は相対パスを使用します。"
+    },
+    "FANBOX.downloadcoverwhenrestricted": {
+      "label": "制限記事のカバーをダウンロード",
+      "description": "Fanbox 記事が制限されている場合でも、カバー画像をダウンロードするかどうか。"
+    },
+    "FANBOX.downloadcover": {
+      "label": "ファンボックスのカバーをダウンロード",
+      "description": "Fanbox 記事のカバー画像をダウンロードするかどうか。"
+    },
+    "FANBOX.checkdbprocesshistory": {
+      "label": "Fanboxの処理履歴を確認する",
+      "description": "データベースの updated_date に基づいて、変更されていない Fanbox 記事をスキップするかどうか。"
+    },
+    "FANBOX.listpathfanbox": {
+      "label": "Fanbox クリエイター一覧ファイル",
+      "description": "1 行に 1 人のクリエイターを記載する一覧ファイルです。標準設定では保存先を変更できません。"
+    },
+    "FFmpeg.ffmpeg": {
+      "label": "FFmpeg 実行ファイル",
+      "description": "FFmpeg 実行可能ファイルのパス。フルパスまたはシステム PATH にあるファイル名を入力できます。"
+    },
+    "FFmpeg.ffmpegcodec": {
+      "label": "WebM エンコーダ",
+      "description": "WebM の構築時に使用される FFmpeg コーデック (libvpx-vp9 など)。"
+    },
+    "FFmpeg.ffmpegext": {
+      "label": "WebM ファイル拡張子",
+      "description": "WebM を構築するときに使用されるコンテナー拡張機能。"
+    },
+    "FFmpeg.ffmpegparam": {
+      "label": "WebM FFmpeg パラメータ",
+      "description": "WebM を構築するときに FFmpeg に渡される完全なパラメーター。"
+    },
+    "FFmpeg.mkvcodec": {
+      "label": "MKVエンコーダ",
+      "description": "MKV の作成時に使用されるコーデック。コピーとは、再コーディングを行わないことを意味します。"
+    },
+    "FFmpeg.mkvparam": {
+      "label": "MKV FFmpeg パラメータ",
+      "description": "MKV のビルド時に FFmpeg に渡されるパラメーター。"
+    },
+    "FFmpeg.webpcodec": {
+      "label": "WebP エンコーダ",
+      "description": "WebP アニメーションを構築するときに使用されるコーデック (libwebp など)。"
+    },
+    "FFmpeg.webpparam": {
+      "label": "WebP FFmpeg パラメータ",
+      "description": "WebP アニメーションの作成時に FFmpeg に渡される完全なパラメーター。"
+    },
+    "FFmpeg.gifparam": {
+      "label": "GIF FFmpeg パラメータ",
+      "description": "GIF の作成時に FFmpeg に渡される完全なパラメータ (通常は、palettegen/paletteuse が含まれます)。"
+    },
+    "FFmpeg.apngparam": {
+      "label": "APNG FFmpeg パラメータ",
+      "description": "APNG の作成時に FFmpeg に渡される完全なパラメーター。"
+    },
+    "FFmpeg.avifcodec": {
+      "label": "AVIFエンコーダ",
+      "description": "AVIF アニメーションを作成するときに使用されるコーデック (libaom-av1 など)。"
+    },
+    "FFmpeg.avifparam": {
+      "label": "AVIF FFmpeg パラメータ",
+      "description": "AVIF アニメーションの作成時に FFmpeg に渡される完全なパラメータ。"
+    },
+    "FFmpeg.verboseoutput": {
+      "label": "FFmpeg の詳細出力を表示する",
+      "description": "FFmpegの詳細なコマンドや出力内容を表示するかどうか。"
+    },
+    "Ugoira.writeugoirainfo": {
+      "label": "ウゴイラフレーム情報のエクスポート",
+      "description": "各フレームのウゴイラ情報を情報ZIPに書き込むかどうか。 writeImageJSON にはこの情報も含まれます。"
+    },
+    "Ugoira.createugoira": {
+      "label": "うごイラファイルを作成",
+      "description": "Pixiv のネイティブ .ugoira アニメーション ファイルを作成するかどうか。"
+    },
+    "Ugoira.createmkv": {
+      "label": "MKVの作成",
+      "description": "ウゴイラをMKVに変換するかどうか。 FFmpeg が必要ですが、デフォルトでは通常、再エンコードはありません。"
+    },
+    "Ugoira.createwebm": {
+      "label": "WebM を構築する",
+      "description": "Ugoira を WebM に変換するかどうか。 FFmpegが必要です。"
+    },
+    "Ugoira.createwebp": {
+      "label": "WebP を構築する",
+      "description": "ウゴイラをアニメーション WebP に変換するかどうか。 FFmpegが必要です。"
+    },
+    "Ugoira.creategif": {
+      "label": "GIFの作成",
+      "description": "ウゴイラをGIFに変換するかどうか。 FFmpegが必要です。"
+    },
+    "Ugoira.createapng": {
+      "label": "APNGの作成",
+      "description": "ウゴイラをアニメーション PNG に変換するかどうか。 FFmpegが必要です。"
+    },
+    "Ugoira.createavif": {
+      "label": "AVIFの作成",
+      "description": "ウゴイラをアニメーション AVIF に変換するかどうか。 FFmpegが必要です。"
+    },
+    "Ugoira.deleteugoira": {
+      "label": "変換後にウゴイラを削除する",
+      "description": "変換の完了後に、生成された .ugoira ファイルを削除するかどうか。"
+    },
+    "Ugoira.deletezipfile": {
+      "label": "変換後にZIPを削除",
+      "description": "ウゴイラ変換完了後に元のZIP画像ファイルを削除するかどうか。"
+    },
+    "DownloadControl.minfilesize": {
+      "label": "最小ファイルサイズ",
+      "description": "このサイズより小さいファイルはスキップします。この制限を無効にするには、0 に設定します。"
+    },
+    "DownloadControl.maxfilesize": {
+      "label": "最大ファイルサイズ",
+      "description": "このサイズより大きいファイルはスキップします。この制限を無効にするには、0 に設定します。"
+    },
+    "DownloadControl.checklastmodified": {
+      "label": "ファイルの変更時間を確認する",
+      "description": "ローカルファイルの更新時刻が作品の投稿時刻と同じ場合はスキップします。setLastModified を有効にする必要があります。"
+    },
+    "DownloadControl.alwayscheckfilesize": {
+      "label": "ファイルサイズを常に確認する",
+      "description": "すでにデータベースにレコードがある場合でも、ファイルの状態を確認するためにリモートサイズを再取得してください。"
+    },
+    "DownloadControl.overwrite": {
+      "label": "異なるサイズのファイルを上書きする",
+      "description": "ファイルサイズが異なる場合に古いファイルを削除して再ダウンロードするかどうか。backupOldFile を有効にすると古いファイルを先に保存できます。"
+    },
+    "DownloadControl.backupoldfile": {
+      "label": "古いファイルをバックアップする",
+      "description": "再ダウンロードする前に、古いファイルの名前を Unix 時間のバックアップ ファイルに変更するかどうか。"
+    },
+    "DownloadControl.daylastupdated": {
+      "label": "アーティストの更新間隔の日数",
+      "description": "前回のチェックから少なくともこの日数が経過した member_id のみを処理します。"
+    },
+    "DownloadControl.checkupdatedlimit": {
+      "label": "ダウンロード作品チェック上限数",
+      "description": "指定された数の既存の作品を確認した後、次の member_id にジャンプします。 alwaysCheckFileSize をオフにする必要があります。"
+    },
+    "DownloadControl.useblacklisttags": {
+      "label": "タグのブラックリストを有効にする",
+      "description": "blacklist_tags.txtタグを含む作品はスキップされます。"
+    },
+    "DownloadControl.useblacklisttitles": {
+      "label": "タイトルのブラックリストを有効にする",
+      "description": "タイトルに文字列 blacklist_titles.txt が含まれる作品はスキップされます。"
+    },
+    "DownloadControl.useblacklisttitlesregex": {
+      "label": "正規表現を使用してタイトルを比較する",
+      "description": "タイトルのブラックリストにある各行を正規表現として扱うかどうか。"
+    },
+    "DownloadControl.datediff": {
+      "label": "作品の経過日数上限",
+      "description": "指定した日数以内の新しい作品だけを処理します。0 にすると無効になります。"
+    },
+    "DownloadControl.enableinfiniteloop": {
+      "label": "タグのダウンロードの無限ループを有効にする",
+      "description": "タグのダウンロードが新しいものから古いものへの順序で実行されるときに、新しいエントリを継続的にポーリングするかどうか。"
+    },
+    "DownloadControl.useblacklistmembers": {
+      "label": "作者ブラックリストを有効にする",
+      "description": "アプリケーション ディレクトリの blacklist_members.txt に従って、指定された member_id をスキップします。"
+    },
+    "DownloadControl.downloadresized": {
+      "label": "中サイズの画像をダウンロード",
+      "description": "元のサイズではなく中サイズの画像をダウンロードするかどうか。"
+    },
+    "DownloadControl.skipunknownsize": {
+      "label": "サイズ不明のファイルをスキップする",
+      "description": "alwaysCheckFileSize が有効になっているがリモート サイズが不明な場合に、ダウンロードをスキップするかどうか。"
+    },
+    "DownloadControl.enablepostprocessing": {
+      "label": "ダウンロード後の処理を有効にする",
+      "description": "各ファイルのダウンロードが完了した後に postProcessingCmd を実行するかどうか。"
+    },
+    "DownloadControl.postprocessingcmd": {
+      "label": "ダウンロード後の処理コマンド",
+      "description": "各ダウンロードが完了した後に実行されるコマンド。 %filename% を使用してファイル名を置き換えると、コマンド エラーは処理されません。"
+    },
+    "DownloadControl.extensionfilter": {
+      "label": "ファイル拡張子フィルター",
+      "description": "使用可能なファイル拡張子は、| で区切られます (例: jpg|png|gif|ugoira)。"
+    },
+    "DownloadControl.downloadbuffer": {
+      "label": "ダウンロードバッファKB",
+      "description": "ディスクに書き込む前に使用するダウンロード バッファ サイズ (KB)。通常はデフォルトの 512 のままにしておきます。"
+    },
+    "DownloadControl.createpixivarchive": {
+      "label": "Pixivのzipファイルを作成する",
+      "description": "作品フォルダーを作成せず、ZIP アーカイブとしてダウンロードするかどうか。"
+    },
+    "DownloadControl.createpixivarchivecompressiontype": {
+      "label": "圧縮アルゴリズム",
+      "description": "ZIP_STORED、ZIP_DEFLATED、ZIP_BZIP2、または ZIP_LZMA;デフォルトの ZIP_STORED は圧縮なしです。"
+    },
+    "DownloadControl.createpixivarchivecompressionlevel": {
+      "label": "圧縮レベル",
+      "description": "ZIP_DEFLATED または ZIP_BZIP2 で使用される圧縮レベル。有効な範囲は 0 ～ 9 です。"
+    },
+    "DownloadControl.autoextractzip": {
+      "label": "ZIPを自動的に解凍する",
+      "description": "ZIP をダウンロードした後、コンテンツを自動的に解凍して整理するかどうか。"
+    },
+    "DownloadControl.deletezipafterextract": {
+      "label": "解凍後ZIPを削除",
+      "description": "自動解凍完了後に元のZIPファイルを削除するかどうか。"
+    }
+  }
+}

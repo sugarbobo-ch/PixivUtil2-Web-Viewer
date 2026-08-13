@@ -222,10 +222,19 @@ export const apiClient = {
     updateIdentity: (
       folderId: string,
       status: 'verified' | 'rejected' | 'inferred' | 'unknown',
+      memberId?: number | null,
+      fanboxId?: string | null,
       options: ApiRequestOptions = {},
     ): Promise<ApiObjectResponse> => requestJson(
       `/api/folders/${encodeURIComponent(folderId)}/identity`,
-      { ...withJsonBody({ status }, options), method: 'PUT' },
+      {
+        ...withJsonBody({
+          status,
+          ...(typeof memberId === 'number' && Number.isInteger(memberId) && memberId > 0 ? { member_id: memberId } : {}),
+          ...(typeof fanboxId === 'string' ? { fanbox_id: fanboxId } : {}),
+        }, options),
+        method: 'PUT',
+      },
       parseObjectResponse,
     ),
   },

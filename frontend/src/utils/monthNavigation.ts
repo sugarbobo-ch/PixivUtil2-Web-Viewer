@@ -30,3 +30,20 @@ export const resolveMonthTarget = (
     ...getTargetPageAndLocalIndex(targetOffset, itemsPerPage),
   };
 };
+
+export const getCrossPageMonthApproachTop = ({
+  currentPage,
+  targetPage,
+  scrollHeight,
+  clientHeight,
+}: {
+  currentPage: number;
+  targetPage: number;
+  scrollHeight: number;
+  clientHeight: number;
+}): number | null => {
+  if (targetPage === currentPage) return null;
+  return targetPage > currentPage
+    ? Math.max(0, scrollHeight - clientHeight)
+    : 0;
+};

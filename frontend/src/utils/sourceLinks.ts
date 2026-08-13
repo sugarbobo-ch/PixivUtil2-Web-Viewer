@@ -58,7 +58,11 @@ export const fetchArtistSourceLinks = (folderOrArtistId: string | number): Promi
     if (!value || typeof value !== 'object') return null;
     const candidate = value as Partial<ArtistSourceLinks>;
     const verifiedMemberId = candidate.verified_member_id;
-    if (typeof verifiedMemberId !== 'number' || !Number.isInteger(verifiedMemberId) || verifiedMemberId <= 0) {
+    if (verifiedMemberId !== null && (
+      typeof verifiedMemberId !== 'number'
+      || !Number.isInteger(verifiedMemberId)
+      || verifiedMemberId <= 0
+    )) {
       return null;
     }
 
@@ -69,5 +73,10 @@ export const fetchArtistSourceLinks = (folderOrArtistId: string | number): Promi
     };
   });
   artistSourceRequests.set(key, request);
+  void request.finally(() => {
+    if (artistSourceRequests.get(key) === request) {
+      artistSourceRequests.delete(key);
+    }
+  });
   return request;
 };

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { ImageItem } from '../types';
 import {
   buildFilmstripLayout,
+  buildWebtoonMetricsFromHeightIndex,
   buildWebtoonMetrics,
   buildWebtoonThumbnailLayout,
   findIndexAtOffset,
@@ -32,9 +33,9 @@ describe('viewer layout helpers', () => {
       [image('a', 'one'), image('b', 'one'), image('c', 'two')],
       { itemSize: 56, gap: 6, edgePadding: 4, boundaryWidth: 2, boundaryMargin: 4 },
     );
-    expect(layout.itemOffsets).toEqual([4, 66, 138]);
-    expect(layout.boundaryOffsets).toEqual([null, null, 132]);
-    expect(layout.totalWidth).toBe(198);
+    expect(layout.itemOffsets).toEqual([4, 66, 132]);
+    expect(layout.boundaryOffsets).toEqual([null, null, 126]);
+    expect(layout.totalWidth).toBe(192);
   });
 
   it('keeps measured webtoon heights and removes the final gap', () => {
@@ -50,6 +51,26 @@ describe('viewer layout helpers', () => {
     expect(metrics.totalHeight).toBe(664);
   });
 
+  it('projects a bounded webtoon range from a global height index', () => {
+    const heights = [200, 260, 180, 240];
+    const globalHeightIndex = {
+      getHeight: (index: number) => heights[index] ?? 200,
+      getOffset: (index: number) => heights.slice(0, index).reduce((sum, height) => sum + height, 0),
+    };
+
+    const metrics = buildWebtoonMetricsFromHeightIndex({
+      globalHeightIndex,
+      rangeStart: 1,
+      imageCount: 2,
+      imageGap: 12,
+      minItemHeight: 180,
+    });
+
+    expect(metrics.offsets).toEqual([0, 272]);
+    expect(metrics.heights).toEqual([260, 180]);
+    expect(metrics.totalHeight).toBe(452);
+  });
+
   it('builds thumbnail offsets with group separators', () => {
     const layout = buildWebtoonThumbnailLayout({
       images: [image('0', 'one'), image('0', 'two')],
@@ -63,10 +84,10 @@ describe('viewer layout helpers', () => {
       widthInset: 16,
       minHeight: 44,
     });
-    expect(layout.offsets).toEqual([8, 162]);
+    expect(layout.offsets).toEqual([8, 158]);
     expect(layout.heights).toEqual([140, 140]);
-    expect(layout.boundaryOffsets).toEqual([null, 156]);
-    expect(layout.totalHeight).toBe(310);
+    expect(layout.boundaryOffsets).toEqual([null, 152]);
+    expect(layout.totalHeight).toBe(306);
   });
 
   it('returns a bounded virtual range for empty and populated tracks', () => {

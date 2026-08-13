@@ -1,6 +1,6 @@
 # WebConfig Contract Matrix
 
-最後更新：2026-08-10
+最後更新：2026-08-13
 
 這份文件是 `frontend/src/types.ts`、`frontend/src/utils/webConfig.ts`、`backend/main.py` 的共同 contract。`web_config.example.json` 必須維持相同欄位集合與預設值。前端 API parser 會在 response 邊界呼叫 `normalizeWebConfig`；backend 讀取與寫入時會呼叫 `normalize_web_config_file`。
 
@@ -9,9 +9,10 @@
 | 欄位 | Frontend type / default / normalize | Backend default / normalize / validation | example |
 | --- | --- | --- | --- |
 | `webTheme` | `dark \| light`；`dark`；只有 `light` 保留，其餘回 `dark` | `dark`；只有 `light` 保留，其餘回 `dark` | `dark` |
+| `uiLanguage` | `zh-TW \| zh-CN \| en \| ja`；`zh-TW`；`zh-Hans`／`zh-SG`→`zh-CN`、`zh-Hant`／`zh-HK`→`zh-TW`、`en-US`／`en-GB`→`en`、`ja-JP`→`ja`，未知值回 `zh-TW` | `zh-TW`；只接受 `zh-TW`／`zh-CN`／`en`／`ja`，未知值回 default | `zh-TW` |
 | `defaultViewMode` | `fullscreen \| webtoon`；`fullscreen`；只有 `webtoon` 保留，legacy `grid` 回 `fullscreen` | `fullscreen`；相同 migration | `fullscreen` |
 | `thumbnailSize` | number；`320`；clamp `16..4096`，接受 legacy `thumbnailWidth`／`thumbnailHeight` | `320`；clamp `16..4096`，讀取 legacy alias 後移除 | `320` |
-| `itemsPerPage` | number；`200`；clamp `1..5000` | `200`；clamp `1..5000` | `200` |
+| `itemsPerPage` | legacy compatibility number；`200`；clamp `1..5000`，不再由 global window UI 暴露 | `200`；clamp `1..5000`，供 opt-in legacy rollback 使用 | omitted from new examples |
 | `autoOpenBrowser` | boolean；`true`；接受 `0`／`false`／`no`／`off` | `true`；相同字串 boolean migration | `true` |
 | `pixivConfigPath` | `WebConfig` 可選；`WebConfigDraft` 以空字串表示未設定；轉成 string | `""`；寫入時透過 path picker 驗證 existing file | `""` |
 | `librarySourceMode` | `unconfigured \| pixiv \| folder`；`unconfigured`；未知值回 default | 相同；update API 對未知值回 422 | `unconfigured` |
@@ -25,6 +26,9 @@
 | `fullscreenShowToolbar` | boolean；`true`；相同字串 boolean migration | boolean；相同字串 boolean migration | `true` |
 | `fullscreenShowThumbnails` | boolean；`true`；相同字串 boolean migration | boolean；相同字串 boolean migration | `true` |
 | `fullscreenShowCheckerboard` | boolean；`false`；相同字串 boolean migration | boolean；相同字串 boolean migration | `false` |
+| `fullscreenPageLayout` | `single \| spread`；`single`；未知值回 `single` | `single`；未知值回 `single` | `single` |
+| `fullscreenReadingDirection` | `ltr \| rtl`；`ltr`；未知值回 `ltr` | `ltr`；未知值回 `ltr` | `ltr` |
+| `fullscreenSpreadPairing` | `cover-single \| first-page`；`cover-single`；未知值回 `cover-single` | 相同；未知值回 `cover-single` | `cover-single` |
 | `fullscreenZoomMode` | `auto \| lock \| width \| height \| fit \| fill`；`auto`；未知值回 default | 相同；未知值回 `auto` | `auto` |
 | `fullscreenVideoSeekSeconds` | number；`5`；clamp `1..60` | `5`；clamp `1..60` | `5` |
 | `fullscreenVideoHoldPlaybackRate` | number；`2`；clamp `1.25..4`，四捨五入至兩位 | `2`；clamp `1.25..4`，四捨五入至兩位 | `2` |
@@ -40,7 +44,7 @@
 | `manageThumbnailCache` | boolean；`true`；相同字串 boolean migration | boolean；相同字串 boolean migration | `true` |
 | `thumbnailCacheLimitMiB` | number；`1024`；clamp `128..102400` | `1024`；clamp `128..102400` | `1024` |
 
-| `sidebarWidth` | number; default `320`; clamp `224..560` | `320`; clamp `224..560` | `320` |
+| `sidebarWidth` | number；`320`；clamp `224..560` | `320`；clamp `224..560` | `320` |
 
 ## API response shape
 
@@ -48,10 +52,12 @@
 - `POST /api/web-config` 回傳 `{ status, webConfig }`；`webConfig` 仍需經過同一套 normalize。
 - `GET /api/library/jobs/current`、`POST /api/library/jobs`、`POST /api/library/jobs/{id}/cancel` 回傳 `{ job: LibraryJob | null }`。
 - `GET /api/library/jobs/{id}` 回傳 `{ job: LibraryJob }`，frontend typed client 會拒絕缺少 job 的 response。
-- `/api/images` 可接受 legacy array 或目前的 `{ images, total, months }`；parser 會驗證必要的 `ImageItem` 欄位並產生統一的 month index。
+- `/api/images` 保留 legacy array／offset/limit 相容性，range response 另外提供 `{ images, total, offset, limit, revision, months, month_index }`；`month_index` 項目包含 `image_count` 與 `card_count`，parser 會驗證必要的 `ImageItem` 欄位並產生統一的 global index。
+- 新 Gallery／reader 路徑要求非空 `revision`；舊 current-page loader 只在 `VITE_ENABLE_LEGACY_PAGINATION=true` 時啟用，讓舊後端仍可明確回滾而不與 GlobalMediaWindow 競爭請求。
 
 ## 驗證與 migration tests
 
 - Frontend：`frontend/src/utils/webConfig.test.ts`、`frontend/src/api/parsers.test.ts`、`frontend/src/api/client.test.ts`。
 - Backend：`backend/tests/test_web_config.py`。
+- Reader：`frontend/src/utils/readerSpread.test.ts`、`docs/fullscreen-spread-reader-spec.md`。
 - `web_config.example.json` 是可提交的範本；實際 `web_config.json` 由 backend normalize 後持久化，不能以範本取代 runtime migration。
